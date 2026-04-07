@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import time
 import unicodedata
@@ -176,6 +177,8 @@ class _StreamBuf:
     message_id: int | None = None
     last_edit: float = 0.0
     stream_id: str | None = None
+    draft_id: int | None = None
+    message_thread_id: int | None = None
 
 
 class TelegramConfig(Base):
@@ -235,6 +238,7 @@ class TelegramChannel(BaseChannel):
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
+        self._stream_draft_supported: bool | None = None
 
     def is_allowed(self, sender_id: str) -> bool:
         """Preserve Telegram's legacy id|username allowlist matching."""
@@ -538,8 +542,47 @@ class TelegramChannel(BaseChannel):
     def _is_not_modified_error(exc: Exception) -> bool:
         return isinstance(exc, BadRequest) and "message is not modified" in str(exc).lower()
 
-    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
-        """Progressive message editing: send on first delta, edit on subsequent ones."""
+    @staticmethod
+    def _stream_draft_id(stream_id: str | None, chat_id: int) -> int:
+        """Build a stable non-zero draft id for Telegram sendMessageDraft."""
+        seed = stream_id or f"{chat_id}:{time.time_ns()}"
+        digest = hashlib.blake2s(seed.encode("utf-8"), digest_size=8).digest()
+        draft_id = int.from_bytes(digest, "big") % 2_147_483_647
+        return draft_id or 1
+
+    @staticmethod
+    def _is_unsupported_draft_error(exc: Exception) -> bool:
+        """Detect servers/libraries that don't support sendMessageDraft yet."""
+        if isinstance(exc, AttributeError):
+            return True
+        if isinstance(exc, BadRequest):
+            msg = str(exc).lower()
+            return "sendmessagedraft" in msg or "method not found" in msg
+        return False
+
+    async def _send_message_draft(
+        self,
+        chat_id: int,
+        text: str,
+        draft_id: int,
+        message_thread_id: int | None = None,
+    ) -> None:
+        """Call Telegram sendMessageDraft via raw Bot API endpoint."""
+        if not self._app:
+            return
+        payload: dict[str, Any] = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        await self._call_with_retry(
+            self._app.bot._post,
+            endpoint="sendMessageDraft",
+            data=payload,
+        )
+
+    async def send_delta(
+        self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None
+    ) -> None:
+        """Progressive streaming with sendMessageDraft, falling back to message edits."""
         if not self._app:
             return
         meta = metadata or {}
@@ -548,47 +591,70 @@ class TelegramChannel(BaseChannel):
 
         if meta.get("_stream_end"):
             buf = self._stream_bufs.get(chat_id)
-            if not buf or not buf.message_id or not buf.text:
+            if not buf:
                 return
             if stream_id is not None and buf.stream_id is not None and buf.stream_id != stream_id:
                 return
+            if message_thread_id := meta.get("message_thread_id"):
+                buf.message_thread_id = message_thread_id
+            if delta:
+                buf.text += delta
+            if not buf.text:
+                self._stream_bufs.pop(chat_id, None)
+                return
+
             self._stop_typing(chat_id)
             if reply_to_message_id := meta.get("message_id"):
                 try:
                     await self._remove_reaction(chat_id, int(reply_to_message_id))
                 except ValueError:
                     pass
+
+            thread_kwargs = {}
+            if buf.message_thread_id is not None:
+                thread_kwargs["message_thread_id"] = buf.message_thread_id
+
             chunks = split_message(buf.text, TELEGRAM_MAX_MESSAGE_LEN)
             primary_text = chunks[0] if chunks else buf.text
-            try:
-                html = _markdown_to_telegram_html(primary_text)
-                await self._call_with_retry(
-                    self._app.bot.edit_message_text,
-                    chat_id=int_chat_id, message_id=buf.message_id,
-                    text=html, parse_mode="HTML",
-                )
-            except Exception as e:
-                if self._is_not_modified_error(e):
-                    logger.debug("Final stream edit already applied for {}", chat_id)
-                    self._stream_bufs.pop(chat_id, None)
-                    return
-                logger.debug("Final stream edit failed (HTML), trying plain: {}", e)
+
+            if buf.message_id is not None:
                 try:
+                    html = _markdown_to_telegram_html(primary_text)
                     await self._call_with_retry(
                         self._app.bot.edit_message_text,
-                        chat_id=int_chat_id, message_id=buf.message_id,
-                        text=primary_text,
+                        chat_id=int_chat_id,
+                        message_id=buf.message_id,
+                        text=html,
+                        parse_mode="HTML",
                     )
-                except Exception as e2:
-                    if self._is_not_modified_error(e2):
-                        logger.debug("Final stream plain edit already applied for {}", chat_id)
-                    else:
-                        logger.warning("Final stream edit failed: {}", e2)
-                        raise  # Let ChannelManager handle retry
-            # If final content exceeds Telegram limit, keep the first chunk in
-            # the edited stream message and send the rest as follow-up messages.
-            for extra_chunk in chunks[1:]:
-                await self._send_text(int_chat_id, extra_chunk)
+                except Exception as e:
+                    if self._is_not_modified_error(e):
+                        logger.debug("Final stream edit already applied for {}", chat_id)
+                        self._stream_bufs.pop(chat_id, None)
+                        return
+                    logger.debug("Final stream edit failed (HTML), trying plain: {}", e)
+                    try:
+                        await self._call_with_retry(
+                            self._app.bot.edit_message_text,
+                            chat_id=int_chat_id,
+                            message_id=buf.message_id,
+                            text=primary_text,
+                        )
+                    except Exception as e2:
+                        if self._is_not_modified_error(e2):
+                            logger.debug("Final stream plain edit already applied for {}", chat_id)
+                        else:
+                            logger.warning("Final stream edit failed: {}", e2)
+                            raise  # Let ChannelManager handle retry
+
+                # If final content exceeds Telegram limit, keep the first chunk in
+                # the edited stream message and send the rest as follow-up messages.
+                for extra_chunk in chunks[1:]:
+                    await self._send_text(int_chat_id, extra_chunk, thread_kwargs=thread_kwargs)
+            else:
+                for chunk in chunks:
+                    await self._send_text(int_chat_id, chunk, thread_kwargs=thread_kwargs)
+
             self._stream_bufs.pop(chat_id, None)
             return
 
@@ -598,6 +664,8 @@ class TelegramChannel(BaseChannel):
             self._stream_bufs[chat_id] = buf
         elif buf.stream_id is None:
             buf.stream_id = stream_id
+        if message_thread_id := meta.get("message_thread_id"):
+            buf.message_thread_id = message_thread_id
         buf.text += delta
 
         if not buf.text.strip():
@@ -605,8 +673,45 @@ class TelegramChannel(BaseChannel):
 
         now = time.monotonic()
         thread_kwargs = {}
-        if message_thread_id := meta.get("message_thread_id"):
-            thread_kwargs["message_thread_id"] = message_thread_id
+        if buf.message_thread_id is not None:
+            thread_kwargs["message_thread_id"] = buf.message_thread_id
+
+        draft_enabled = self._stream_draft_supported is not False and buf.message_id is None
+        if draft_enabled and (
+            buf.last_edit == 0.0
+            or (now - buf.last_edit) >= self.config.stream_edit_interval
+        ):
+            if buf.draft_id is None:
+                buf.draft_id = self._stream_draft_id(stream_id, int_chat_id)
+            draft_text = buf.text[-TELEGRAM_MAX_MESSAGE_LEN:]
+            try:
+                await self._send_message_draft(
+                    int_chat_id,
+                    draft_text,
+                    buf.draft_id,
+                    message_thread_id=buf.message_thread_id,
+                )
+                self._stream_draft_supported = True
+                buf.last_edit = now
+                return
+            except Exception as e:
+                if self._is_unsupported_draft_error(e):
+                    if self._stream_draft_supported is not False:
+                        logger.info(
+                            "Telegram sendMessageDraft unavailable, falling back to message edits"
+                        )
+                    self._stream_draft_supported = False
+                else:
+                    logger.warning("sendMessageDraft failed: {}", e)
+                    raise
+
+        if (
+            draft_enabled
+            and buf.message_id is None
+            and (now - buf.last_edit) < self.config.stream_edit_interval
+        ):
+            return
+
         if buf.message_id is None:
             try:
                 sent = await self._call_with_retry(
