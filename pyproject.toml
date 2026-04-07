@@ -56,22 +56,6 @@ dependencies = [
 api = [
     "aiohttp>=3.9.0,<4.0.0",
 ]
-wecom = [
-    "wecom-aibot-sdk-python>=0.1.5",
-]
-weixin = [
-    "qrcode[pil]>=8.0",
-    "pycryptodome>=3.20.0",
-]
-
-matrix = [
-    "matrix-nio[e2e]>=0.25.2",
-    "mistune>=3.0.0,<4.0.0",
-    "nh3>=0.2.17,<1.0.0",
-]
-discord = [
-    "discord.py>=2.5.2,<3.0.0",
-]
 langsmith = [
     "langsmith>=0.1.0",
 ]

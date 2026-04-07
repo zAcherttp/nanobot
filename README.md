@@ -260,14 +260,10 @@ Connect nanobot to your favorite chat platform. Want to build your own? See the 
 | Channel | What you need |
 |---------|---------------|
 | **Telegram** | Bot token from @BotFather |
-| **Discord** | Bot token + Message Content intent |
-| **WeChat (Weixin)** | QR code scan (`nanobot channels login weixin`) |
 | **Feishu** | App ID + App Secret |
 | **DingTalk** | App Key + App Secret |
 | **Slack** | Bot token + App-Level token |
-| **Matrix** | Homeserver URL + Access token |
 | **QQ** | App ID + App Secret |
-| **Wecom** | Bot ID + Bot Secret |
 | **Mochat** | Claw token (auto-setup available) |
 
 <details>
@@ -356,126 +352,6 @@ If you prefer to configure manually, add the following to `~/.nanobot/config.jso
 ```
 
 </details>
-
-</details>
-
-<details>
-<summary><b>Discord</b></summary>
-
-**1. Create a bot**
-
-- Go to <https://discord.com/developers/applications>
-- Create an application → Bot → Add Bot
-- Copy the bot token
-
-**2. Enable intents**
-
-- In the Bot settings, enable **MESSAGE CONTENT INTENT**
-- (Optional) Enable **SERVER MEMBERS INTENT** if you plan to use allow lists based on member data
-
-**3. Get your User ID**
-
-- Discord Settings → Advanced → enable **Developer Mode**
-- Right-click your avatar → **Copy User ID**
-
-**4. Configure**
-
-```json
-{
-  "channels": {
-    "discord": {
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"],
-      "groupPolicy": "mention"
-    }
-  }
-}
-```
-
-> `groupPolicy` controls how the bot responds in group channels:
->
-> - `"mention"` (default) — Only respond when @mentioned
-> - `"open"` — Respond to all messages
-> DMs always respond when the sender is in `allowFrom`.
-> - If you set group policy to open create new threads as private threads and then @ the bot into it. Otherwise the thread itself and the channel in which you spawned it will spawn a bot session.
-
-**5. Invite the bot**
-
-- OAuth2 → URL Generator
-- Scopes: `bot`
-- Bot Permissions: `Send Messages`, `Read Message History`
-- Open the generated invite URL and add the bot to your server
-
-**6. Run**
-
-```bash
-nanobot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Matrix (Element)</b></summary>
-
-Install Matrix dependencies first:
-
-```bash
-pip install nanobot-ai[matrix]
-```
-
-**1. Create/choose a Matrix account**
-
-- Create or reuse a Matrix account on your homeserver (for example `matrix.org`).
-- Confirm you can log in with Element.
-
-**2. Get credentials**
-
-- You need:
-  - `userId` (example: `@nanobot:matrix.org`)
-  - `password`
-
-(Note: `accessToken` and `deviceId` are still supported for legacy reasons, but
-for reliable encryption, password login is recommended instead. If the
-`password` is provided, `accessToken` and `deviceId` will be ignored.)
-
-**3. Configure**
-
-```json
-{
-  "channels": {
-    "matrix": {
-      "enabled": true,
-      "homeserver": "https://matrix.org",
-      "userId": "@nanobot:matrix.org",
-      "password": "mypasswordhere",
-      "e2eeEnabled": true,
-      "allowFrom": ["@your_user:matrix.org"],
-      "groupPolicy": "open",
-      "groupAllowFrom": [],
-      "allowRoomMentions": false,
-      "maxMediaBytes": 20971520
-    }
-  }
-}
-```
-
-> Keep a persistent `matrix-store` — encrypted session state is lost if these change across restarts.
-
-| Option | Description |
-|--------|-------------|
-| `allowFrom` | User IDs allowed to interact. Empty denies all; use `["*"]` to allow everyone. |
-| `groupPolicy` | `open` (default), `mention`, or `allowlist`. |
-| `groupAllowFrom` | Room allowlist (used when policy is `allowlist`). |
-| `allowRoomMentions` | Accept `@room` mentions in mention mode. |
-| `e2eeEnabled` | E2EE support (default `true`). Set `false` for plaintext-only. |
-| `maxMediaBytes` | Max attachment size (default `20MB`). Set `0` to block all media. |
-
-**4. Run**
-
-```bash
-nanobot gateway
-```
 
 </details>
 
@@ -665,96 +541,6 @@ DM the bot directly or @mention it in a channel — it should respond!
 >
 > - `groupPolicy`: `"mention"` (default — respond only when @mentioned), `"open"` (respond to all channel messages), or `"allowlist"` (restrict to specific channels).
 > - DM policy defaults to open. Set `"dm": {"enabled": false}` to disable DMs.
-
-</details>
-
-<details>
-<summary><b>WeChat (微信 / Weixin)</b></summary>
-
-Uses **HTTP long-poll** with QR-code login via the ilinkai personal WeChat API. No local WeChat desktop client is required.
-
-**1. Install with WeChat support**
-
-```bash
-pip install "nanobot-ai[weixin]"
-```
-
-**2. Configure**
-
-```json
-{
-  "channels": {
-    "weixin": {
-      "enabled": true,
-      "allowFrom": ["YOUR_WECHAT_USER_ID"]
-    }
-  }
-}
-```
-
-> - `allowFrom`: Add the sender ID you see in nanobot logs for your WeChat account. Use `["*"]` to allow all users.
-> - `token`: Optional. If omitted, log in interactively and nanobot will save the token for you.
-> - `routeTag`: Optional. When your upstream Weixin deployment requires request routing, nanobot will send it as the `SKRouteTag` header.
-> - `stateDir`: Optional. Defaults to nanobot's runtime directory for Weixin state.
-> - `pollTimeout`: Optional long-poll timeout in seconds.
-
-**3. Login**
-
-```bash
-nanobot channels login weixin
-```
-
-Use `--force` to re-authenticate and ignore any saved token:
-
-```bash
-nanobot channels login weixin --force
-```
-
-**4. Run**
-
-```bash
-nanobot gateway
-```
-
-</details>
-
-<details>
-<summary><b>Wecom (企业微信)</b></summary>
-
-> Here we use [wecom-aibot-sdk-python](https://github.com/chengyongru/wecom_aibot_sdk) (community Python version of the official [@wecom/aibot-node-sdk](https://www.npmjs.com/package/@wecom/aibot-node-sdk)).
->
-> Uses **WebSocket** long connection — no public IP required.
-
-**1. Install the optional dependency**
-
-```bash
-pip install nanobot-ai[wecom]
-```
-
-**2. Create a WeCom AI Bot**
-
-Go to the WeCom admin console → Intelligent Robot → Create Robot → select **API mode** with **long connection**. Copy the Bot ID and Secret.
-
-**3. Configure**
-
-```json
-{
-  "channels": {
-    "wecom": {
-      "enabled": true,
-      "botId": "your_bot_id",
-      "secret": "your_bot_secret",
-      "allowFrom": ["your_id"]
-    }
-  }
-}
-```
-
-**4. Run**
-
-```bash
-nanobot gateway
-```
 
 </details>
 
@@ -1445,13 +1231,13 @@ If you want each instance to have its own dedicated workspace from the start, pa
 ```bash
 # Create separate instance configs and workspaces
 nanobot onboard --config ~/.nanobot-telegram/config.json --workspace ~/.nanobot-telegram/workspace
-nanobot onboard --config ~/.nanobot-discord/config.json --workspace ~/.nanobot-discord/workspace
+nanobot onboard --config ~/.nanobot-slack/config.json --workspace ~/.nanobot-slack/workspace
 nanobot onboard --config ~/.nanobot-feishu/config.json --workspace ~/.nanobot-feishu/workspace
 ```
 
 **Configure each instance:**
 
-Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-discord/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
+Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-slack/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
 
 **Run instances:**
 
@@ -1459,8 +1245,8 @@ Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-discord/config.json`, etc. w
 # Instance A - Telegram bot
 nanobot gateway --config ~/.nanobot-telegram/config.json
 
-# Instance B - Discord bot  
-nanobot gateway --config ~/.nanobot-discord/config.json
+# Instance B - Slack bot
+nanobot gateway --config ~/.nanobot-slack/config.json
 
 # Instance C - Feishu bot with custom port
 nanobot gateway --config ~/.nanobot-feishu/config.json --port 18792
@@ -1474,7 +1260,7 @@ To open a CLI session against one of these instances locally:
 
 ```bash
 nanobot agent -c ~/.nanobot-telegram/config.json -m "Hello from Telegram instance"
-nanobot agent -c ~/.nanobot-discord/config.json -m "Hello from Discord instance"
+nanobot agent -c ~/.nanobot-slack/config.json -m "Hello from Slack instance"
 
 # Optional one-off workspace override
 nanobot agent -c ~/.nanobot-telegram/config.json -w /tmp/nanobot-telegram-test
@@ -1527,7 +1313,7 @@ Start separate instances:
 
 ```bash
 nanobot gateway --config ~/.nanobot-telegram/config.json
-nanobot gateway --config ~/.nanobot-discord/config.json
+nanobot gateway --config ~/.nanobot-slack/config.json
 ```
 
 Override workspace for one-off runs when needed:
@@ -1538,7 +1324,7 @@ nanobot gateway --config ~/.nanobot-telegram/config.json --workspace /tmp/nanobo
 
 ### Common Use Cases
 
-- Run separate bots for Telegram, Discord, Feishu, and other platforms
+- Run separate bots for Telegram, Slack, Feishu, and other platforms
 - Keep testing and production instances isolated
 - Use different models or providers for different teams
 - Serve multiple tenants with separate configs and runtime data
@@ -1757,7 +1543,7 @@ docker run -v ~/.nanobot:/home/nanobot/.nanobot --rm nanobot onboard
 # Edit config on host to add API keys
 vim ~/.nanobot/config.json
 
-# Run gateway (connects to enabled channels, e.g. Telegram/Discord/Mochat)
+# Run gateway (connects to enabled channels, e.g. Telegram/Slack/Mochat)
 docker run -v ~/.nanobot:/home/nanobot/.nanobot -p 18790:18790 nanobot gateway
 
 # Or run a single command

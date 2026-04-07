@@ -204,6 +204,7 @@ async def login(self, force: bool = False) -> bool:
 Channels that don't need interactive login (e.g. Telegram with bot token, Discord with bot token) inherit the default `login()` which just returns `True`.
 
 Users trigger interactive login via:
+
 ```bash
 nanobot channels login <channel_name>
 nanobot channels login <channel_name> --force  # re-authenticate

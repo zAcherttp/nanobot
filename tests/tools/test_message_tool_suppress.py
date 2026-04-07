@@ -52,7 +52,7 @@ class TestMessageToolSuppressLogic:
         loop = _make_loop(tmp_path)
         tool_call = ToolCallRequest(
             id="call1", name="message",
-            arguments={"content": "Discord content", "channel": "discord", "chat_id": "user123"},
+            arguments={"content": "Slack content", "channel": "slack", "chat_id": "user123"},
         )
         calls = iter([
             LLMResponse(content="", tool_calls=[tool_call]),
@@ -70,7 +70,7 @@ class TestMessageToolSuppressLogic:
         result = await loop._process_message(msg)
 
         assert len(sent) == 1
-        assert sent[0].channel == "discord"
+        assert sent[0].channel == "slack"
         assert result is not None  # not suppressed
         assert result.channel == "feishu"
 
