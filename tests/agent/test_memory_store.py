@@ -110,8 +110,8 @@ class TestHistoryEdgeCases:
         """JSONL entries with cursor=1 are correctly parsed and returned."""
         store.history_file.write_text(
             '{"cursor": 1, "timestamp": "2026-03-30 14:30", "content": "Old event"}\n',
-            encoding="utf-8")
+            encoding="utf-8",
+        )
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
         assert entries[0]["cursor"] == 1
-

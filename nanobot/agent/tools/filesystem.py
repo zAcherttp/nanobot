@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool, tool_parameters
-from nanobot.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
+from nanobot.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from nanobot.utils.helpers import build_image_content_blocks, detect_image_mime
 from nanobot.config.paths import get_media_dir
 
@@ -24,7 +29,7 @@ def _resolve_path(
     resolved = p.resolve()
     if allowed_dir:
         media_path = get_media_dir().resolve()
-        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or []) 
+        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or [])
         if not any(_is_under(resolved, d) for d in all_dirs):
             raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
     return resolved
@@ -97,7 +102,9 @@ class ReadFileTool(_FsTool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, path: str | None = None, offset: int = 1, limit: int | None = None, **kwargs: Any) -> Any:
+    async def execute(
+        self, path: str | None = None, offset: int = 1, limit: int | None = None, **kwargs: Any
+    ) -> Any:
         try:
             if not path:
                 return "Error reading file: Unknown path"
@@ -177,7 +184,9 @@ class WriteFileTool(_FsTool):
     def description(self) -> str:
         return "Write content to a file at the given path. Creates parent directories if needed."
 
-    async def execute(self, path: str | None = None, content: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self, path: str | None = None, content: str | None = None, **kwargs: Any
+    ) -> str:
         try:
             if not path:
                 raise ValueError("Unknown path")
@@ -196,6 +205,7 @@ class WriteFileTool(_FsTool):
 # ---------------------------------------------------------------------------
 # edit_file
 # ---------------------------------------------------------------------------
+
 
 def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
     """Locate old_text in content: exact first, then line-trimmed sliding window.
@@ -248,9 +258,12 @@ class EditFileTool(_FsTool):
         )
 
     async def execute(
-        self, path: str | None = None, old_text: str | None = None,
+        self,
+        path: str | None = None,
+        old_text: str | None = None,
         new_text: str | None = None,
-        replace_all: bool = False, **kwargs: Any,
+        replace_all: bool = False,
+        **kwargs: Any,
     ) -> str:
         try:
             if not path:
@@ -278,7 +291,11 @@ class EditFileTool(_FsTool):
                 )
 
             norm_new = new_text.replace("\r\n", "\n")
-            new_content = content.replace(match, norm_new) if replace_all else content.replace(match, norm_new, 1)
+            new_content = (
+                content.replace(match, norm_new)
+                if replace_all
+                else content.replace(match, norm_new, 1)
+            )
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
@@ -302,19 +319,25 @@ class EditFileTool(_FsTool):
                 best_ratio, best_start = ratio, i
 
         if best_ratio > 0.5:
-            diff = "\n".join(difflib.unified_diff(
-                old_lines, lines[best_start : best_start + window],
-                fromfile="old_text (provided)",
-                tofile=f"{path} (actual, line {best_start + 1})",
-                lineterm="",
-            ))
+            diff = "\n".join(
+                difflib.unified_diff(
+                    old_lines,
+                    lines[best_start : best_start + window],
+                    fromfile="old_text (provided)",
+                    tofile=f"{path} (actual, line {best_start + 1})",
+                    lineterm="",
+                )
+            )
             return f"Error: old_text not found in {path}.\nBest match ({best_ratio:.0%} similar) at line {best_start + 1}:\n{diff}"
-        return f"Error: old_text not found in {path}. No similar text found. Verify the file content."
+        return (
+            f"Error: old_text not found in {path}. No similar text found. Verify the file content."
+        )
 
 
 # ---------------------------------------------------------------------------
 # list_dir
 # ---------------------------------------------------------------------------
+
 
 @tool_parameters(
     tool_parameters_schema(
@@ -333,9 +356,19 @@ class ListDirTool(_FsTool):
 
     _DEFAULT_MAX = 200
     _IGNORE_DIRS = {
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
-        ".ruff_cache", ".coverage", "htmlcov",
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".tox",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".coverage",
+        "htmlcov",
     }
 
     @property
@@ -355,8 +388,11 @@ class ListDirTool(_FsTool):
         return True
 
     async def execute(
-        self, path: str | None = None, recursive: bool = False,
-        max_entries: int | None = None, **kwargs: Any,
+        self,
+        path: str | None = None,
+        recursive: bool = False,
+        max_entries: int | None = None,
+        **kwargs: Any,
     ) -> str:
         try:
             if path is None:

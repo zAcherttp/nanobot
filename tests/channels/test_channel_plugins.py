@@ -20,6 +20,7 @@ from nanobot.utils.restart import RestartNotice
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakePlugin(BaseChannel):
     name = "fakeplugin"
     display_name = "Fake Plugin"
@@ -44,6 +45,7 @@ class _FakePlugin(BaseChannel):
 
 class _FakeTelegram(BaseChannel):
     """Plugin that tries to shadow built-in telegram."""
+
     name = "telegram"
     display_name = "Fake Telegram"
 
@@ -67,10 +69,13 @@ def _make_entry_point(name: str, cls: type):
 # ChannelsConfig extra="allow"
 # ---------------------------------------------------------------------------
 
+
 def test_channels_config_accepts_unknown_keys():
-    cfg = ChannelsConfig.model_validate({
-        "myplugin": {"enabled": True, "token": "abc"},
-    })
+    cfg = ChannelsConfig.model_validate(
+        {
+            "myplugin": {"enabled": True, "token": "abc"},
+        }
+    )
     extra = cfg.model_extra
     assert extra is not None
     assert extra["myplugin"]["enabled"] is True
@@ -127,6 +132,7 @@ def test_discover_plugins_handles_load_error():
 # discover_all — merge & priority
 # ---------------------------------------------------------------------------
 
+
 def test_discover_all_includes_builtins():
     from nanobot.channels.registry import discover_all, discover_channel_names
 
@@ -166,15 +172,18 @@ def test_discover_all_builtin_shadows_plugin():
 # Manager _init_channels with dict config (plugin scenario)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_manager_loads_plugin_from_dict_config():
     """ChannelManager should instantiate a plugin channel from a raw dict config."""
     from nanobot.channels.manager import ChannelManager
 
     fake_config = SimpleNamespace(
-        channels=ChannelsConfig.model_validate({
-            "fakeplugin": {"enabled": True, "allowFrom": ["*"]},
-        }),
+        channels=ChannelsConfig.model_validate(
+            {
+                "fakeplugin": {"enabled": True, "allowFrom": ["*"]},
+            }
+        ),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
     )
 
@@ -275,9 +284,11 @@ def test_channels_status_sets_custom_config_path(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_manager_skips_disabled_plugin():
     fake_config = SimpleNamespace(
-        channels=ChannelsConfig.model_validate({
-            "fakeplugin": {"enabled": False},
-        }),
+        channels=ChannelsConfig.model_validate(
+            {
+                "fakeplugin": {"enabled": False},
+            }
+        ),
         providers=SimpleNamespace(groq=SimpleNamespace(api_key="")),
     )
 
@@ -299,9 +310,11 @@ async def test_manager_skips_disabled_plugin():
 # Built-in channel default_config() and dict->Pydantic conversion
 # ---------------------------------------------------------------------------
 
+
 def test_builtin_channel_default_config():
     """Built-in channels expose default_config() returning a dict with 'enabled': False."""
     from nanobot.channels.telegram import TelegramChannel
+
     cfg = TelegramChannel.default_config()
     assert isinstance(cfg, dict)
     assert cfg["enabled"] is False
@@ -311,6 +324,7 @@ def test_builtin_channel_default_config():
 def test_builtin_channel_init_from_dict():
     """Built-in channels accept a raw dict and convert to Pydantic internally."""
     from nanobot.channels.telegram import TelegramChannel
+
     bus = MessageBus()
     ch = TelegramChannel({"enabled": False, "token": "test-tok", "allowFrom": ["*"]}, bus)
     assert ch.config.token == "test-tok"
@@ -320,7 +334,7 @@ def test_builtin_channel_init_from_dict():
 def test_channels_config_send_max_retries_default():
     """ChannelsConfig should have send_max_retries with default value of 3."""
     cfg = ChannelsConfig()
-    assert hasattr(cfg, 'send_max_retries')
+    assert hasattr(cfg, "send_max_retries")
     assert cfg.send_max_retries == 3
 
 
@@ -351,6 +365,7 @@ def test_channels_config_send_max_retries_upper_bound():
 # ---------------------------------------------------------------------------
 # _send_with_retry
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_send_with_retry_succeeds_first_try():
@@ -503,8 +518,7 @@ async def test_send_with_retry_calls_send_delta():
     mgr._dispatch_task = None
 
     msg = OutboundMessage(
-        channel="streaming", chat_id="123", content="test delta",
-        metadata={"_stream_delta": True}
+        channel="streaming", chat_id="123", content="test delta", metadata={"_stream_delta": True}
     )
     await mgr._send_with_retry(mgr.channels["streaming"], msg)
 
@@ -548,8 +562,7 @@ async def test_send_with_retry_skips_send_when_streamed():
 
     # _streamed means message was already sent via send_delta, so skip send
     msg = OutboundMessage(
-        channel="streamed", chat_id="123", content="test",
-        metadata={"_streamed": True}
+        channel="streamed", chat_id="123", content="test", metadata={"_streamed": True}
     )
     await mgr._send_with_retry(mgr.channels["streamed"], msg)
 
@@ -560,6 +573,7 @@ async def test_send_with_retry_skips_send_when_streamed():
 @pytest.mark.asyncio
 async def test_send_with_retry_propagates_cancelled_error():
     """_send_with_retry should re-raise CancelledError for graceful shutdown."""
+
     class _CancellingChannel(BaseChannel):
         name = "cancelling"
         display_name = "Cancelling"
@@ -639,8 +653,10 @@ async def test_send_with_retry_propagates_cancelled_error_during_sleep():
 # ChannelManager - lifecycle and getters
 # ---------------------------------------------------------------------------
 
+
 class _ChannelWithAllowFrom(BaseChannel):
     """Channel with configurable allow_from."""
+
     name = "withallow"
     display_name = "With Allow"
 
@@ -660,6 +676,7 @@ class _ChannelWithAllowFrom(BaseChannel):
 
 class _StartableChannel(BaseChannel):
     """Channel that tracks start/stop calls."""
+
     name = "startable"
     display_name = "Startable"
 
@@ -811,6 +828,7 @@ async def test_stop_all_cancels_dispatcher_and_stops_channels():
 @pytest.mark.asyncio
 async def test_start_channel_logs_error_on_failure():
     """_start_channel should log error when channel start fails."""
+
     class _FailingChannel(BaseChannel):
         name = "failing"
         display_name = "Failing"
@@ -844,6 +862,7 @@ async def test_start_channel_logs_error_on_failure():
 @pytest.mark.asyncio
 async def test_stop_all_handles_channel_exception():
     """stop_all should handle exceptions when stopping channels gracefully."""
+
     class _StopFailingChannel(BaseChannel):
         name = "stopfailing"
         display_name = "Stop Failing"
