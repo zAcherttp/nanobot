@@ -80,7 +80,7 @@
 - **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/nanobot/discussions/566) about it!
 - **2026-02-11** ✨ Enhanced CLI experience and added MiniMax support!
 - **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/nanobot/discussions/431).
-- **2026-02-09** 💬 Added Slack, Email, and QQ support — nanobot now supports multiple chat platforms!
+- **2026-02-09** 💬 Added Slack and QQ support — nanobot now supports multiple chat platforms!
 - **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
 - **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post5) for details.
 - **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
@@ -266,7 +266,6 @@ Connect nanobot to your favorite chat platform. Want to build your own? See the 
 | **DingTalk** | App Key + App Secret |
 | **Slack** | Bot token + App-Level token |
 | **Matrix** | Homeserver URL + Access token |
-| **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
 | **Wecom** | Bot ID + Bot Secret |
 | **Mochat** | Claw token (auto-setup available) |
@@ -672,57 +671,6 @@ DM the bot directly or @mention it in a channel — it should respond!
 </details>
 
 <details>
-<summary><b>Email</b></summary>
-
-Give nanobot its own email account. It polls **IMAP** for incoming mail and replies via **SMTP** — like a personal email assistant.
-
-**1. Get credentials (Gmail example)**
-
-- Create a dedicated Gmail account for your bot (e.g. `my-nanobot@gmail.com`)
-- Enable 2-Step Verification → Create an [App Password](https://myaccount.google.com/apppasswords)
-- Use this app password for both IMAP and SMTP
-
-**2. Configure**
-
-> - `consentGranted` must be `true` to allow mailbox access. This is a safety gate — set `false` to fully disable.
-> - `allowFrom`: Add your email address. Use `["*"]` to accept emails from anyone.
-> - `smtpUseTls` and `smtpUseSsl` default to `true` / `false` respectively, which is correct for Gmail (port 587 + STARTTLS). No need to set them explicitly.
-> - Set `"autoReplyEnabled": false` if you only want to read/analyze emails without sending automatic replies.
-> - `allowedAttachmentTypes`: Save inbound attachments matching these MIME types — `["*"]` for all, e.g. `["application/pdf", "image/*"]` (default `[]` = disabled).
-> - `maxAttachmentSize`: Max size per attachment in bytes (default `2000000` / 2MB).
-> - `maxAttachmentsPerEmail`: Max attachments to save per email (default `5`).
-
-```json
-{
-  "channels": {
-    "email": {
-      "enabled": true,
-      "consentGranted": true,
-      "imapHost": "imap.gmail.com",
-      "imapPort": 993,
-      "imapUsername": "my-nanobot@gmail.com",
-      "imapPassword": "your-app-password",
-      "smtpHost": "smtp.gmail.com",
-      "smtpPort": 587,
-      "smtpUsername": "my-nanobot@gmail.com",
-      "smtpPassword": "your-app-password",
-      "fromAddress": "my-nanobot@gmail.com",
-      "allowFrom": ["your-real-email@gmail.com"],
-      "allowedAttachmentTypes": ["application/pdf", "image/*"]
-    }
-  }
-}
-```
-
-**3. Run**
-
-```bash
-nanobot gateway
-```
-
-</details>
-
-<details>
 <summary><b>WeChat (微信 / Weixin)</b></summary>
 
 Uses **HTTP long-poll** with QR-code login via the ilinkai personal WeChat API. No local WeChat desktop client is required.
@@ -839,11 +787,7 @@ Instead of storing secrets directly in `config.json`, you can use `${VAR_NAME}` 
 ```json
 {
   "channels": {
-    "telegram": { "token": "${TELEGRAM_TOKEN}" },
-    "email": {
-      "imapPassword": "${IMAP_PASSWORD}",
-      "smtpPassword": "${SMTP_PASSWORD}"
-    }
+    "telegram": { "token": "${TELEGRAM_TOKEN}" }
   },
   "providers": {
     "groq": { "apiKey": "${GROQ_API_KEY}" }
@@ -864,7 +808,6 @@ ExecStart=...
 ```bash
 # /home/youruser/nanobot_secrets.env (mode 600, owned by youruser)
 TELEGRAM_TOKEN=your-token-here
-IMAP_PASSWORD=your-password-here
 ```
 
 ### Providers
