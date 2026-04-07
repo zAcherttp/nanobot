@@ -51,8 +51,3 @@ def get_cli_history_path() -> Path:
     """Return the shared CLI history file path."""
     return Path.home() / ".nanobot" / "history" / "cli_history"
 
-
-def get_bridge_install_dir() -> Path:
-    """Return the shared WhatsApp bridge installation directory."""
-    return Path.home() / ".nanobot" / "bridge"
-

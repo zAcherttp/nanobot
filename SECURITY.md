@@ -5,7 +5,7 @@
 If you discover a security vulnerability in nanobot, please report it by:
 
 1. **DO NOT** open a public GitHub issue
-2. Create a private security advisory on GitHub or contact the repository maintainers (xubinrencs@gmail.com)
+2. Create a private security advisory on GitHub or contact the repository maintainers (<xubinrencs@gmail.com>)
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
@@ -28,6 +28,7 @@ chmod 600 ~/.nanobot/config.json
 ```
 
 **Recommendations:**
+
 - Store API keys in `~/.nanobot/config.json` with file permissions set to `0600`
 - Consider using environment variables for sensitive keys
 - Use OS keyring/credential manager for production deployments
@@ -45,19 +46,15 @@ chmod 600 ~/.nanobot/config.json
       "enabled": true,
       "token": "YOUR_BOT_TOKEN",
       "allowFrom": ["123456789", "987654321"]
-    },
-    "whatsapp": {
-      "enabled": true,
-      "allowFrom": ["+1234567890"]
     }
   }
 }
 ```
 
 **Security Notes:**
+
 - In `v0.1.4.post3` and earlier, an empty `allowFrom` allowed all users. Since `v0.1.4.post4`, empty `allowFrom` denies all access by default — set `["*"]` to explicitly allow everyone.
 - Get your Telegram user ID from `@userinfobot`
-- Use full phone numbers with country code for WhatsApp
 - Review access logs regularly for unauthorized access attempts
 
 ### 3. Shell Command Execution
@@ -86,6 +83,7 @@ Requires `bwrap` installed (`apt install bubblewrap`). Pre-installed in the offi
 Enabling the sandbox also automatically activates `restrictToWorkspace` for file tools.
 
 **Blocked patterns:**
+
 - `rm -rf /` - Root filesystem deletion
 - Fork bombs
 - Filesystem formatting (`mkfs.*`)
@@ -105,14 +103,10 @@ File operations have path traversal protection, but:
 ### 5. Network Security
 
 **API Calls:**
+
 - All external API calls use HTTPS by default
 - Timeouts are configured to prevent hanging requests
 - Consider using a firewall to restrict outbound connections if needed
-
-**WhatsApp Bridge:**
-- The bridge binds to `127.0.0.1:3001` (localhost only, not accessible from external network)
-- Set `bridgeToken` in config to enable shared-secret authentication between Python and Node.js
-- Keep authentication data in `~/.nanobot/whatsapp-auth` secure (mode 0700)
 
 ### 6. Dependency Security
 
@@ -127,17 +121,10 @@ pip-audit
 pip install --upgrade nanobot-ai
 ```
 
-For Node.js dependencies (WhatsApp bridge):
-```bash
-cd bridge
-npm audit
-npm audit fix
-```
-
 **Important Notes:**
+
 - Keep `litellm` updated to the latest version for security fixes
-- We've updated `ws` to `>=8.17.1` to fix DoS vulnerability
-- Run `pip-audit` or `npm audit` regularly
+- Run `pip-audit` regularly
 - Subscribe to security advisories for nanobot and its dependencies
 
 ### 7. Production Deployment
@@ -145,6 +132,7 @@ npm audit fix
 For production use:
 
 1. **Isolate the Environment**
+
    ```bash
    # Run in a container or VM
    docker run --rm -it python:3.11
@@ -152,19 +140,21 @@ For production use:
    ```
 
 2. **Use a Dedicated User**
+
    ```bash
    sudo useradd -m -s /bin/bash nanobot
    sudo -u nanobot nanobot gateway
    ```
 
 3. **Set Proper Permissions**
+
    ```bash
    chmod 700 ~/.nanobot
    chmod 600 ~/.nanobot/config.json
-   chmod 700 ~/.nanobot/whatsapp-auth
    ```
 
 4. **Enable Logging**
+
    ```bash
    # Configure log monitoring
    tail -f ~/.nanobot/logs/nanobot.log
@@ -176,6 +166,7 @@ For production use:
    - Set spending limits on LLM APIs
 
 6. **Regular Updates**
+
    ```bash
    # Check for updates weekly
    pip install --upgrade nanobot-ai
@@ -184,12 +175,14 @@ For production use:
 ### 8. Development vs Production
 
 **Development:**
+
 - Use separate API keys
 - Test with non-sensitive data
 - Enable verbose logging
 - Use a test Telegram bot
 
 **Production:**
+
 - Use dedicated API keys with spending limits
 - Restrict file system access
 - Enable audit logging
@@ -209,9 +202,11 @@ If you suspect a security breach:
 
 1. **Immediately revoke compromised API keys**
 2. **Review logs for unauthorized access**
+
    ```bash
    grep "Access denied" ~/.nanobot/logs/nanobot.log
    ```
+
 3. **Check for unexpected file modifications**
 4. **Rotate all credentials**
 5. **Update to latest version**
@@ -222,23 +217,26 @@ If you suspect a security breach:
 ### Built-in Security Controls
 
 ✅ **Input Validation**
+
 - Path traversal protection on file operations
 - Dangerous command pattern detection
 - Input length limits on HTTP requests
 
 ✅ **Authentication**
+
 - Allow-list based access control — in `v0.1.4.post3` and earlier empty `allowFrom` allowed all; since `v0.1.4.post4` it denies all (`["*"]` explicitly allows all)
 - Failed authentication attempt logging
 
 ✅ **Resource Protection**
+
 - Command execution timeouts (60s default)
 - Output truncation (10KB limit)
 - HTTP request timeouts (10-30s)
 
 ✅ **Secure Communication**
+
 - HTTPS for all external API calls
 - TLS for Telegram API
-- WhatsApp bridge: localhost-only binding + optional token auth
 
 ## Known Limitations
 
@@ -271,8 +269,9 @@ Before deploying nanobot:
 **Last Updated**: 2026-04-05
 
 For the latest security updates and announcements, check:
-- GitHub Security Advisories: https://github.com/HKUDS/nanobot/security/advisories
-- Release Notes: https://github.com/HKUDS/nanobot/releases
+
+- GitHub Security Advisories: <https://github.com/HKUDS/nanobot/security/advisories>
+- Release Notes: <https://github.com/HKUDS/nanobot/releases>
 
 ## License
 

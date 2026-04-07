@@ -22,7 +22,7 @@ class ChannelManager:
     Manages chat channels and coordinates message routing.
 
     Responsibilities:
-    - Initialize enabled channels (Telegram, WhatsApp, etc.)
+    - Initialize enabled channels (Telegram, Discord, etc.)
     - Start/stop channels
     - Route outbound messages
     """
@@ -42,7 +42,9 @@ class ChannelManager:
         transcription_provider = self.config.channels.transcription_provider
         transcription_key = self._resolve_transcription_key(transcription_provider)
 
-        for name, cls in discover_all().items():
+        available_channels = discover_all()
+
+        for name, cls in available_channels.items():
             section = getattr(self.config.channels, name, None)
             if section is None:
                 continue
@@ -61,6 +63,20 @@ class ChannelManager:
                 logger.info("{} channel enabled", cls.display_name)
             except Exception as e:
                 logger.warning("{} channel not available: {}", name, e)
+
+        # Warn about configured channels that are enabled but unavailable in this install.
+        extra_sections = self.config.channels.model_extra or {}
+        for name, section in extra_sections.items():
+            if not isinstance(section, dict):
+                continue
+            if not section.get("enabled", False):
+                continue
+            if name not in available_channels:
+                logger.warning(
+                    "Channel '{}' is enabled in config but not available in this installation. "
+                    "Install the matching plugin or remove it from config.",
+                    name,
+                )
 
         self._validate_allow_from()
 
