@@ -281,7 +281,7 @@ class LLMProvider(ABC):
 
     @classmethod
     def _is_transient_response(cls, response: LLMResponse) -> bool:
-        """Prefer structured error metadata, fallback to text markers for legacy providers."""
+        """Prefer structured error metadata, fallback to text markers."""
         if response.error_should_retry is not None:
             return bool(response.error_should_retry)
 

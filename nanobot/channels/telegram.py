@@ -237,7 +237,7 @@ class TelegramChannel(BaseChannel):
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
 
     def is_allowed(self, sender_id: str) -> bool:
-        """Preserve Telegram's legacy id|username allowlist matching."""
+        """Extended id|username allowlist matching for Telegram."""
         if super().is_allowed(sender_id):
             return True
 

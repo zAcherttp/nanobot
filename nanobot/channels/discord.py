@@ -369,10 +369,6 @@ class DiscordChannel(BaseChannel):
             await self._stop_typing(channel_id)
             raise
 
-    async def _on_message(self, message: discord.Message) -> None:
-        """Backward-compatible alias for legacy tests/callers."""
-        await self._handle_discord_message(message)
-
     def _should_accept_inbound(
         self,
         message: discord.Message,

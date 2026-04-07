@@ -175,11 +175,25 @@ class ExecTool(Tool):
         secrets in env vars from leaking to LLM-generated commands.
         """
         home = os.environ.get("HOME", "/tmp")
-        return {
+        env = {
             "HOME": home,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "TERM": os.environ.get("TERM", "dumb"),
         }
+
+        # On Windows, bash.exe (like WSL) requires core OS environment variables 
+        # (SystemRoot, PATH) to function properly and communicate via RPC.
+        if sys.platform == "win32":
+            win_vars = {
+                "PATH", "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC",
+                "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+                "WSLENV"
+            }
+            for k, v in os.environ.items():
+                if k.upper() in win_vars:
+                    env[k] = v
+
+        return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""

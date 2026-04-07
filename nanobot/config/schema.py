@@ -37,7 +37,6 @@ class DreamConfig(Base):
     _HOUR_MS = 3_600_000
 
     interval_h: int = Field(default=2, ge=1)  # Every 2 hours by default
-    cron: str | None = Field(default=None, exclude=True)  # Legacy compatibility override
     model_override: str | None = Field(
         default=None,
         validation_alias=AliasChoices("modelOverride", "model", "model_override"),
@@ -46,17 +45,12 @@ class DreamConfig(Base):
     max_iterations: int = Field(default=10, ge=1)  # Max tool calls per Phase 2
 
     def build_schedule(self, timezone: str) -> CronSchedule:
-        """Build the runtime schedule, preferring the legacy cron override if present."""
-        if self.cron:
-            return CronSchedule(kind="cron", expr=self.cron, tz=timezone)
+        """Build the runtime schedule from interval_h."""
         return CronSchedule(kind="every", every_ms=self.interval_h * self._HOUR_MS)
 
     def describe_schedule(self) -> str:
         """Return a human-readable summary for logs and startup output."""
-        if self.cron:
-            return f"cron {self.cron} (legacy)"
-        hours = self.interval_h
-        return f"every {hours}h"
+        return f"every {self.interval_h}h"
 
 
 class AgentDefaults(Base):
