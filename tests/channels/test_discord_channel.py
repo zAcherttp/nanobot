@@ -269,7 +269,7 @@ async def test_on_message_ignores_bot_messages() -> None:
     handled: list[dict] = []
     channel._handle_message = lambda **kwargs: handled.append(kwargs)  # type: ignore[method-assign]
 
-    await channel._on_message(_make_message(author_bot=True))
+    await channel._handle_discord_message(_make_message(author_bot=True))
 
     assert handled == []
 
@@ -280,13 +280,13 @@ async def test_on_message_ignores_bot_messages() -> None:
     channel._handle_message = fail_handle  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="boom"):
-        await channel._on_message(_make_message(author_id=123, channel_id=456))
+        await channel._handle_discord_message(_make_message(author_id=123, channel_id=456))
 
     assert channel._typing_tasks == {}
 
 
 @pytest.mark.asyncio
-async def test_on_message_accepts_allowlisted_dm() -> None:
+async def test_handle_discord_message_accepts_allowlisted_dm() -> None:
     # Allowed direct messages should be forwarded with normalized metadata.
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["123"]), MessageBus())
     handled: list[dict] = []
@@ -296,7 +296,7 @@ async def test_on_message_accepts_allowlisted_dm() -> None:
 
     channel._handle_message = capture_handle  # type: ignore[method-assign]
 
-    await channel._on_message(_make_message(author_id=123, channel_id=456, message_id=789))
+    await channel._handle_discord_message(_make_message(author_id=123, channel_id=456, message_id=789))
 
     assert len(handled) == 1
     assert handled[0]["chat_id"] == "456"
@@ -304,7 +304,7 @@ async def test_on_message_accepts_allowlisted_dm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_message_ignores_unmentioned_guild_message() -> None:
+async def test_handle_discord_message_ignores_unmentioned_guild_message() -> None:
     # With mention-only group policy, guild messages without a bot mention are dropped.
     channel = DiscordChannel(
         DiscordConfig(enabled=True, allow_from=["*"], group_policy="mention"),
@@ -318,13 +318,13 @@ async def test_on_message_ignores_unmentioned_guild_message() -> None:
 
     channel._handle_message = capture_handle  # type: ignore[method-assign]
 
-    await channel._on_message(_make_message(guild_id=1, content="hello everyone"))
+    await channel._handle_discord_message(_make_message(guild_id=1, content="hello everyone"))
 
     assert handled == []
 
 
 @pytest.mark.asyncio
-async def test_on_message_accepts_mentioned_guild_message() -> None:
+async def test_handle_discord_message_accepts_mentioned_guild_message() -> None:
     # Mentioned guild messages should be accepted and preserve reply threading metadata.
     channel = DiscordChannel(
         DiscordConfig(enabled=True, allow_from=["*"], group_policy="mention"),
@@ -338,7 +338,7 @@ async def test_on_message_accepts_mentioned_guild_message() -> None:
 
     channel._handle_message = capture_handle  # type: ignore[method-assign]
 
-    await channel._on_message(
+    await channel._handle_discord_message(
         _make_message(
             guild_id=1,
             content="<@999> hello",
@@ -352,7 +352,7 @@ async def test_on_message_accepts_mentioned_guild_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_message_downloads_attachments(tmp_path, monkeypatch) -> None:
+async def test_handle_discord_message_downloads_attachments(tmp_path, monkeypatch) -> None:
     # Attachment downloads should be saved and referenced in forwarded content/media.
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
     handled: list[dict] = []
@@ -363,7 +363,7 @@ async def test_on_message_downloads_attachments(tmp_path, monkeypatch) -> None:
     channel._handle_message = capture_handle  # type: ignore[method-assign]
     monkeypatch.setattr("nanobot.channels.discord.get_media_dir", lambda _name: tmp_path)
 
-    await channel._on_message(
+    await channel._handle_discord_message(
         _make_message(
             attachments=[_FakeAttachment(12, "photo.png")],
             content="see file",
@@ -376,7 +376,7 @@ async def test_on_message_downloads_attachments(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch) -> None:
+async def test_handle_discord_message_marks_failed_attachment_download(tmp_path, monkeypatch) -> None:
     # Failed attachment downloads should emit a readable placeholder and no media path.
     channel = DiscordChannel(DiscordConfig(enabled=True, allow_from=["*"]), MessageBus())
     handled: list[dict] = []
@@ -387,7 +387,7 @@ async def test_on_message_marks_failed_attachment_download(tmp_path, monkeypatch
     channel._handle_message = capture_handle  # type: ignore[method-assign]
     monkeypatch.setattr("nanobot.channels.discord.get_media_dir", lambda _name: tmp_path)
 
-    await channel._on_message(
+    await channel._handle_discord_message(
         _make_message(
             attachments=[_FakeAttachment(12, "photo.png", fail=True)],
             content="",

@@ -56,7 +56,3 @@ def get_bridge_install_dir() -> Path:
     """Return the shared WhatsApp bridge installation directory."""
     return Path.home() / ".nanobot" / "bridge"
 
-
-def get_legacy_sessions_dir() -> Path:
-    """Return the legacy global session directory used for migration fallback."""
-    return Path.home() / ".nanobot" / "sessions"

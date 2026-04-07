@@ -52,7 +52,7 @@ class StringSchema(Schema):
 
 
 class IntegerSchema(Schema):
-    """Integer parameter: optional placeholder int (legacy ctor signature), description, and bounds."""
+    """Integer parameter: description and optional bounds."""
 
     def __init__(
         self,
