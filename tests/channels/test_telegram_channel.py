@@ -45,6 +45,8 @@ class _FakeBot:
     def __init__(self) -> None:
         self.sent_messages: list[dict] = []
         self.sent_media: list[dict] = []
+        self.edited_messages: list[dict] = []
+        self.raw_posts: list[dict] = []
         self.get_me_calls = 0
 
     async def get_me(self):
@@ -57,6 +59,14 @@ class _FakeBot:
     async def send_message(self, **kwargs):
         self.sent_messages.append(kwargs)
         return SimpleNamespace(message_id=len(self.sent_messages))
+
+    async def edit_message_text(self, **kwargs):
+        self.edited_messages.append(kwargs)
+        return SimpleNamespace(message_id=kwargs.get("message_id", 0))
+
+    async def _post(self, endpoint: str, data=None, **kwargs):
+        self.raw_posts.append({"endpoint": endpoint, "data": data or {}, **kwargs})
+        return True
 
     async def send_photo(self, **kwargs) -> None:
         self.sent_media.append({"kind": "photo", **kwargs})
@@ -365,6 +375,7 @@ async def test_send_delta_stream_end_raises_and_keeps_buffer_on_failure() -> Non
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
     channel._app.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("boom"))
     channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0)
 
@@ -383,6 +394,7 @@ async def test_send_delta_stream_end_treats_not_modified_as_success() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
     channel._app.bot.edit_message_text = AsyncMock(
         side_effect=BadRequest("Message is not modified")
     )
@@ -405,6 +417,7 @@ async def test_send_delta_stream_end_splits_oversized_reply() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
     channel._app.bot.edit_message_text = AsyncMock()
     channel._app.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=99))
 
@@ -428,6 +441,7 @@ async def test_send_delta_new_stream_id_replaces_stale_buffer() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
     channel._stream_bufs["123"] = _StreamBuf(
         text="hello",
         message_id=7,
@@ -452,6 +466,7 @@ async def test_send_delta_incremental_edit_treats_not_modified_as_success() -> N
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
     channel._stream_bufs["123"] = _StreamBuf(
         text="hello", message_id=7, last_edit=0.0, stream_id="s:0"
     )
@@ -471,6 +486,7 @@ async def test_send_delta_initial_send_keeps_message_in_thread() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
+    channel._stream_draft_supported = False
 
     await channel.send_delta(
         "123",
@@ -479,6 +495,69 @@ async def test_send_delta_initial_send_keeps_message_in_thread() -> None:
     )
 
     assert channel._app.bot.sent_messages[0]["message_thread_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_send_delta_uses_send_message_draft_when_supported() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    await channel.send_delta(
+        "123",
+        "hello",
+        {"_stream_delta": True, "_stream_id": "s:0", "message_thread_id": 42},
+    )
+
+    assert channel._stream_draft_supported is True
+    assert len(channel._app.bot.raw_posts) == 1
+    req = channel._app.bot.raw_posts[0]
+    assert req["endpoint"] == "sendMessageDraft"
+    assert req["data"]["chat_id"] == 123
+    assert req["data"]["text"] == "hello"
+    assert req["data"]["message_thread_id"] == 42
+    assert req["data"]["draft_id"] > 0
+
+
+@pytest.mark.asyncio
+async def test_send_delta_stream_end_sends_final_message_after_draft_updates() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    await channel.send_delta("123", "hello ", {"_stream_delta": True, "_stream_id": "s:0"})
+    await channel.send_delta("123", "world", {"_stream_delta": True, "_stream_id": "s:0"})
+    await channel.send_delta("123", "", {"_stream_end": True, "_stream_id": "s:0"})
+
+    assert len(channel._app.bot.raw_posts) >= 1
+    assert channel._app.bot.sent_messages
+    assert channel._app.bot.sent_messages[-1]["chat_id"] == 123
+    assert "hello world" in channel._app.bot.sent_messages[-1]["text"]
+    assert channel._app.bot.sent_messages[-1]["parse_mode"] == "HTML"
+    assert "123" not in channel._stream_bufs
+
+
+@pytest.mark.asyncio
+async def test_send_delta_falls_back_to_message_edit_when_draft_unsupported() -> None:
+    from telegram.error import BadRequest
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+    channel._app.bot._post = AsyncMock(side_effect=BadRequest("Method sendMessageDraft not found"))
+
+    await channel.send_delta("123", "hello", {"_stream_delta": True, "_stream_id": "s:0"})
+
+    assert channel._stream_draft_supported is False
+    assert len(channel._app.bot.sent_messages) == 1
+    assert channel._app.bot.sent_messages[0]["chat_id"] == 123
+    assert channel._app.bot.sent_messages[0]["text"] == "hello"
 
 
 def test_derive_topic_session_key_uses_thread_id() -> None:
