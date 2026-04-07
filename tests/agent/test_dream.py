@@ -60,13 +60,17 @@ class TestDreamRun:
         mock_provider.chat_with_retry.assert_not_called()
         mock_runner.run.assert_not_called()
 
-    async def test_calls_runner_for_unprocessed_entries(self, dream, mock_provider, mock_runner, store):
+    async def test_calls_runner_for_unprocessed_entries(
+        self, dream, mock_provider, mock_runner, store
+    ):
         """Dream should call AgentRunner when there are unprocessed history entries."""
         store.append_history("User prefers dark mode")
         mock_provider.chat_with_retry.return_value = MagicMock(content="New fact")
-        mock_runner.run = AsyncMock(return_value=_make_run_result(
-            tool_events=[{"name": "edit_file", "status": "ok", "detail": "memory/MEMORY.md"}],
-        ))
+        mock_runner.run = AsyncMock(
+            return_value=_make_run_result(
+                tool_events=[{"name": "edit_file", "status": "ok", "detail": "memory/MEMORY.md"}],
+            )
+        )
         result = await dream.run()
         assert result is True
         mock_runner.run.assert_called_once()
@@ -94,4 +98,3 @@ class TestDreamRun:
         # After Dream, cursor is advanced and 3, compact keeps last max_history_entries
         entries = store.read_unprocessed_history(since_cursor=0)
         assert all(e["cursor"] > 0 for e in entries)
-

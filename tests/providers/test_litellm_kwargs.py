@@ -531,26 +531,30 @@ def test_openai_compat_preserves_message_level_reasoning_fields() -> None:
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
         provider = OpenAICompatProvider()
 
-    sanitized = provider._sanitize_messages([
-        {
-            "role": "assistant",
-            "content": "done",
-            "reasoning_content": "hidden",
-            "extra_content": {"debug": True},
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "fn", "arguments": "{}"},
-                    "extra_content": {"google": {"thought_signature": "sig"}},
-                }
-            ],
-        }
-    ])
+    sanitized = provider._sanitize_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "done",
+                "reasoning_content": "hidden",
+                "extra_content": {"debug": True},
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "{}"},
+                        "extra_content": {"google": {"thought_signature": "sig"}},
+                    }
+                ],
+            }
+        ]
+    )
 
     assert sanitized[0]["reasoning_content"] == "hidden"
     assert sanitized[0]["extra_content"] == {"debug": True}
-    assert sanitized[0]["tool_calls"][0]["extra_content"] == {"google": {"thought_signature": "sig"}}
+    assert sanitized[0]["tool_calls"][0]["extra_content"] == {
+        "google": {"thought_signature": "sig"}
+    }
 
 
 @pytest.mark.asyncio
@@ -582,14 +586,19 @@ async def test_openai_compat_stream_watchdog_returns_error_on_stall(monkeypatch)
 # Provider-specific thinking parameters (extra_body)
 # ---------------------------------------------------------------------------
 
+
 def _build_kwargs_for(provider_name: str, model: str, reasoning_effort=None):
     spec = find_by_name(provider_name)
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
         p = OpenAICompatProvider(api_key="k", default_model=model, spec=spec)
     return p._build_kwargs(
         messages=[{"role": "user", "content": "hi"}],
-        tools=None, model=model, max_tokens=1024, temperature=0.7,
-        reasoning_effort=reasoning_effort, tool_choice=None,
+        tools=None,
+        model=model,
+        max_tokens=1024,
+        temperature=0.7,
+        reasoning_effort=reasoning_effort,
+        tool_choice=None,
     )
 
 

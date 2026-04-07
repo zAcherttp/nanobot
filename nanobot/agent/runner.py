@@ -142,7 +142,9 @@ class AgentRunner:
                         "model": spec.model,
                         "assistant_message": assistant_message,
                         "completed_tool_results": [],
-                        "pending_tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls],
+                        "pending_tool_calls": [
+                            tc.to_openai_tool_call() for tc in response.tool_calls
+                        ],
                     },
                 )
 
@@ -274,11 +276,13 @@ class AgentRunner:
                 await hook.after_iteration(context)
                 break
 
-            messages.append(build_assistant_message(
-                clean,
-                reasoning_content=response.reasoning_content,
-                thinking_blocks=response.thinking_blocks,
-            ))
+            messages.append(
+                build_assistant_message(
+                    clean,
+                    reasoning_content=response.reasoning_content,
+                    thinking_blocks=response.thinking_blocks,
+                )
+            )
             await self._emit_checkpoint(
                 spec,
                 {
@@ -354,6 +358,7 @@ class AgentRunner:
             tools=spec.tools.get_definitions(),
         )
         if hook.wants_streaming():
+
             async def _stream(delta: str) -> None:
                 await hook.on_stream(context, delta)
 
@@ -407,13 +412,19 @@ class AgentRunner:
         tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
-                tool_results.extend(await asyncio.gather(*(
-                    self._run_tool(spec, tool_call, external_lookup_counts)
-                    for tool_call in batch
-                )))
+                tool_results.extend(
+                    await asyncio.gather(
+                        *(
+                            self._run_tool(spec, tool_call, external_lookup_counts)
+                            for tool_call in batch
+                        )
+                    )
+                )
             else:
                 for tool_call in batch:
-                    tool_results.append(await self._run_tool(spec, tool_call, external_lookup_counts))
+                    tool_results.append(
+                        await self._run_tool(spec, tool_call, external_lookup_counts)
+                    )
 
         results: list[Any] = []
         events: list[dict[str, str]] = []
@@ -461,7 +472,11 @@ class AgentRunner:
                 "status": "error",
                 "detail": prep_error.split(": ", 1)[-1][:120],
             }
-            return prep_error + _HINT, event, RuntimeError(prep_error) if spec.fail_on_tool_error else None
+            return (
+                prep_error + _HINT,
+                event,
+                RuntimeError(prep_error) if spec.fail_on_tool_error else None,
+            )
         try:
             if tool is not None:
                 result = await tool.execute(**params)
@@ -645,9 +660,13 @@ class AgentRunner:
         if not messages or not spec.context_window_tokens:
             return messages
 
-        provider_max_tokens = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
-        max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
-            provider_max_tokens if isinstance(provider_max_tokens, int) else 4096
+        provider_max_tokens = getattr(
+            getattr(self.provider, "generation", None), "max_tokens", 4096
+        )
+        max_output = (
+            spec.max_tokens
+            if isinstance(spec.max_tokens, int)
+            else (provider_max_tokens if isinstance(provider_max_tokens, int) else 4096)
         )
         budget = spec.context_block_limit or (
             spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
@@ -720,4 +739,3 @@ class AgentRunner:
         if current:
             batches.append(current)
         return batches
-

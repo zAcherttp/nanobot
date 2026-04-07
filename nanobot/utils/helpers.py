@@ -34,7 +34,9 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-def build_image_content_blocks(raw: bytes, mime: str, path: str, label: str) -> list[dict[str, Any]]:
+def build_image_content_blocks(
+    raw: bytes, mime: str, path: str, label: str
+) -> list[dict[str, Any]]:
     """Build native image blocks plus a short text label."""
     b64 = base64.b64encode(raw).decode()
     return [
@@ -79,6 +81,7 @@ _TOOL_RESULT_PREVIEW_CHARS = 1200
 _TOOL_RESULTS_DIR = ".nanobot/tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
+
 
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
@@ -255,9 +258,9 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
             break
         cut = content[:max_len]
         # Try to break at newline first, then space, then hard break
-        pos = cut.rfind('\n')
+        pos = cut.rfind("\n")
         if pos <= 0:
-            pos = cut.rfind(' ')
+            pos = cut.rfind(" ")
         if pos <= 0:
             pos = max_len
         chunks.append(content[:pos])
@@ -399,7 +402,7 @@ def build_status_content(
     search_usage_text: str | None = None,
 ) -> str:
     """Build a human-readable runtime status snapshot.
-    
+
     Args:
         search_usage_text: Optional pre-formatted web search usage string
                            (produced by SearchUsageInfo.format()). When provided
@@ -431,12 +434,13 @@ def build_status_content(
     ]
     if search_usage_text:
         lines.append(search_usage_text)
-    return "\n".join(lines)    
+    return "\n".join(lines)
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
+
     try:
         tpl = pkg_files("nanobot") / "templates"
     except Exception:
@@ -462,15 +466,22 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
 
     if added and not silent:
         from rich.console import Console
+
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
 
     # Initialize git for memory version control
     try:
         from nanobot.utils.gitstore import GitStore
-        gs = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md",
-        ])
+
+        gs = GitStore(
+            workspace,
+            tracked_files=[
+                "SOUL.md",
+                "USER.md",
+                "memory/MEMORY.md",
+            ],
+        )
         gs.init()
     except Exception:
         logger.warning("Failed to initialize git store for {}", workspace)

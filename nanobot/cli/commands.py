@@ -180,10 +180,9 @@ def _response_renderable(content: str, render_markdown: bool, metadata: dict | N
 
 async def _print_interactive_line(text: str) -> None:
     """Print async interactive updates with prompt_toolkit-safe Rich styling."""
+
     def _write() -> None:
-        ansi = _render_interactive_ansi(
-            lambda c: c.print(f"  [dim]↳ {text}[/dim]")
-        )
+        ansi = _render_interactive_ansi(lambda c: c.print(f"  [dim]↳ {text}[/dim]"))
         print_formatted_text(ANSI(ansi), end="")
 
     await run_in_terminal(_write)
@@ -195,6 +194,7 @@ async def _print_interactive_response(
     metadata: dict | None = None,
 ) -> None:
     """Print async interactive replies with prompt_toolkit-safe Rich styling."""
+
     def _write() -> None:
         content = response or ""
         ansi = _render_interactive_ansi(
@@ -254,9 +254,7 @@ def version_callback(value: bool):
 
 @app.callback()
 def main(
-    version: bool = typer.Option(
-        None, "--version", "-v", callback=version_callback, is_eager=True
-    ),
+    version: bool = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True),
 ):
     """nanobot - Personal AI Assistant."""
     pass
@@ -360,9 +358,7 @@ def onboard(
         console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
         console.print("     Get one at: https://openrouter.ai/keys")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
-    console.print(
-        "\n[dim]Want chat apps? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]"
-    )
+    console.print("\n[dim]Want chat apps? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -447,6 +443,7 @@ def _make_provider(config: Config):
         )
     elif backend == "github_copilot":
         from nanobot.providers.github_copilot_provider import GitHubCopilotProvider
+
         provider = GitHubCopilotProvider(default_model=model)
     elif backend == "anthropic":
         from nanobot.providers.anthropic_provider import AnthropicProvider
@@ -519,7 +516,6 @@ def _warn_deprecated_config_keys(config_path: Path | None) -> None:
         )
 
 
-
 # ============================================================================
 # OpenAI-Compatible API Server
 # ============================================================================
@@ -529,7 +525,9 @@ def _warn_deprecated_config_keys(config_path: Path | None) -> None:
 def serve(
     port: int | None = typer.Option(None, "--port", "-p", help="API server port"),
     host: str | None = typer.Option(None, "--host", "-H", help="Bind address"),
-    timeout: float | None = typer.Option(None, "--timeout", "-t", help="Per-request timeout (seconds)"),
+    timeout: float | None = typer.Option(
+        None, "--timeout", "-t", help="Per-request timeout (seconds)"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show nanobot runtime logs"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
@@ -712,15 +710,21 @@ def gateway(
 
         if job.payload.deliver and job.payload.to and response:
             should_notify = await evaluate_response(
-                response, reminder_note, provider, agent.model,
+                response,
+                reminder_note,
+                provider,
+                agent.model,
             )
             if should_notify:
                 from nanobot.bus.events import OutboundMessage
-                await bus.publish_outbound(OutboundMessage(
-                    channel=job.payload.channel or "cli",
-                    chat_id=job.payload.to,
-                    content=response,
-                ))
+
+                await bus.publish_outbound(
+                    OutboundMessage(
+                        channel=job.payload.channel or "cli",
+                        chat_id=job.payload.to,
+                        content=response,
+                    )
+                )
         return response
 
     cron.on_job = on_cron_job
@@ -771,10 +775,13 @@ def gateway(
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
         from nanobot.bus.events import OutboundMessage
+
         channel, chat_id = _pick_heartbeat_target()
         if channel == "cli":
             return  # No external channel available to deliver to
-        await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
+        await bus.publish_outbound(
+            OutboundMessage(channel=channel, chat_id=chat_id, content=response)
+        )
 
     hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
@@ -806,12 +813,15 @@ def gateway(
     agent.dream.max_batch_size = dream_cfg.max_batch_size
     agent.dream.max_iterations = dream_cfg.max_iterations
     from nanobot.cron.types import CronJob, CronPayload
-    cron.register_system_job(CronJob(
-        id="dream",
-        name="dream",
-        schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
-        payload=CronPayload(kind="system_event"),
-    ))
+
+    cron.register_system_job(
+        CronJob(
+            id="dream",
+            name="dream",
+            schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
+            payload=CronPayload(kind="system_event"),
+        )
+    )
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
     async def run():
@@ -850,8 +860,12 @@ def agent(
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
-    markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
-    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+    markdown: bool = typer.Option(
+        True, "--markdown/--no-markdown", help="Render assistant output as Markdown"
+    ),
+    logs: bool = typer.Option(
+        False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"
+    ),
 ):
     """Interact with the agent directly."""
     from loguru import logger
@@ -916,7 +930,8 @@ def agent(
         async def run_once():
             renderer = StreamRenderer(render_markdown=markdown)
             response = await agent_loop.process_direct(
-                message, session_id,
+                message,
+                session_id,
                 on_progress=_cli_progress,
                 on_stream=renderer.on_delta,
                 on_stream_end=renderer.on_end,
@@ -934,8 +949,11 @@ def agent(
     else:
         # Interactive mode — route through bus like other channels
         from nanobot.bus.events import InboundMessage
+
         _init_prompt_session()
-        console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
+        console.print(
+            f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
+        )
 
         if ":" in session_id:
             cli_channel, cli_chat_id = session_id.split(":", 1)
@@ -951,11 +969,11 @@ def agent(
         signal.signal(signal.SIGINT, _handle_signal)
         signal.signal(signal.SIGTERM, _handle_signal)
         # SIGHUP is not available on Windows
-        if hasattr(signal, 'SIGHUP'):
+        if hasattr(signal, "SIGHUP"):
             signal.signal(signal.SIGHUP, _handle_signal)
         # Ignore SIGPIPE to prevent silent process termination when writing to closed pipes
         # SIGPIPE is not available on Windows
-        if hasattr(signal, 'SIGPIPE'):
+        if hasattr(signal, "SIGPIPE"):
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
@@ -981,6 +999,14 @@ def agent(
                                 )
                             continue
                         if msg.metadata.get("_streamed"):
+                            # If no deltas were emitted (for example, provider error before first token),
+                            # keep the final content so interactive mode can still display the error.
+                            if (
+                                not turn_done.is_set()
+                                and msg.content
+                                and (renderer is None or not renderer.streamed)
+                            ):
+                                turn_response.append((msg.content, dict(msg.metadata or {})))
                             turn_done.set()
                             continue
 
@@ -1034,23 +1060,27 @@ def agent(
                         turn_response.clear()
                         renderer = StreamRenderer(render_markdown=markdown)
 
-                        await bus.publish_inbound(InboundMessage(
-                            channel=cli_channel,
-                            sender_id="user",
-                            chat_id=cli_chat_id,
-                            content=user_input,
-                            metadata={"_wants_stream": True},
-                        ))
+                        await bus.publish_inbound(
+                            InboundMessage(
+                                channel=cli_channel,
+                                sender_id="user",
+                                chat_id=cli_chat_id,
+                                content=user_input,
+                                metadata={"_wants_stream": True},
+                            )
+                        )
 
                         await turn_done.wait()
 
                         if turn_response:
                             content, meta = turn_response[0]
-                            if content and not meta.get("_streamed"):
+                            if content:
                                 if renderer:
                                     await renderer.close()
                                 _print_agent_response(
-                                    content, render_markdown=markdown, metadata=meta,
+                                    content,
+                                    render_markdown=markdown,
+                                    metadata=meta,
                                 )
                         elif renderer and not renderer.streamed:
                             await renderer.close()
@@ -1117,7 +1147,9 @@ def channels_status(
 @channels_app.command("login")
 def channels_login(
     channel_name: str = typer.Argument(..., help="Channel name (e.g. telegram, feishu)"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-authentication even if already logged in"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force re-authentication even if already logged in"
+    ),
     config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Authenticate with a channel via QR code or other interactive login."""
@@ -1207,8 +1239,12 @@ def status():
 
     console.print(f"{__logo__} nanobot Status\n")
 
-    console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
-    console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
+    console.print(
+        f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}"
+    )
+    console.print(
+        f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}"
+    )
 
     if config_path.exists():
         from nanobot.providers.registry import PROVIDERS
@@ -1230,7 +1266,9 @@ def status():
                     console.print(f"{spec.label}: [dim]not set[/dim]")
             else:
                 has_key = bool(p.api_key)
-                console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+                console.print(
+                    f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}"
+                )
 
 
 # ============================================================================
@@ -1254,7 +1292,9 @@ def _register_login(name: str):
 
 @provider_app.command("login")
 def provider_login(
-    provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
+    provider: str = typer.Argument(
+        ..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"
+    ),
 ):
     """Authenticate with an OAuth provider."""
     from nanobot.providers.registry import PROVIDERS
@@ -1294,7 +1334,9 @@ def _login_openai_codex() -> None:
         if not (token and token.access):
             console.print("[red]✗ Authentication failed[/red]")
             raise typer.Exit(1)
-        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
+        console.print(
+            f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
+        )
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
         raise typer.Exit(1)

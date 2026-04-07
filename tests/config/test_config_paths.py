@@ -43,4 +43,3 @@ def test_is_default_workspace_distinguishes_default_and_custom_paths() -> None:
     assert is_default_workspace(None) is True
     assert is_default_workspace(Path.home() / ".nanobot" / "workspace") is True
     assert is_default_workspace("~/custom-workspace") is False
-

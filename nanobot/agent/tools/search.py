@@ -217,7 +217,7 @@ class GlobTool(_SearchTool):
                 limit = _DEFAULT_HEAD_LIMIT
             include_files = entry_type in {"files", "both"}
             include_dirs = entry_type in {"dirs", "both"}
-            matches: list[tuple[str, float]] = []
+            matches: list[tuple[str, int]] = []
             for entry in self._iter_entries(
                 root,
                 include_files=include_files,
@@ -229,15 +229,15 @@ class GlobTool(_SearchTool):
                     if entry.is_dir():
                         display += "/"
                     try:
-                        mtime = entry.stat().st_mtime
+                        mtime = entry.stat().st_mtime_ns
                     except OSError:
-                        mtime = 0.0
+                        mtime = 0
                     matches.append((display, mtime))
 
             if not matches:
                 return f"No paths matched pattern '{pattern}' in {path}"
 
-            matches.sort(key=lambda item: (-item[1], item[0]))
+            matches.sort(key=lambda item: (item[1], item[0]), reverse=True)
             ordered = [name for name, _ in matches]
             paged, truncated = _paginate(ordered, limit, offset)
             result = "\n".join(paged)
@@ -252,6 +252,7 @@ class GlobTool(_SearchTool):
 
 class GrepTool(_SearchTool):
     """Search file contents using a regex-like pattern."""
+
     _MAX_RESULT_CHARS = 128_000
     _MAX_FILE_BYTES = 2_000_000
 
@@ -326,9 +327,7 @@ class GrepTool(_SearchTool):
                 },
                 "max_matches": {
                     "type": "integer",
-                    "description": (
-                        "Legacy alias for head_limit in content mode"
-                    ),
+                    "description": ("Legacy alias for head_limit in content mode"),
                     "minimum": 1,
                     "maximum": 1000,
                 },
@@ -424,7 +423,7 @@ class GrepTool(_SearchTool):
             skipped_large = 0
             matching_files: list[str] = []
             counts: dict[str, int] = {}
-            file_mtimes: dict[str, float] = {}
+            file_mtimes: dict[str, int] = {}
             root = target if target.is_dir() else target.parent
 
             for file_path in self._iter_files(target):
@@ -442,9 +441,9 @@ class GrepTool(_SearchTool):
                     skipped_binary += 1
                     continue
                 try:
-                    mtime = file_path.stat().st_mtime
+                    mtime = file_path.stat().st_mtime_ns
                 except OSError:
-                    mtime = 0.0
+                    mtime = 0
                 try:
                     content = raw.decode("utf-8")
                 except UnicodeDecodeError:
@@ -502,7 +501,8 @@ class GrepTool(_SearchTool):
                 else:
                     ordered_files = sorted(
                         matching_files,
-                        key=lambda name: (-file_mtimes.get(name, 0.0), name),
+                        key=lambda name: (file_mtimes.get(name, 0), name),
+                        reverse=True,
                     )
                     paged, truncated = _paginate(ordered_files, limit, offset)
                     result = "\n".join(paged)
@@ -512,7 +512,8 @@ class GrepTool(_SearchTool):
                 else:
                     ordered_files = sorted(
                         matching_files,
-                        key=lambda name: (-file_mtimes.get(name, 0.0), name),
+                        key=lambda name: (file_mtimes.get(name, 0), name),
+                        reverse=True,
                     )
                     ordered, truncated = _paginate(ordered_files, limit, offset)
                     lines = [f"{name}: {counts[name]}" for name in ordered]
@@ -525,15 +526,11 @@ class GrepTool(_SearchTool):
 
             notes: list[str] = []
             if output_mode == "content" and truncated:
-                notes.append(
-                    f"(pagination: limit={limit}, offset={offset})"
-                )
+                notes.append(f"(pagination: limit={limit}, offset={offset})")
             elif output_mode == "content" and size_truncated:
                 notes.append("(output truncated due to size)")
             elif truncated and output_mode in {"count", "files_with_matches"}:
-                notes.append(
-                    f"(pagination: limit={limit}, offset={offset})"
-                )
+                notes.append(f"(pagination: limit={limit}, offset={offset})")
             elif output_mode in {"count", "files_with_matches"} and offset > 0:
                 notes.append(f"(pagination: offset={offset})")
             elif output_mode == "content" and offset > 0 and blocks:
@@ -543,9 +540,7 @@ class GrepTool(_SearchTool):
             if skipped_large:
                 notes.append(f"(skipped {skipped_large} large files)")
             if output_mode == "count" and counts:
-                notes.append(
-                    f"(total matches: {sum(counts.values())} in {len(counts)} files)"
-                )
+                notes.append(f"(total matches: {sum(counts.values())} in {len(counts)} files)")
             if notes:
                 result += "\n\n" + "\n".join(notes)
             return result

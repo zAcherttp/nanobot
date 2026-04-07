@@ -231,7 +231,6 @@ def _extract_post_content(content_json: dict) -> tuple[str, list[str]]:
     return "", []
 
 
-
 class FeishuConfig(Base):
     """Feishu/Lark channel configuration using WebSocket long connection."""
 
@@ -1451,7 +1450,6 @@ class FeishuChannel(BaseChannel):
 
             logger.debug("Feishu raw message: {}", message.content)
             logger.debug("Feishu mentions: {}", getattr(message, "mentions", None))
-
             # Deduplication check
             message_id = message.message_id
             if message_id in self._processed_message_ids:
