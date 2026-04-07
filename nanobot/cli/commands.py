@@ -1116,7 +1116,7 @@ def channels_status(
 
 @channels_app.command("login")
 def channels_login(
-    channel_name: str = typer.Argument(..., help="Channel name (e.g. weixin, telegram)"),
+    channel_name: str = typer.Argument(..., help="Channel name (e.g. telegram, feishu)"),
     force: bool = typer.Option(False, "--force", "-f", help="Force re-authentication even if already logged in"),
     config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
