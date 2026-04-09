@@ -167,6 +167,34 @@ class ExecTool(Tool):
     ) -> asyncio.subprocess.Process:
         """Launch *command* in a platform-appropriate shell."""
         if _IS_WINDOWS:
+            # Prefer bash for clearly POSIX-style commands when available on Windows.
+            # This keeps commands like `sleep 10` and `bash -c ...` functional.
+            if ExecTool._should_use_bash_on_windows(command):
+                bash = shutil.which("bash")
+                if bash:
+                    stripped = command.strip()
+                    lower = stripped.lower()
+                    if lower.startswith("bash -c ") or lower.startswith("bash -lc "):
+                        # Keep original quoting intact for `bash -c ...` payloads.
+                        return await asyncio.create_subprocess_exec(
+                            bash,
+                            "-lc",
+                            command,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            cwd=cwd,
+                            env=env,
+                        )
+                    return await asyncio.create_subprocess_exec(
+                        bash,
+                        "-lc",
+                        command,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=cwd,
+                        env=env,
+                    )
+
             comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
             return await asyncio.create_subprocess_exec(
                 comspec, "/c", command,
@@ -183,6 +211,17 @@ class ExecTool(Tool):
             cwd=cwd,
             env=env,
         )
+
+    @staticmethod
+    def _should_use_bash_on_windows(command: str) -> bool:
+        """Return True when command is clearly POSIX-oriented."""
+        stripped = command.strip()
+        lower = stripped.lower()
+        if lower.startswith("bash -c ") or lower.startswith("bash -lc "):
+            return True
+        if re.search(r"(^|\s)sleep\s+\d", lower):
+            return True
+        return False
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
@@ -206,7 +245,7 @@ class ExecTool(Tool):
         user's profile which sets PATH and other essentials.
 
         On Windows, ``cmd.exe`` has no login-profile mechanism, so a curated
-        set of system variables (including PATH) is forwarded.  API keys and
+        set of system variables (including PATH) is forwarded. API keys and
         other secrets are still excluded.
         """
         if _IS_WINDOWS:
@@ -228,26 +267,6 @@ class ExecTool(Tool):
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "TERM": os.environ.get("TERM", "dumb"),
         }
-
-        # On Windows, bash.exe (like WSL) requires core OS environment variables
-        # (SystemRoot, PATH) to function properly and communicate via RPC.
-        if sys.platform == "win32":
-            win_vars = {
-                "PATH",
-                "SYSTEMROOT",
-                "SYSTEMDRIVE",
-                "COMSPEC",
-                "TEMP",
-                "TMP",
-                "USERPROFILE",
-                "APPDATA",
-                "LOCALAPPDATA",
-                "WSLENV",
-            }
-            for k, v in os.environ.items():
-                if k.upper() in win_vars:
-                    env[k] = v
-
         return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
