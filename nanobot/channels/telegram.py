@@ -216,6 +216,7 @@ class TelegramChannel(BaseChannel):
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
         BotCommand("new", "Start a new conversation"),
+        BotCommand("mode", "Show or change the active conversation mode"),
         BotCommand("stop", "Stop the current task"),
         BotCommand("restart", "Restart the bot"),
         BotCommand("status", "Show bot status"),
@@ -313,7 +314,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(MessageHandler(filters.Regex(r"^/start(?:@\w+)?$"), self._on_start))
         self._app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/(new|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
+                filters.Regex(r"^/(new|mode|stop|restart|status|dream)(?:@\w+)?(?:\s+.*)?$"),
                 self._forward_command,
             )
         )

@@ -204,6 +204,7 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert builder.get_updates_request_value is poll_req
     assert callable(app.updater.start_polling_kwargs["error_callback"])
     assert any(cmd.command == "status" for cmd in app.bot.commands)
+    assert any(cmd.command == "mode" for cmd in app.bot.commands)
     assert any(cmd.command == "dream" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_log" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_restore" for cmd in app.bot.commands)
@@ -602,6 +603,35 @@ def test_get_extension_falls_back_to_original_filename() -> None:
 
 def test_telegram_group_policy_defaults_to_mention() -> None:
     assert TelegramConfig().group_policy == "mention"
+
+
+@pytest.mark.asyncio
+async def test_forward_command_routes_mode_with_bot_suffix() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._handle_message = AsyncMock()
+    update = _make_telegram_update(text="/mode@nanobot_test scheduler")
+
+    await channel._forward_command(update, SimpleNamespace())
+
+    channel._handle_message.assert_awaited_once_with(
+        sender_id="12345|alice",
+        chat_id="-100123",
+        content="/mode scheduler",
+        metadata={
+            "message_id": 1,
+            "user_id": 12345,
+            "username": "alice",
+            "first_name": "Alice",
+            "is_group": True,
+            "message_thread_id": None,
+            "is_forum": False,
+            "reply_to_message_id": None,
+        },
+        session_key=None,
+    )
 
 
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
