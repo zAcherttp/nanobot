@@ -40,12 +40,17 @@ class CommandRouter:
 
     def __init__(self) -> None:
         self._priority: dict[str, Handler] = {}
+        self._priority_prefix: list[tuple[str, Handler]] = []
         self._exact: dict[str, Handler] = {}
         self._prefix: list[tuple[str, Handler]] = []
         self._interceptors: list[Handler] = []
 
     def priority(self, cmd: str, handler: Handler) -> None:
         self._priority[cmd] = handler
+
+    def priority_prefix(self, pfx: str, handler: Handler) -> None:
+        self._priority_prefix.append((pfx, handler))
+        self._priority_prefix.sort(key=lambda p: len(p[0]), reverse=True)
 
     def exact(self, cmd: str, handler: Handler) -> None:
         self._exact[cmd] = handler
@@ -58,13 +63,20 @@ class CommandRouter:
         self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
-        return text.strip().lower() in self._priority
+        cmd = text.strip().lower()
+        if cmd in self._priority:
+            return True
+        return any(cmd.startswith(pfx) for pfx, _ in self._priority_prefix)
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
         """Dispatch a priority command. Called from run() without the lock."""
         handler = self._priority.get(ctx.raw.lower())
         if handler:
             return await handler(ctx)
+        for pfx, handler in self._priority_prefix:
+            if ctx.raw.lower().startswith(pfx):
+                ctx.args = ctx.raw[len(pfx) :]
+                return await handler(ctx)
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:
