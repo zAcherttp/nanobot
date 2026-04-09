@@ -1,6 +1,7 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
+import importlib.util
 import json
 import os
 import re
@@ -9,19 +10,17 @@ import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
+from lark_oapi.api.im.v1.model import MentionEvent, P2ImMessageReceiveV1
 from loguru import logger
+from pydantic import Field
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
-from pydantic import Field
-
-import importlib.util
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 
@@ -282,11 +281,13 @@ class FeishuChannel(BaseChannel):
         return FeishuConfig().model_dump(by_alias=True)
 
     def __init__(self, config: Any, bus: MessageBus):
+        import lark_oapi as lark
+
         if isinstance(config, dict):
             config = FeishuConfig.model_validate(config)
         super().__init__(config, bus)
         self.config: FeishuConfig = config
-        self._client: Any = None
+        self._client: lark.Client = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
@@ -331,6 +332,9 @@ class FeishuChannel(BaseChannel):
             builder, "register_p2_im_message_reaction_created_v1", self._on_reaction_created
         )
         builder = self._register_optional_event(
+            builder, "register_p2_im_message_reaction_deleted_v1", self._on_reaction_deleted
+        )
+        builder = self._register_optional_event(
             builder, "register_p2_im_message_message_read_v1", self._on_message_read
         )
         builder = self._register_optional_event(
@@ -355,6 +359,7 @@ class FeishuChannel(BaseChannel):
         # "This event loop is already running" errors.
         def run_ws():
             import time
+
             import lark_oapi.ws.client as _lark_ws_client
 
             ws_loop = asyncio.new_event_loop()
@@ -408,9 +413,10 @@ class FeishuChannel(BaseChannel):
             import lark_oapi as lark
 
             request = (
-                lark.RawRequest.builder()
+                lark.BaseRequest.builder()
                 .http_method(lark.HttpMethod.GET)
                 .uri("/open-apis/bot/v3/info")
+                .token_types({lark.AccessTokenType.APP})
                 .build()
             )
             response = self._client.request(request)
@@ -425,6 +431,45 @@ class FeishuChannel(BaseChannel):
         except Exception as e:
             logger.warning("Error fetching bot info: {}", e)
             return None
+
+    @staticmethod
+    def _resolve_mentions(text: str, mentions: list[MentionEvent] | None) -> str:
+        """Replace @_user_n placeholders with actual user info from mentions.
+
+        Args:
+            text: The message text containing @_user_n placeholders
+            mentions: List of mention objects from Feishu message
+
+        Returns:
+            Text with placeholders replaced by @姓名 (open_id)
+        """
+        if not mentions or not text:
+            return text
+
+        for mention in mentions:
+            key = mention.key or None
+            if not key or key not in text:
+                continue
+
+            user_id_obj = mention.id or None
+            if not user_id_obj:
+                continue
+
+            open_id = user_id_obj.open_id
+            user_id = user_id_obj.user_id
+            name = mention.name or key
+
+            # Format: @姓名 (open_id, user_id: xxx)
+            if open_id and user_id:
+                replacement = f"@{name} ({open_id}, user id: {user_id})"
+            elif open_id:
+                replacement = f"@{name} ({open_id})"
+            else:
+                replacement = f"@{name}"
+
+            text = text.replace(key, replacement)
+
+        return text
 
     def _is_bot_mentioned(self, message: Any) -> bool:
         """Check if the bot is @mentioned in the message."""
@@ -1396,13 +1441,15 @@ class FeishuChannel(BaseChannel):
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
 
-    async def _on_message(self, data: Any) -> None:
+    async def _on_message(self, data: P2ImMessageReceiveV1) -> None:
         """Handle incoming message from Feishu."""
         try:
             event = data.event
             message = event.message
             sender = event.sender
 
+            logger.debug("Feishu raw message: {}", message.content)
+            logger.debug("Feishu mentions: {}", getattr(message, "mentions", None))
             # Deduplication check
             message_id = message.message_id
             if message_id in self._processed_message_ids:
@@ -1441,6 +1488,8 @@ class FeishuChannel(BaseChannel):
             if msg_type == "text":
                 text = content_json.get("text", "")
                 if text:
+                    mentions = getattr(message, "mentions", None)
+                    text = self._resolve_mentions(text, mentions)
                     content_parts.append(text)
 
             elif msg_type == "post":
@@ -1528,6 +1577,10 @@ class FeishuChannel(BaseChannel):
 
     def _on_reaction_created(self, data: Any) -> None:
         """Ignore reaction events so they do not generate SDK noise."""
+        pass
+
+    def _on_reaction_deleted(self, data: Any) -> None:
+        """Ignore reaction deleted events so they do not generate SDK noise."""
         pass
 
     def _on_message_read(self, data: Any) -> None:

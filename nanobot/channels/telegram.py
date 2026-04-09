@@ -7,14 +7,14 @@ import hashlib
 import re
 import time
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
 from telegram.error import BadRequest, NetworkError, TimedOut
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -171,6 +171,7 @@ def _markdown_to_telegram_html(text: str) -> str:
 
 _SEND_MAX_RETRIES = 3
 _SEND_RETRY_BASE_DELAY = 0.5  # seconds, doubled each retry
+_STREAM_EDIT_INTERVAL_DEFAULT = 0.6  # min seconds between edit_message_text calls
 
 
 @dataclass
@@ -198,6 +199,7 @@ class TelegramConfig(Base):
     connection_pool_size: int = 32
     pool_timeout: float = 5.0
     streaming: bool = True
+    stream_edit_interval: float = Field(default=_STREAM_EDIT_INTERVAL_DEFAULT, ge=0.1)
 
 
 class TelegramChannel(BaseChannel):
@@ -226,8 +228,6 @@ class TelegramChannel(BaseChannel):
     @classmethod
     def default_config(cls) -> dict[str, Any]:
         return TelegramConfig().model_dump(by_alias=True)
-
-    _STREAM_EDIT_INTERVAL = 0.6  # min seconds between edit_message_text calls
 
     def __init__(self, config: Any, bus: MessageBus):
         if isinstance(config, dict):
@@ -327,16 +327,10 @@ class TelegramChannel(BaseChannel):
         )
         self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
 
-        # Add message handler for text, photos, voice, documents
+        # Add message handler for text, photos, voice, documents, and locations
         self._app.add_handler(
             MessageHandler(
-                (
-                    filters.TEXT
-                    | filters.PHOTO
-                    | filters.VOICE
-                    | filters.AUDIO
-                    | filters.Document.ALL
-                )
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.LOCATION)
                 & ~filters.COMMAND,
                 self._on_message,
             )
@@ -710,7 +704,10 @@ class TelegramChannel(BaseChannel):
             thread_kwargs["message_thread_id"] = buf.message_thread_id
 
         draft_enabled = self._stream_draft_supported is not False and buf.message_id is None
-        if draft_enabled and (buf.last_edit == 0.0 or (now - buf.last_edit) >= self._STREAM_EDIT_INTERVAL):
+        if draft_enabled and (
+            buf.last_edit == 0.0
+            or (now - buf.last_edit) >= self.config.stream_edit_interval
+        ):
             if buf.draft_id is None:
                 buf.draft_id = self._stream_draft_id(stream_id, int_chat_id)
             draft_text = buf.text[-TELEGRAM_MAX_MESSAGE_LEN:]
@@ -735,7 +732,11 @@ class TelegramChannel(BaseChannel):
                     logger.warning("sendMessageDraft failed: {}", e)
                     raise
 
-        if draft_enabled and buf.message_id is None and (now - buf.last_edit) < self._STREAM_EDIT_INTERVAL:
+        if (
+            draft_enabled
+            and buf.message_id is None
+            and (now - buf.last_edit) < self.config.stream_edit_interval
+        ):
             return
 
         if buf.message_id is None:
@@ -751,7 +752,7 @@ class TelegramChannel(BaseChannel):
             except Exception as e:
                 logger.warning("Stream initial send failed: {}", e)
                 raise  # Let ChannelManager handle retry
-        elif (now - buf.last_edit) >= self._STREAM_EDIT_INTERVAL:
+        elif (now - buf.last_edit) >= self.config.stream_edit_interval:
             try:
                 await self._call_with_retry(
                     self._app.bot.edit_message_text,
@@ -1016,6 +1017,12 @@ class TelegramChannel(BaseChannel):
             content_parts.append(message.text)
         if message.caption:
             content_parts.append(message.caption)
+
+        # Location content
+        if message.location:
+            lat = message.location.latitude
+            lon = message.location.longitude
+            content_parts.append(f"[location: {lat}, {lon}]")
 
         # Download current message media
         current_media_paths, current_media_parts = await self._download_message_media(
