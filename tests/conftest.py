@@ -14,10 +14,11 @@ def tmp_path() -> Path:
 
     Some Windows environments deny access to pytest's default temp roots,
     which breaks any test using the built-in ``tmp_path`` fixture. Keeping
-    test temp data under ``.testcache`` avoids those permission issues.
+    test temp data under one top-level ``.temp`` directory avoids those
+    permission issues without scattering temp folders across the workspace.
     """
 
-    root = (Path.cwd() / ".testcache" / "pytest_tmp_paths").resolve()
+    root = (Path.cwd() / ".temp" / "pytest_tmp_paths").resolve()
     root.mkdir(parents=True, exist_ok=True)
     path = (root / f"case_{uuid4().hex}").resolve()
     path.mkdir()
