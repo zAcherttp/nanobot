@@ -317,6 +317,25 @@ async def test_multimodal_content_extracts_text(aiohttp_client, mock_agent) -> N
 
 @pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
 @pytest.mark.asyncio
+async def test_fixed_mode_is_forwarded_to_process_direct(aiohttp_client, mock_agent) -> None:
+    app = create_app(mock_agent, model_name="m", mode="scheduler")
+    client = await aiohttp_client(app)
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert resp.status == 200
+    mock_agent.process_direct.assert_called_once_with(
+        content="hello",
+        session_key=API_SESSION_KEY,
+        channel="api",
+        chat_id=API_CHAT_ID,
+        mode="scheduler",
+    )
+
+
+@pytest.mark.skipif(not HAS_AIOHTTP, reason="aiohttp not installed")
+@pytest.mark.asyncio
 async def test_empty_response_retry_then_success(aiohttp_client) -> None:
     call_count = 0
 

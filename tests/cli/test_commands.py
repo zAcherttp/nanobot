@@ -459,14 +459,21 @@ def test_agent_help_shows_workspace_and_config_options():
 
     assert result.exit_code == 0
     stripped_output = _strip_ansi(result.stdout)
+    assert "--mode" in stripped_output
     assert "--workspace" in stripped_output
     assert "-w" in stripped_output
     assert "--config" in stripped_output
     assert "-c" in stripped_output
 
 
-def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_runtime):
+def test_agent_requires_mode_flag():
     result = runner.invoke(app, ["agent", "-m", "hello"])
+
+    assert result.exit_code == 2
+
+
+def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_runtime):
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general"])
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (None,)
@@ -476,7 +483,8 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == (
         mock_agent_runtime["config"].workspace_path
     )
-    mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
+    kwargs = mock_agent_runtime["agent_loop"].process_direct.await_args.kwargs
+    assert kwargs["mode"] == "general"
     mock_agent_runtime["print_response"].assert_called_once_with(
         "mock-response",
         render_markdown=True,
@@ -488,7 +496,7 @@ def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):
     config_path = tmp_path / "agent-config.json"
     config_path.write_text("{}")
 
-    result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_path)])
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general", "-c", str(config_path)])
 
     assert result.exit_code == 0
     assert mock_agent_runtime["load_config"].call_args.args == (config_path.resolve(),)
@@ -527,7 +535,7 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
         "nanobot.cli.commands._print_agent_response", lambda *_args, **_kwargs: None
     )
 
-    result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general", "-c", str(config_file)])
 
     assert result.exit_code == 0
     assert seen["config_path"] == config_file.resolve()
@@ -568,7 +576,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
         "nanobot.cli.commands._print_agent_response", lambda *_args, **_kwargs: None
     )
 
-    result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general", "-c", str(config_file)])
 
     assert result.exit_code == 0
     assert seen["cron_stores"] == [
@@ -580,7 +588,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
 def test_agent_overrides_workspace_path(mock_agent_runtime):
     workspace_path = Path("/tmp/agent-workspace")
 
-    result = runner.invoke(app, ["agent", "-m", "hello", "-w", str(workspace_path)])
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general", "-w", str(workspace_path)])
 
     assert result.exit_code == 0
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
@@ -595,7 +603,7 @@ def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime,
 
     result = runner.invoke(
         app,
-        ["agent", "-m", "hello", "-c", str(config_path), "-w", str(workspace_path)],
+        ["agent", "-m", "hello", "--mode", "general", "-c", str(config_path), "-w", str(workspace_path)],
     )
 
     assert result.exit_code == 0
@@ -673,6 +681,7 @@ def test_agent_interactive_prints_streamed_error_without_deltas(
     commands_mod.agent(
         message=None,
         session_id="cli:direct",
+        mode="general",
         workspace=None,
         config=None,
         markdown=True,
@@ -687,7 +696,7 @@ def test_agent_hints_about_deprecated_memory_window(mock_agent_runtime, tmp_path
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps({"agents": {"defaults": {"memoryWindow": 42}}}))
 
-    result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
+    result = runner.invoke(app, ["agent", "-m", "hello", "--mode", "general", "-c", str(config_file)])
 
     assert result.exit_code == 0
     assert "memoryWindow" in result.stdout
@@ -766,10 +775,11 @@ def _patch_serve_runtime(monkeypatch, config: Config, seen: dict[str, object]) -
         async def close_mcp(self) -> None:
             return None
 
-    def _fake_create_app(agent_loop, model_name: str, request_timeout: float):
+    def _fake_create_app(agent_loop, model_name: str, request_timeout: float, mode: str | None = None):
         seen["agent_loop"] = agent_loop
         seen["model_name"] = model_name
         seen["request_timeout"] = request_timeout
+        seen["mode"] = mode
         return _FakeApiApp()
 
     def _fake_run_app(api_app, host: str, port: int, print):
@@ -1025,7 +1035,7 @@ def test_serve_uses_api_config_defaults_and_workspace_override(monkeypatch, tmp_
 
     result = runner.invoke(
         app,
-        ["serve", "--config", str(config_file), "--workspace", str(override_workspace)],
+        ["serve", "--mode", "general", "--config", str(config_file), "--workspace", str(override_workspace)],
     )
 
     assert result.exit_code == 0
@@ -1033,6 +1043,7 @@ def test_serve_uses_api_config_defaults_and_workspace_override(monkeypatch, tmp_
     assert seen["host"] == "127.0.0.2"
     assert seen["port"] == 18900
     assert seen["request_timeout"] == 45.0
+    assert seen["mode"] == "general"
 
 
 def test_serve_cli_options_override_api_config(monkeypatch, tmp_path: Path) -> None:
@@ -1049,6 +1060,8 @@ def test_serve_cli_options_override_api_config(monkeypatch, tmp_path: Path) -> N
         app,
         [
             "serve",
+            "--mode",
+            "general",
             "--config",
             str(config_file),
             "--host",
@@ -1064,6 +1077,7 @@ def test_serve_cli_options_override_api_config(monkeypatch, tmp_path: Path) -> N
     assert seen["host"] == "127.0.0.1"
     assert seen["port"] == 18901
     assert seen["request_timeout"] == 46.0
+    assert seen["mode"] == "general"
 
 
 def test_channels_login_requires_channel_name() -> None:

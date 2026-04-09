@@ -47,7 +47,7 @@ class SafeFileHistory(FileHistory):
         safe = string.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
         super().store_string(safe)
 from nanobot.cli.stream import StreamRenderer, ThinkingSpinner
-from nanobot.config.paths import get_workspace_path, is_default_workspace
+from nanobot.config.paths import get_workspace_path
 from nanobot.config.schema import Config
 from nanobot.modes import DEFAULT_MODE, ModeRegistry
 from nanobot.utils.helpers import sync_workspace_templates
@@ -528,6 +528,22 @@ def _build_mode_cron_services(workspace: Path) -> dict[str, object]:
     }
 
 
+def _parse_cli_mode(mode: str) -> str:
+    """Validate a CLI-provided mode name."""
+    try:
+        return ModeRegistry().get(mode).name
+    except ValueError as exc:
+        allowed = ", ".join(ModeRegistry().names())
+        raise typer.BadParameter(f"Unknown mode '{mode}'. Choose one of: {allowed}") from exc
+
+
+def _seed_session_mode(loop: object, session_key: str, mode: str) -> None:
+    """Persist the selected mode for a direct session before first turn."""
+    store = getattr(loop, "mode_store", None)
+    if store is not None and hasattr(store, "set"):
+        store.set(session_key, mode)
+
+
 # ============================================================================
 # OpenAI-Compatible API Server
 # ============================================================================
@@ -540,6 +556,7 @@ def serve(
     timeout: float | None = typer.Option(
         None, "--timeout", "-t", help="Per-request timeout (seconds)"
     ),
+    mode: str = typer.Option(..., "--mode", help="Mode to serve (general or scheduler)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show nanobot runtime logs"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
@@ -561,6 +578,7 @@ def serve(
         logger.disable("nanobot")
 
     runtime_config = _load_runtime_config(config, workspace)
+    mode = _parse_cli_mode(mode)
     api_cfg = runtime_config.api
     host = host if host is not None else api_cfg.host
     port = port if port is not None else api_cfg.port
@@ -591,6 +609,7 @@ def serve(
     console.print(f"{__logo__} Starting OpenAI-compatible API server")
     console.print(f"  [cyan]Endpoint[/cyan] : http://{host}:{port}/v1/chat/completions")
     console.print(f"  [cyan]Model[/cyan]    : {model_name}")
+    console.print(f"  [cyan]Mode[/cyan]     : {mode}")
     console.print("  [cyan]Session[/cyan]  : api:default")
     console.print(f"  [cyan]Timeout[/cyan]  : {timeout}s")
     if host in {"0.0.0.0", "::"}:
@@ -600,7 +619,7 @@ def serve(
         )
     console.print()
 
-    api_app = create_app(agent_loop, model_name=model_name, request_timeout=timeout)
+    api_app = create_app(agent_loop, model_name=model_name, request_timeout=timeout, mode=mode)
 
     async def on_startup(_app):
         await agent_loop._connect_mcp()
@@ -876,6 +895,7 @@ def gateway(
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    mode: str = typer.Option(..., "--mode", help="Mode to start in (general or scheduler)"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(
@@ -892,6 +912,7 @@ def agent(
     from nanobot.bus.queue import MessageBus
 
     config = _load_runtime_config(config, workspace)
+    mode = _parse_cli_mode(mode)
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
@@ -928,6 +949,8 @@ def agent(
             render_markdown=False,
         )
 
+    _seed_session_mode(agent_loop, session_id, mode)
+
     # Shared reference for progress callbacks
     _thinking: ThinkingSpinner | None = None
 
@@ -946,6 +969,7 @@ def agent(
             response = await agent_loop.process_direct(
                 message,
                 session_id,
+                mode=mode,
                 on_progress=_cli_progress,
                 on_stream=renderer.on_delta,
                 on_stream_end=renderer.on_end,
@@ -968,6 +992,7 @@ def agent(
         console.print(
             f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
         )
+        console.print(f"[dim]Mode: {mode}[/dim]\n")
         if ":" in session_id:
             cli_channel, cli_chat_id = session_id.split(":", 1)
         else:
