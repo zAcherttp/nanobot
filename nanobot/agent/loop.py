@@ -15,6 +15,8 @@ from loguru import logger
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from nanobot.agent.memory import Consolidator, Dream
+from nanobot.mode_runtime import ModeRuntime
+from nanobot.modes import DEFAULT_MODE, ModeRegistry
 from nanobot.agent.runner import AgentRunSpec, AgentRunner
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
@@ -31,6 +33,7 @@ from nanobot.command import CommandContext, CommandRouter, register_builtin_comm
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import AgentDefaults
 from nanobot.providers.base import LLMProvider
+from nanobot.modes import ConversationModeStore
 from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.helpers import image_placeholder_text, truncate_text
 from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
@@ -46,6 +49,7 @@ class _LoopHook(AgentHook):
     def __init__(
         self,
         agent_loop: AgentLoop,
+        runtime: ModeRuntime,
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -56,6 +60,7 @@ class _LoopHook(AgentHook):
     ) -> None:
         super().__init__(reraise=True)
         self._loop = agent_loop
+        self._runtime = runtime
         self._on_progress = on_progress
         self._on_stream = on_stream
         self._on_stream_end = on_stream_end
@@ -95,7 +100,7 @@ class _LoopHook(AgentHook):
         for tc in context.tool_calls:
             args_str = json.dumps(tc.arguments, ensure_ascii=False)
             logger.info("Tool call: {}({})", tc.name, args_str[:200])
-        self._loop._set_tool_context(self._channel, self._chat_id, self._message_id)
+        self._loop._set_tool_context(self._runtime, self._channel, self._chat_id, self._message_id)
 
     async def after_iteration(self, context: AgentHookContext) -> None:
         u = context.usage or {}
@@ -137,6 +142,7 @@ class AgentLoop:
         web_config: WebToolsConfig | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
+        cron_services: dict[str, CronService] | None = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
@@ -169,26 +175,15 @@ class AgentLoop:
         self.provider_retry_mode = provider_retry_mode
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
-        self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
         self._extra_hooks: list[AgentHook] = hooks or []
-
-        self.context = ContextBuilder(workspace, timezone=timezone)
-        self.sessions = session_manager or SessionManager(workspace)
-        self.tools = ToolRegistry()
         self.runner = AgentRunner(provider)
-        self.subagents = SubagentManager(
-            provider=provider,
-            workspace=workspace,
-            bus=bus,
-            model=self.model,
-            web_config=self.web_config,
-            max_tool_result_chars=self.max_tool_result_chars,
-            exec_config=self.exec_config,
-            restrict_to_workspace=restrict_to_workspace,
-        )
+        self.mode_registry = ModeRegistry()
+        self.mode_store = ConversationModeStore(workspace)
+        self._runtimes: dict[str, ModeRuntime] = {}
+        self._cron_services = cron_services or {}
 
         self._running = False
         self._mcp_servers = mcp_servers or {}
@@ -203,62 +198,141 @@ class AgentLoop:
         self._concurrency_gate: asyncio.Semaphore | None = (
             asyncio.Semaphore(_max) if _max > 0 else None
         )
-        self.consolidator = Consolidator(
-            store=self.context.memory,
-            provider=provider,
-            model=self.model,
-            sessions=self.sessions,
-            context_window_tokens=context_window_tokens,
-            build_messages=self.context.build_messages,
-            get_tool_definitions=self.tools.get_definitions,
-            max_completion_tokens=provider.generation.max_tokens,
-        )
-        self.dream = Dream(
-            store=self.context.memory,
-            provider=provider,
-            model=self.model,
-        )
-        self._register_default_tools()
+        for mode_name in self.mode_registry.names():
+            runtime_session_manager = (
+                session_manager if (mode_name == DEFAULT_MODE and session_manager is not None) else None
+            )
+            runtime_cron = self._cron_services.get(mode_name)
+            if runtime_cron is None and mode_name == DEFAULT_MODE and cron_service is not None:
+                runtime_cron = cron_service
+            self._runtimes[mode_name] = self._create_runtime(
+                mode_name,
+                runtime_cron,
+                runtime_session_manager,
+                timezone,
+            )
+        self.context = self._runtimes[DEFAULT_MODE].context
+        self.sessions = self._runtimes[DEFAULT_MODE].sessions
+        self.tools = self._runtimes[DEFAULT_MODE].tools
+        self.subagents = self._runtimes[DEFAULT_MODE].subagents
+        self.consolidator = self._runtimes[DEFAULT_MODE].consolidator
+        self.dream = self._runtimes[DEFAULT_MODE].dream
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
 
-    def _register_default_tools(self) -> None:
-        """Register the default set of tools."""
+    def _create_runtime(
+        self,
+        mode_name: str,
+        cron_service: CronService | None,
+        session_manager: SessionManager | None,
+        timezone: str | None,
+    ) -> ModeRuntime:
+        mode_spec = self.mode_registry.get(mode_name)
+        workspace = mode_spec.workspace_path(self.workspace)
+        context = ContextBuilder(workspace, timezone=timezone, mode=mode_name)
+        sessions = session_manager or SessionManager(workspace)
+        subagents = SubagentManager(
+            provider=self.provider,
+            workspace=workspace,
+            bus=self.bus,
+            model=self.model,
+            web_config=self.web_config,
+            max_tool_result_chars=self.max_tool_result_chars,
+            exec_config=self.exec_config,
+            restrict_to_workspace=self.restrict_to_workspace,
+            mode=mode_name,
+        )
+        tools = self._build_tools(mode_name, workspace, cron_service, subagents, context.timezone)
+        consolidator = Consolidator(
+            store=context.memory,
+            provider=self.provider,
+            model=self.model,
+            sessions=sessions,
+            context_window_tokens=self.context_window_tokens,
+            build_messages=context.build_messages,
+            get_tool_definitions=tools.get_definitions,
+            max_completion_tokens=self.provider.generation.max_tokens,
+            mode=mode_name,
+        )
+        dream = Dream(
+            store=context.memory,
+            provider=self.provider,
+            model=self.model,
+            mode=mode_name,
+        )
+        return ModeRuntime(
+            mode=mode_name,
+            workspace=workspace,
+            context=context,
+            sessions=sessions,
+            tools=tools,
+            subagents=subagents,
+            consolidator=consolidator,
+            dream=dream,
+            cron_service=cron_service,
+        )
+
+    def _build_tools(
+        self,
+        mode_name: str,
+        workspace: Path,
+        cron_service: CronService | None,
+        subagents: SubagentManager,
+        timezone: str | None,
+    ) -> ToolRegistry:
+        """Build the tool registry for one mode."""
+        allowed = self.mode_registry.get(mode_name).allowed_tools
         allowed_dir = (
-            self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
+            workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
         )
         extra_read = [BUILTIN_SKILLS_DIR] if allowed_dir else None
-        self.tools.register(
-            ReadFileTool(
-                workspace=self.workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read
+        tools = ToolRegistry()
+        if "read_file" in allowed:
+            tools.register(
+                ReadFileTool(workspace=workspace, allowed_dir=allowed_dir, extra_allowed_dirs=extra_read)
             )
-        )
-        for cls in (WriteFileTool, EditFileTool, ListDirTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        for cls in (GlobTool, GrepTool):
-            self.tools.register(cls(workspace=self.workspace, allowed_dir=allowed_dir))
-        if self.exec_config.enable:
-            self.tools.register(
+        for name, cls in (
+            ("write_file", WriteFileTool),
+            ("edit_file", EditFileTool),
+            ("list_dir", ListDirTool),
+            ("glob", GlobTool),
+            ("grep", GrepTool),
+        ):
+            if name in allowed:
+                tools.register(cls(workspace=workspace, allowed_dir=allowed_dir))
+        if self.exec_config.enable and "exec" in allowed:
+            tools.register(
                 ExecTool(
-                    working_dir=str(self.workspace),
+                    working_dir=str(workspace),
                     timeout=self.exec_config.timeout,
                     restrict_to_workspace=self.restrict_to_workspace,
                     sandbox=self.exec_config.sandbox,
                     path_append=self.exec_config.path_append,
-                    prompt_mode=self.exec_config.prompt_mode,
+                    prompt_mode=getattr(self.exec_config, "prompt_mode", "auto"),
                 )
             )
         if self.web_config.enable:
-            self.tools.register(
-                WebSearchTool(config=self.web_config.search, proxy=self.web_config.proxy)
+            if "web_search" in allowed:
+                tools.register(
+                    WebSearchTool(config=self.web_config.search, proxy=self.web_config.proxy)
+                )
+            if "web_fetch" in allowed:
+                tools.register(WebFetchTool(proxy=self.web_config.proxy))
+        if "message" in allowed:
+            tools.register(MessageTool(send_callback=self.bus.publish_outbound))
+        if "spawn" in allowed:
+            tools.register(SpawnTool(manager=subagents))
+        if cron_service and "cron" in allowed:
+            tools.register(
+                CronTool(cron_service, default_timezone=timezone or "UTC")
             )
-            self.tools.register(WebFetchTool(proxy=self.web_config.proxy))
-        self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
-        self.tools.register(SpawnTool(manager=self.subagents))
-        if self.cron_service:
-            self.tools.register(
-                CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
-            )
+        return tools
+
+    def _runtime_for_mode(self, mode: str) -> ModeRuntime:
+        return self._runtimes[mode]
+
+    def _resolve_mode(self, key: str, explicit_mode: str | None = None) -> str:
+        return explicit_mode or self.mode_store.get(key)
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -283,12 +357,23 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
-    def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def _set_tool_context(
+        self,
+        runtime: ModeRuntime,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+    ) -> None:
         """Update context for all tools that need routing info."""
         for name in ("message", "spawn", "cron"):
-            if tool := self.tools.get(name):
+            if tool := runtime.tools.get(name):
                 if hasattr(tool, "set_context"):
-                    tool.set_context(channel, chat_id, *([message_id] if name == "message" else []))
+                    if name == "message":
+                        tool.set_context(channel, chat_id, *([message_id] if message_id is not None else []))
+                    elif name == "cron":
+                        tool.set_context(channel, chat_id, runtime.mode)
+                    else:
+                        tool.set_context(channel, chat_id)
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -308,7 +393,8 @@ class AgentLoop:
 
     async def _run_agent_loop(
         self,
-        initial_messages: list[dict],
+        runtime_or_initial_messages: ModeRuntime | list[dict],
+        initial_messages: list[dict] | None = None,
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -325,8 +411,16 @@ class AgentLoop:
         ``resuming=True`` means tool calls follow (spinner should restart);
         ``resuming=False`` means this is the final response.
         """
+        if isinstance(runtime_or_initial_messages, ModeRuntime):
+            runtime = runtime_or_initial_messages
+            messages = initial_messages or []
+        else:
+            runtime = self._runtimes[DEFAULT_MODE]
+            messages = runtime_or_initial_messages
+
         loop_hook = _LoopHook(
             self,
+            runtime,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,
@@ -343,25 +437,26 @@ class AgentLoop:
         async def _checkpoint(payload: dict[str, Any]) -> None:
             if session is None:
                 return
-            self._set_runtime_checkpoint(session, payload)
+            self._set_runtime_checkpoint(runtime, session, payload)
 
         result = await self.runner.run(
             AgentRunSpec(
-                initial_messages=initial_messages,
-                tools=self.tools,
+                initial_messages=messages,
+                tools=runtime.tools,
                 model=self.model,
                 max_iterations=self.max_iterations,
                 max_tool_result_chars=self.max_tool_result_chars,
                 hook=hook,
                 error_message="Sorry, I encountered an error calling the AI model.",
                 concurrent_tools=True,
-                workspace=self.workspace,
+                workspace=runtime.workspace,
                 session_key=session.key if session else None,
                 context_window_tokens=self.context_window_tokens,
                 context_block_limit=self.context_block_limit,
                 provider_retry_mode=self.provider_retry_mode,
                 progress_callback=on_progress,
                 checkpoint_callback=_checkpoint,
+                prompt_mode=runtime.mode,
             )
         )
         self._last_usage = result.usage
@@ -394,7 +489,16 @@ class AgentLoop:
 
             raw = msg.content.strip()
             if self.commands.is_priority(raw):
-                ctx = CommandContext(msg=msg, session=None, key=msg.session_key, raw=raw, loop=self)
+                mode = self._resolve_mode(msg.session_key)
+                ctx = CommandContext(
+                    msg=msg,
+                    session=None,
+                    key=msg.session_key,
+                    raw=raw,
+                    loop=self,
+                    mode=mode,
+                    runtime=self._runtime_for_mode(mode),
+                )
                 result = await self.commands.dispatch_priority(ctx)
                 if result:
                     await self.bus.publish_outbound(result)
@@ -508,6 +612,7 @@ class AgentLoop:
         self,
         msg: InboundMessage,
         session_key: str | None = None,
+        mode: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -520,14 +625,16 @@ class AgentLoop:
             )
             logger.info("Processing system message from {}", msg.sender_id)
             key = f"{channel}:{chat_id}"
-            session = self.sessions.get_or_create(key)
+            active_mode = self._resolve_mode(key, mode or msg.metadata.get("mode"))
+            runtime = self._runtime_for_mode(active_mode)
+            session = runtime.sessions.get_or_create(key)
             if self._restore_runtime_checkpoint(session):
-                self.sessions.save(session)
-            await self.consolidator.maybe_consolidate_by_tokens(session)
-            self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
+                runtime.sessions.save(session)
+            await runtime.consolidator.maybe_consolidate_by_tokens(session)
+            self._set_tool_context(runtime, channel, chat_id, msg.metadata.get("message_id"))
             history = session.get_history(max_messages=0)
             current_role = "assistant" if msg.sender_id == "subagent" else "user"
-            messages = self.context.build_messages(
+            messages = runtime.context.build_messages(
                 history=history,
                 current_message=msg.content,
                 channel=channel,
@@ -535,6 +642,7 @@ class AgentLoop:
                 current_role=current_role,
             )
             final_content, _, all_msgs = await self._run_agent_loop(
+                runtime,
                 messages,
                 session=session,
                 channel=channel,
@@ -543,8 +651,8 @@ class AgentLoop:
             )
             self._save_turn(session, all_msgs, 1 + len(history))
             self._clear_runtime_checkpoint(session)
-            self.sessions.save(session)
-            self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+            runtime.sessions.save(session)
+            self._schedule_background(runtime.consolidator.maybe_consolidate_by_tokens(session))
             return OutboundMessage(
                 channel=channel,
                 chat_id=chat_id,
@@ -555,25 +663,35 @@ class AgentLoop:
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         key = session_key or msg.session_key
-        session = self.sessions.get_or_create(key)
+        active_mode = self._resolve_mode(key, mode)
+        runtime = self._runtime_for_mode(active_mode)
+        session = runtime.sessions.get_or_create(key)
         if self._restore_runtime_checkpoint(session):
-            self.sessions.save(session)
+            runtime.sessions.save(session)
 
         # Slash commands
         raw = msg.content.strip()
-        ctx = CommandContext(msg=msg, session=session, key=key, raw=raw, loop=self)
+        ctx = CommandContext(
+            msg=msg,
+            session=session,
+            key=key,
+            raw=raw,
+            loop=self,
+            mode=active_mode,
+            runtime=runtime,
+        )
         if result := await self.commands.dispatch(ctx):
             return result
 
-        await self.consolidator.maybe_consolidate_by_tokens(session)
+        await runtime.consolidator.maybe_consolidate_by_tokens(session)
 
-        self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))
-        if message_tool := self.tools.get("message"):
+        self._set_tool_context(runtime, msg.channel, msg.chat_id, msg.metadata.get("message_id"))
+        if message_tool := runtime.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
         history = session.get_history(max_messages=0)
-        initial_messages = self.context.build_messages(
+        initial_messages = runtime.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
@@ -595,6 +713,7 @@ class AgentLoop:
             )
 
         final_content, _, all_msgs = await self._run_agent_loop(
+            runtime,
             initial_messages,
             on_progress=on_progress or _bus_progress,
             on_stream=on_stream,
@@ -610,10 +729,10 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self._clear_runtime_checkpoint(session)
-        self.sessions.save(session)
-        self._schedule_background(self.consolidator.maybe_consolidate_by_tokens(session))
+        runtime.sessions.save(session)
+        self._schedule_background(runtime.consolidator.maybe_consolidate_by_tokens(session))
 
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
+        if (mt := runtime.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
@@ -705,10 +824,15 @@ class AgentLoop:
             session.messages.append(entry)
         session.updated_at = datetime.now()
 
-    def _set_runtime_checkpoint(self, session: Session, payload: dict[str, Any]) -> None:
+    def _set_runtime_checkpoint(
+        self,
+        runtime: ModeRuntime,
+        session: Session,
+        payload: dict[str, Any],
+    ) -> None:
         """Persist the latest in-flight turn state into session metadata."""
         session.metadata[self._RUNTIME_CHECKPOINT_KEY] = payload
-        self.sessions.save(session)
+        runtime.sessions.save(session)
 
     def _clear_runtime_checkpoint(self, session: Session) -> None:
         if self._RUNTIME_CHECKPOINT_KEY in session.metadata:
@@ -785,6 +909,7 @@ class AgentLoop:
         session_key: str = "cli:direct",
         channel: str = "cli",
         chat_id: str = "direct",
+        mode: str | None = None,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
@@ -795,6 +920,7 @@ class AgentLoop:
         return await self._process_message(
             msg,
             session_key=session_key,
+            mode=mode,
             on_progress=on_progress,
             on_stream=on_stream,
             on_stream_end=on_stream_end,

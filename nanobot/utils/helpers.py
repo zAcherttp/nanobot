@@ -393,6 +393,7 @@ def estimate_prompt_tokens_chain(
 def build_status_content(
     *,
     version: str,
+    mode: str = "general",
     model: str,
     start_time: float,
     last_usage: dict[str, int],
@@ -426,6 +427,7 @@ def build_status_content(
         token_line += f" ({cached * 100 // last_in}% cached)"
     lines = [
         f"\U0001f408 nanobot v{version}",
+        f"\U0001f9ed Mode: {mode}",
         f"\U0001f9e0 Model: {model}",
         token_line,
         f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}%)",
@@ -438,8 +440,9 @@ def build_status_content(
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates to workspace. Only creates missing files."""
+    """Sync bundled templates for all built-in modes into the root workspace."""
     from importlib.resources import files as pkg_files
+    from nanobot.modes import BUILTIN_MODES
 
     try:
         tpl = pkg_files("nanobot") / "templates"
@@ -457,12 +460,17 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
         added.append(str(dest.relative_to(workspace)))
 
-    for item in tpl.iterdir():
-        if item.name.endswith(".md") and not item.name.startswith("."):
-            _write(item, workspace / item.name)
-    _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
-    _write(None, workspace / "memory" / "history.jsonl")
-    (workspace / "skills").mkdir(exist_ok=True)
+    for mode in BUILTIN_MODES:
+        mode_root = workspace / mode.name
+        mode_tpl = tpl / mode.template_namespace
+        if not mode_tpl.is_dir():
+            continue
+        for item in mode_tpl.iterdir():
+            if item.name.endswith(".md") and not item.name.startswith("."):
+                _write(item, mode_root / item.name)
+        _write(mode_tpl / "memory" / "MEMORY.md", mode_root / "memory" / "MEMORY.md")
+        _write(None, mode_root / "memory" / "history.jsonl")
+        (mode_root / "skills").mkdir(parents=True, exist_ok=True)
 
     if added and not silent:
         from rich.console import Console
@@ -471,19 +479,21 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
             Console().print(f"  [dim]Created {name}[/dim]")
 
     # Initialize git for memory version control
-    try:
-        from nanobot.utils.gitstore import GitStore
+    from nanobot.utils.gitstore import GitStore
 
-        gs = GitStore(
-            workspace,
-            tracked_files=[
-                "SOUL.md",
-                "USER.md",
-                "memory/MEMORY.md",
-            ],
-        )
-        gs.init()
-    except Exception:
-        logger.warning("Failed to initialize git store for {}", workspace)
+    for mode in BUILTIN_MODES:
+        mode_root = workspace / mode.name
+        try:
+            gs = GitStore(
+                mode_root,
+                tracked_files=[
+                    "SOUL.md",
+                    "USER.md",
+                    "memory/MEMORY.md",
+                ],
+            )
+            gs.init()
+        except Exception:
+            logger.warning("Failed to initialize git store for {}", mode_root)
 
     return added

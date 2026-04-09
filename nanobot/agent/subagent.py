@@ -54,6 +54,7 @@ class SubagentManager:
         web_config: "WebToolsConfig | None" = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
+        mode: str = "general",
     ):
         from nanobot.config.schema import ExecToolConfig
 
@@ -65,6 +66,7 @@ class SubagentManager:
         self.max_tool_result_chars = max_tool_result_chars
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self.mode = mode
         self.runner = AgentRunner(provider)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
@@ -205,7 +207,8 @@ class SubagentManager:
         status_text = "completed successfully" if status == "ok" else "failed"
 
         announce_content = render_template(
-            "agent/subagent_announce.md",
+            self.mode,
+            "subagent_announce.md",
             label=label,
             status_text=status_text,
             task=task,
@@ -218,6 +221,7 @@ class SubagentManager:
             sender_id="subagent",
             chat_id=f"{origin['channel']}:{origin['chat_id']}",
             content=announce_content,
+            metadata={"mode": self.mode},
         )
 
         await self.bus.publish_inbound(msg)
@@ -254,7 +258,8 @@ class SubagentManager:
         time_ctx = ContextBuilder._build_runtime_context(None, None)
         skills_summary = SkillsLoader(self.workspace).build_skills_summary()
         return render_template(
-            "agent/subagent_system.md",
+            self.mode,
+            "subagent_system.md",
             time_ctx=time_ctx,
             workspace=str(self.workspace),
             skills_summary=skills_summary or "",

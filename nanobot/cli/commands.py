@@ -49,6 +49,7 @@ class SafeFileHistory(FileHistory):
 from nanobot.cli.stream import StreamRenderer, ThinkingSpinner
 from nanobot.config.paths import get_workspace_path, is_default_workspace
 from nanobot.config.schema import Config
+from nanobot.modes import DEFAULT_MODE, ModeRegistry
 from nanobot.utils.helpers import sync_workspace_templates
 from nanobot.utils.restart import (
     consume_restart_notice_from_env,
@@ -516,6 +517,17 @@ def _warn_deprecated_config_keys(config_path: Path | None) -> None:
         )
 
 
+def _build_mode_cron_services(workspace: Path) -> dict[str, object]:
+    """Create one cron service per built-in mode workspace."""
+    from nanobot.cron.service import CronService
+
+    registry = ModeRegistry()
+    return {
+        mode: CronService(registry.workspace_path(workspace, mode) / "cron" / "jobs.json")
+        for mode in registry.names()
+    }
+
+
 # ============================================================================
 # OpenAI-Compatible API Server
 # ============================================================================
@@ -543,8 +555,6 @@ def serve(
     from nanobot.agent.loop import AgentLoop
     from nanobot.api.server import create_app
     from nanobot.bus.queue import MessageBus
-    from nanobot.session.manager import SessionManager
-
     if verbose:
         logger.enable("nanobot")
     else:
@@ -558,7 +568,6 @@ def serve(
     sync_workspace_templates(runtime_config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(runtime_config)
-    session_manager = SessionManager(runtime_config.workspace_path)
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -572,10 +581,10 @@ def serve(
         web_config=runtime_config.tools.web,
         exec_config=runtime_config.tools.exec,
         restrict_to_workspace=runtime_config.tools.restrict_to_workspace,
-        session_manager=session_manager,
         mcp_servers=runtime_config.tools.mcp_servers,
         channels_config=runtime_config.channels,
         timezone=runtime_config.agents.defaults.timezone,
+        cron_services=_build_mode_cron_services(runtime_config.workspace_path),
     )
 
     model_name = runtime_config.agents.defaults.model
@@ -621,7 +630,6 @@ def gateway(
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
-    from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
     from nanobot.session.manager import SessionManager
@@ -638,11 +646,8 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
-    session_manager = SessionManager(config.workspace_path)
-
-    # Create cron service with workspace-scoped store
-    cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    session_manager = SessionManager(ModeRegistry().workspace_path(config.workspace_path, DEFAULT_MODE))
+    cron_services = _build_mode_cron_services(config.workspace_path)
 
     # Create agent with cron service
     agent = AgentLoop(
@@ -657,7 +662,7 @@ def gateway(
         max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
         provider_retry_mode=config.agents.defaults.provider_retry_mode,
         exec_config=config.tools.exec,
-        cron_service=cron,
+        cron_services=cron_services,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
@@ -666,12 +671,12 @@ def gateway(
     )
 
     # Set cron callback (needs agent)
-    async def on_cron_job(job: CronJob) -> str | None:
+    async def on_cron_job(mode: str, job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
         if job.name == "dream":
             try:
-                await agent.dream.run()
+                await agent._runtime_for_mode(mode).dream.run()
                 logger.info("Dream cron job completed")
             except Exception:
                 logger.exception("Dream cron job failed")
@@ -687,16 +692,18 @@ def gateway(
             f"Scheduled instruction: {job.payload.message}"
         )
 
-        cron_tool = agent.tools.get("cron")
+        runtime = agent._runtime_for_mode(mode)
+        cron_tool = runtime.tools.get("cron")
         cron_token = None
         if isinstance(cron_tool, CronTool):
             cron_token = cron_tool.set_cron_context(True)
         try:
             resp = await agent.process_direct(
                 reminder_note,
-                session_key=f"cron:{job.id}",
+                session_key=f"cron:{mode}:{job.id}",
                 channel=job.payload.channel or "cli",
                 chat_id=job.payload.to or "direct",
+                mode=job.payload.mode or mode,
             )
         finally:
             if isinstance(cron_tool, CronTool) and cron_token is not None:
@@ -704,7 +711,7 @@ def gateway(
 
         response = resp.content if resp else ""
 
-        message_tool = agent.tools.get("message")
+        message_tool = runtime.tools.get("message")
         if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
             return response
 
@@ -714,6 +721,7 @@ def gateway(
                 reminder_note,
                 provider,
                 agent.model,
+                mode=job.payload.mode or mode,
             )
             if should_notify:
                 from nanobot.bus.events import OutboundMessage
@@ -727,7 +735,11 @@ def gateway(
                 )
         return response
 
-    cron.on_job = on_cron_job
+    for mode_name, cron in cron_services.items():
+        async def _handler(job: CronJob, *, _mode: str = mode_name) -> str | None:
+            return await on_cron_job(_mode, job)
+
+        cron.on_job = _handler
 
     # Create channel manager
     channels = ChannelManager(config, bus)
@@ -758,17 +770,19 @@ def gateway(
 
         resp = await agent.process_direct(
             tasks,
-            session_key="heartbeat",
+            session_key=f"heartbeat:{DEFAULT_MODE}",
             channel=channel,
             chat_id=chat_id,
+            mode=DEFAULT_MODE,
             on_progress=_silent,
         )
 
         # Keep a small tail of heartbeat history so the loop stays bounded
         # without losing all short-term context between runs.
-        session = agent.sessions.get_or_create("heartbeat")
+        runtime = agent._runtime_for_mode(DEFAULT_MODE)
+        session = runtime.sessions.get_or_create(f"heartbeat:{DEFAULT_MODE}")
         session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
-        agent.sessions.save(session)
+        runtime.sessions.save(session)
 
         return resp.content if resp else ""
 
@@ -785,7 +799,7 @@ def gateway(
 
     hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
-        workspace=config.workspace_path,
+        workspace=ModeRegistry().workspace_path(config.workspace_path, DEFAULT_MODE),
         provider=provider,
         model=agent.model,
         on_execute=on_heartbeat_execute,
@@ -800,33 +814,36 @@ def gateway(
     else:
         console.print("[yellow]Warning: No channels enabled[/yellow]")
 
-    cron_status = cron.status()
-    if cron_status["jobs"] > 0:
-        console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
+    cron_job_count = sum(service.status()["jobs"] for service in cron_services.values())
+    if cron_job_count > 0:
+        console.print(f"[green]✓[/green] Cron: {cron_job_count} scheduled jobs")
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
     # Register Dream system job (always-on, idempotent on restart)
     dream_cfg = config.agents.defaults.dream
-    if dream_cfg.model_override:
-        agent.dream.model = dream_cfg.model_override
-    agent.dream.max_batch_size = dream_cfg.max_batch_size
-    agent.dream.max_iterations = dream_cfg.max_iterations
     from nanobot.cron.types import CronJob, CronPayload
 
-    cron.register_system_job(
-        CronJob(
-            id="dream",
-            name="dream",
-            schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
-            payload=CronPayload(kind="system_event"),
+    for mode_name, cron in cron_services.items():
+        runtime = agent._runtime_for_mode(mode_name)
+        if dream_cfg.model_override:
+            runtime.dream.model = dream_cfg.model_override
+        runtime.dream.max_batch_size = dream_cfg.max_batch_size
+        runtime.dream.max_iterations = dream_cfg.max_iterations
+        cron.register_system_job(
+            CronJob(
+                id="dream",
+                name="dream",
+                schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
+                payload=CronPayload(kind="system_event", mode=mode_name),
+            )
         )
-    )
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
     async def run():
         try:
-            await cron.start()
+            for cron in cron_services.values():
+                await cron.start()
             await heartbeat.start()
             await asyncio.gather(
                 agent.run(),
@@ -842,7 +859,8 @@ def gateway(
         finally:
             await agent.close_mcp()
             heartbeat.stop()
-            cron.stop()
+            for cron in cron_services.values():
+                cron.stop()
             agent.stop()
             await channels.stop_all()
 
@@ -872,17 +890,13 @@ def agent(
 
     from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
-    from nanobot.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
     provider = _make_provider(config)
-
-    # Create cron service with workspace-scoped store
-    cron_store_path = config.workspace_path / "cron" / "jobs.json"
-    cron = CronService(cron_store_path)
+    cron_services = _build_mode_cron_services(config.workspace_path)
 
     if logs:
         logger.enable("nanobot")
@@ -901,7 +915,7 @@ def agent(
         max_tool_result_chars=config.agents.defaults.max_tool_result_chars,
         provider_retry_mode=config.agents.defaults.provider_retry_mode,
         exec_config=config.tools.exec,
-        cron_service=cron,
+        cron_services=cron_services,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
@@ -954,7 +968,6 @@ def agent(
         console.print(
             f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
         )
-
         if ":" in session_id:
             cli_channel, cli_chat_id = session_id.split(":", 1)
         else:

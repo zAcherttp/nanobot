@@ -242,10 +242,12 @@ class Consolidator:
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
+        mode: str = "general",
     ):
         self.store = store
         self.provider = provider
         self.model = model
+        self.mode = mode
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
@@ -311,7 +313,8 @@ class Consolidator:
                     {
                         "role": "system",
                         "content": render_template(
-                            "agent/consolidator_archive.md",
+                            self.mode,
+                            "consolidator_archive.md",
                             strip=True,
                         ),
                     },
@@ -412,10 +415,12 @@ class Dream:
         max_batch_size: int = 20,
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
+        mode: str = "general",
     ):
         self.store = store
         self.provider = provider
         self.model = model
+        self.mode = mode
         self.max_batch_size = max_batch_size
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
@@ -476,7 +481,7 @@ class Dream:
                 messages=[
                     {
                         "role": "system",
-                        "content": render_template("agent/dream_phase1.md", strip=True),
+                        "content": render_template(self.mode, "dream_phase1.md", strip=True),
                     },
                     {"role": "user", "content": phase1_prompt},
                 ],
@@ -496,7 +501,7 @@ class Dream:
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": render_template("agent/dream_phase2.md", strip=True),
+                "content": render_template(self.mode, "dream_phase2.md", strip=True),
             },
             {"role": "user", "content": phase2_prompt},
         ]

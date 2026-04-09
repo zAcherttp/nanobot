@@ -29,7 +29,12 @@ def test_bootstrap_files_are_backed_by_templates() -> None:
     template_dir = pkg_files("nanobot") / "templates"
 
     for filename in ContextBuilder.BOOTSTRAP_FILES:
-        assert (template_dir / filename).is_file(), f"missing bootstrap template: {filename}"
+        assert (template_dir / "general" / filename).is_file(), (
+            f"missing general bootstrap template: {filename}"
+        )
+        assert (template_dir / "scheduler" / filename).is_file(), (
+            f"missing scheduler bootstrap template: {filename}"
+        )
 
 
 def test_system_prompt_stays_stable_when_clock_changes(tmp_path, monkeypatch) -> None:

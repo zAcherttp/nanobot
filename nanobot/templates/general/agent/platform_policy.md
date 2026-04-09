@@ -1,6 +1,6 @@
 {% if system == 'Windows' %}
 ## Platform Policy (Windows)
-- You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
+- You are running on Windows. Do not assume GNU tools exist.
 - Prefer Windows-native commands or file tools when they are more reliable.
 - If terminal output is garbled, retry with UTF-8 output enabled.
 {% else %}

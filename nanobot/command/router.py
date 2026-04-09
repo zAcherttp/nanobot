@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 if TYPE_CHECKING:
     from nanobot.bus.events import InboundMessage, OutboundMessage
     from nanobot.session.manager import Session
+    from nanobot.mode_runtime import ModeRuntime
 
 Handler = Callable[["CommandContext"], Awaitable["OutboundMessage | None"]]
 
@@ -22,6 +23,8 @@ class CommandContext:
     raw: str
     args: str = ""
     loop: Any = None
+    mode: str = "general"
+    runtime: "ModeRuntime | None" = None
 
 
 class CommandRouter:

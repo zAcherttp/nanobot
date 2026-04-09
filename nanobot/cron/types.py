@@ -29,6 +29,7 @@ class CronPayload:
     deliver: bool = False
     channel: str | None = None  # e.g. "telegram"
     to: str | None = None  # e.g. phone number
+    mode: str | None = None
 
 
 @dataclass

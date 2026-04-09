@@ -21,9 +21,10 @@ class ContextBuilder:
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
 
-    def __init__(self, workspace: Path, timezone: str | None = None):
+    def __init__(self, workspace: Path, timezone: str | None = None, mode: str = "general"):
         self.workspace = workspace
         self.timezone = timezone
+        self.mode = mode
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
 
@@ -51,7 +52,7 @@ class ContextBuilder:
 
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
-            parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
+            parts.append(render_template(self.mode, "skills_section.md", skills_summary=skills_summary))
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
@@ -69,10 +70,11 @@ class ContextBuilder:
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
         return render_template(
-            "agent/identity.md",
+            self.mode,
+            "identity.md",
             workspace_path=workspace_path,
             runtime=runtime,
-            platform_policy=render_template("agent/platform_policy.md", system=system),
+            platform_policy=render_template(self.mode, "platform_policy.md", system=system),
             channel=channel or "",
         )
 

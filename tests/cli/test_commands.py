@@ -67,8 +67,9 @@ def test_onboard_fresh_install(mock_paths):
     assert "Created workspace" in result.stdout
     assert "nanobot is ready" in result.stdout
     assert config_file.exists()
-    assert (workspace_dir / "AGENTS.md").exists()
-    assert (workspace_dir / "memory" / "MEMORY.md").exists()
+    assert (workspace_dir / "general" / "AGENTS.md").exists()
+    assert (workspace_dir / "general" / "memory" / "MEMORY.md").exists()
+    assert (workspace_dir / "scheduler" / "AGENTS.md").exists()
     expected_workspace = Config().workspace_path
     assert mock_ws.call_args.args == (expected_workspace,)
 
@@ -84,7 +85,7 @@ def test_onboard_existing_config_refresh(mock_paths):
     assert "Config already exists" in result.stdout
     assert "existing values preserved" in result.stdout
     assert workspace_dir.exists()
-    assert (workspace_dir / "AGENTS.md").exists()
+    assert (workspace_dir / "general" / "AGENTS.md").exists()
 
 
 def test_onboard_existing_config_overwrite(mock_paths):
@@ -110,8 +111,7 @@ def test_onboard_existing_workspace_safe_create(mock_paths):
 
     assert result.exit_code == 0
     assert "Created workspace" not in result.stdout
-    assert "Created AGENTS.md" in result.stdout
-    assert (workspace_dir / "AGENTS.md").exists()
+    assert (workspace_dir / "general" / "AGENTS.md").exists()
 
 
 def _strip_ansi(text):
@@ -165,7 +165,8 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     assert result.exit_code == 0
     saved = Config.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
     assert saved.workspace_path == workspace_path
-    assert (workspace_path / "AGENTS.md").exists()
+    assert (workspace_path / "general" / "AGENTS.md").exists()
+    assert (workspace_path / "scheduler" / "AGENTS.md").exists()
     stripped_output = _strip_ansi(result.stdout)
     compact_output = stripped_output.replace("\n", "")
     resolved_config = str(config_path.resolve())
@@ -539,7 +540,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
 
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "agent-workspace")
-    seen: dict[str, Path] = {}
+    seen: dict[str, list[Path]] = {"cron_stores": []}
 
     monkeypatch.setattr("nanobot.config.loader.set_config_path", lambda _path: None)
     monkeypatch.setattr("nanobot.config.loader.load_config", lambda _path=None: config)
@@ -549,7 +550,7 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
 
     class _FakeCron:
         def __init__(self, store_path: Path) -> None:
-            seen["cron_store"] = store_path
+            seen["cron_stores"].append(store_path)
 
     class _FakeAgentLoop:
         def __init__(self, *args, **kwargs) -> None:
@@ -570,7 +571,10 @@ def test_agent_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: Pa
     result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
 
     assert result.exit_code == 0
-    assert seen["cron_store"] == config.workspace_path / "cron" / "jobs.json"
+    assert seen["cron_stores"] == [
+        config.workspace_path / "general" / "cron" / "jobs.json",
+        config.workspace_path / "scheduler" / "cron" / "jobs.json",
+    ]
 
 
 def test_agent_overrides_workspace_path(mock_agent_runtime):
@@ -833,11 +837,11 @@ def test_gateway_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: 
     config_file = _write_instance_config(tmp_path)
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "config-workspace")
-    seen: dict[str, Path] = {}
+    seen: dict[str, list[Path]] = {"cron_stores": []}
 
     class _StopCron:
         def __init__(self, store_path: Path) -> None:
-            seen["cron_store"] = store_path
+            seen["cron_stores"].append(store_path)
             raise _StopGatewayError("stop")
 
     _patch_cli_command_runtime(
@@ -851,7 +855,7 @@ def test_gateway_uses_workspace_directory_for_cron_store(monkeypatch, tmp_path: 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGatewayError)
-    assert seen["cron_store"] == config.workspace_path / "cron" / "jobs.json"
+    assert seen["cron_stores"] == [config.workspace_path / "general" / "cron" / "jobs.json"]
 
 
 def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
@@ -878,12 +882,16 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     class _FakeCron:
         def __init__(self, _store_path: Path) -> None:
             self.on_job = None
-            seen["cron"] = self
+            seen.setdefault("crons", []).append(self)
 
     class _FakeAgentLoop:
         def __init__(self, *args, **kwargs) -> None:
             self.model = "test-model"
             self.tools = {}
+            runtime = MagicMock()
+            runtime.tools = {}
+            runtime.dream = AsyncMock()
+            self._runtime = runtime
 
         async def process_direct(self, *_args, **_kwargs):
             return OutboundMessage(
@@ -901,6 +909,9 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
         def stop(self) -> None:
             return None
 
+        def _runtime_for_mode(self, _mode: str):
+            return self._runtime
+
     class _StopAfterCronSetup:
         def __init__(self, *_args, **_kwargs) -> None:
             raise _StopGatewayError("stop")
@@ -910,11 +921,13 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
         task_context: str,
         provider_arg: object,
         model: str,
+        mode: str = "general",
     ) -> bool:
         seen["response"] = response
         seen["task_context"] = task_context
         seen["provider"] = provider_arg
         seen["model"] = model
+        seen["mode"] = mode
         return True
 
     monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCron)
@@ -928,7 +941,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
 
     assert isinstance(result.exception, _StopGatewayError)
-    cron = seen["cron"]
+    cron = seen["crons"][0]
     assert isinstance(cron, _FakeCron)
     assert cron.on_job is not None
 
@@ -949,6 +962,7 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     assert seen["response"] == "Time to stretch."
     assert seen["provider"] is provider
     assert seen["model"] == "test-model"
+    assert seen["mode"] == "general"
     assert seen["task_context"] == (
         "[Scheduled Task] Timer finished.\n\n"
         "Task 'stretch' has been triggered.\n"

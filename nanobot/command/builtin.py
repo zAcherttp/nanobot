@@ -13,6 +13,15 @@ from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
 
 
+def _runtime_or_legacy(ctx: CommandContext):
+    if ctx.runtime is not None:
+        return ctx.runtime
+    resolver = getattr(ctx.loop, "_runtime_for_mode", None)
+    if callable(resolver):
+        return resolver(ctx.mode)
+    return None
+
+
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
@@ -24,7 +33,9 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
             await t
         except (asyncio.CancelledError, Exception):
             pass
-    sub_cancelled = await loop.subagents.cancel_by_session(msg.session_key)
+    runtime = _runtime_or_legacy(ctx)
+    subagent_manager = runtime.subagents if runtime is not None else loop.subagents
+    sub_cancelled = await subagent_manager.cancel_by_session(msg.session_key)
     total = cancelled + sub_cancelled
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
@@ -53,10 +64,12 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     """Build an outbound status message for a session."""
     loop = ctx.loop
-    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    runtime = _runtime_or_legacy(ctx)
+    session = ctx.session or (runtime.sessions.get_or_create(ctx.key) if runtime is not None else loop.sessions.get_or_create(ctx.key))
     ctx_est = 0
     try:
-        ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
+        consolidator = runtime.consolidator if runtime is not None else loop.consolidator
+        ctx_est, _ = consolidator.estimate_session_prompt_tokens(session)
     except Exception:
         pass
     if ctx_est <= 0:
@@ -81,6 +94,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         chat_id=ctx.msg.chat_id,
         content=build_status_content(
             version=__version__,
+            mode=ctx.mode,
             model=loop.model,
             start_time=loop._start_time,
             last_usage=loop._last_usage,
@@ -96,13 +110,16 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Start a fresh session."""
     loop = ctx.loop
-    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    runtime = _runtime_or_legacy(ctx)
+    session = ctx.session or (runtime.sessions.get_or_create(ctx.key) if runtime is not None else loop.sessions.get_or_create(ctx.key))
     snapshot = session.messages[session.last_consolidated :]
     session.clear()
-    loop.sessions.save(session)
-    loop.sessions.invalidate(session.key)
+    sessions = runtime.sessions if runtime is not None else loop.sessions
+    sessions.save(session)
+    sessions.invalidate(session.key)
     if snapshot:
-        loop._schedule_background(loop.consolidator.archive(snapshot))
+        consolidator = runtime.consolidator if runtime is not None else loop.consolidator
+        loop._schedule_background(consolidator.archive(snapshot))
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -116,17 +133,19 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
     import time
 
     loop = ctx.loop
+    runtime = _runtime_or_legacy(ctx)
     msg = ctx.msg
 
     async def _run_dream():
         t0 = time.monotonic()
         try:
-            did_work = await loop.dream.run()
+            dream = runtime.dream if runtime is not None else loop.dream
+            did_work = await dream.run()
             elapsed = time.monotonic() - t0
             if did_work:
-                content = f"Dream completed in {elapsed:.1f}s."
+                content = f"Dream completed in {elapsed:.1f}s for `{ctx.mode}` mode."
             else:
-                content = "Dream: nothing to process."
+                content = f"Dream: nothing to process for `{ctx.mode}` mode."
         except Exception as e:
             elapsed = time.monotonic() - t0
             content = f"Dream failed after {elapsed:.1f}s: {e}"
@@ -232,7 +251,8 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
     Default: diff of the latest commit (HEAD~1 vs HEAD).
     With /dream-log <sha>: diff of that specific commit.
     """
-    store = ctx.loop.consolidator.store
+    runtime = _runtime_or_legacy(ctx)
+    store = (runtime.consolidator.store if runtime is not None else ctx.loop.consolidator.store)
     git = store.git
 
     if not git.is_initialized():
@@ -287,7 +307,8 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
         /dream-restore          — list recent commits
         /dream-restore <sha>    — revert a specific commit
     """
-    store = ctx.loop.consolidator.store
+    runtime = _runtime_or_legacy(ctx)
+    store = (runtime.consolidator.store if runtime is not None else ctx.loop.consolidator.store)
     git = store.git
     if not git.is_initialized():
         return OutboundMessage(
@@ -339,6 +360,31 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_mode(ctx: CommandContext) -> OutboundMessage:
+    """Show or update the persistent conversation mode."""
+    loop = ctx.loop
+    args = ctx.args.strip()
+    if not args:
+        modes = ", ".join(loop.mode_registry.names())
+        content = f"Current mode: `{ctx.mode}`\nAvailable modes: {modes}"
+    else:
+        mode = args.split()[0].strip().lower()
+        try:
+            loop.mode_registry.get(mode)
+        except ValueError:
+            modes = ", ".join(loop.mode_registry.names())
+            content = f"Unknown mode `{mode}`. Available modes: {modes}"
+        else:
+            loop.mode_store.set(ctx.key, mode)
+            content = f"Conversation mode switched to `{mode}`."
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
     lines = [
@@ -350,6 +396,7 @@ def build_help_text() -> str:
         "/dream — Manually trigger Dream consolidation",
         "/dream-log — Show what the last Dream changed",
         "/dream-restore — Revert memory to a previous state",
+        "/mode — Show or change the active conversation mode",
         "/help — Show available commands",
     ]
     return "\n".join(lines)
@@ -367,4 +414,6 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/dream-log ", cmd_dream_log)
     router.exact("/dream-restore", cmd_dream_restore)
     router.prefix("/dream-restore ", cmd_dream_restore)
+    router.exact("/mode", cmd_mode)
+    router.prefix("/mode ", cmd_mode)
     router.exact("/help", cmd_help)

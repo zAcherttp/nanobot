@@ -320,13 +320,13 @@ class TestSyncWorkspaceTemplates:
     def test_does_not_overwrite_existing_files(self, tmp_path):
         """Should not overwrite files that already exist."""
         workspace = tmp_path / "workspace"
-        workspace.mkdir(parents=True)
-        (workspace / "AGENTS.md").write_text("existing content")
+        (workspace / "general").mkdir(parents=True)
+        (workspace / "general" / "AGENTS.md").write_text("existing content")
 
         sync_workspace_templates(workspace, silent=True)
 
         # Existing file should not be changed
-        content = (workspace / "AGENTS.md").read_text()
+        content = (workspace / "general" / "AGENTS.md").read_text()
         assert content == "existing content"
 
     def test_creates_memory_directory(self, tmp_path):
@@ -335,7 +335,8 @@ class TestSyncWorkspaceTemplates:
 
         sync_workspace_templates(workspace, silent=True)
 
-        assert (workspace / "memory").exists() or (workspace / "skills").exists()
+        assert (workspace / "general" / "memory").exists()
+        assert (workspace / "scheduler" / "memory").exists()
 
     def test_returns_list_of_added_files(self, tmp_path):
         """Should return list of relative paths for added files."""

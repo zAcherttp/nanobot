@@ -63,6 +63,14 @@ class Nanobot:
         provider = _make_provider(config)
         bus = MessageBus()
         defaults = config.agents.defaults
+        from nanobot.cron.service import CronService
+        from nanobot.modes import ModeRegistry
+
+        mode_registry = ModeRegistry()
+        cron_services = {
+            mode: CronService(mode_registry.workspace_path(config.workspace_path, mode) / "cron" / "jobs.json")
+            for mode in mode_registry.names()
+        }
 
         loop = AgentLoop(
             bus=bus,
@@ -79,6 +87,7 @@ class Nanobot:
             restrict_to_workspace=config.tools.restrict_to_workspace,
             mcp_servers=config.tools.mcp_servers,
             timezone=defaults.timezone,
+            cron_services=cron_services,
         )
         return cls(loop)
 

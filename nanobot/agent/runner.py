@@ -65,6 +65,7 @@ class AgentRunSpec:
     provider_retry_mode: str = "standard"
     progress_callback: Any | None = None
     checkpoint_callback: Any | None = None
+    prompt_mode: str = "general"
 
 
 @dataclass(slots=True)
@@ -307,7 +308,8 @@ class AgentRunner:
                 )
             else:
                 final_content = render_template(
-                    "agent/max_iterations_message.md",
+                    spec.prompt_mode,
+                    "max_iterations_message.md",
                     strip=True,
                     max_iterations=spec.max_iterations,
                 )
