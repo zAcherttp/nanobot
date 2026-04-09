@@ -359,7 +359,7 @@ def onboard(
         console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
         console.print("     Get one at: https://openrouter.ai/keys")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
-    console.print("\n[dim]Want chat apps? See: https://github.com/HKUDS/nanobot#-chat-apps[/dim]")
+    console.print("\n[dim]Want to connect Telegram? See: https://github.com/HKUDS/nanobot#-telegram[/dim]")
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -1184,7 +1184,7 @@ def channels_status(
 
 @channels_app.command("login")
 def channels_login(
-    channel_name: str = typer.Argument(..., help="Channel name (e.g. telegram, feishu)"),
+    channel_name: str = typer.Argument(..., help="Channel name (telegram or installed plugin)"),
     force: bool = typer.Option(
         False, "--force", "-f", help="Force re-authentication even if already logged in"
     ),

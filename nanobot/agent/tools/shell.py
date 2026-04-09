@@ -3,7 +3,9 @@
 import asyncio
 import os
 import re
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -132,19 +134,15 @@ class ExecTool(Tool):
             command = command.replace("\\\"", "\"")
 
         try:
-            process = await self._spawn(command, cwd, env)
-
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=effective_timeout,
-                )
-            except asyncio.TimeoutError:
-                await self._kill_process(process)
-                return f"Error: Command timed out after {effective_timeout} seconds"
-            except asyncio.CancelledError:
-                await self._kill_process(process)
-                raise
+            completed = await asyncio.to_thread(
+                self._run_subprocess,
+                command,
+                cwd,
+                env,
+                effective_timeout,
+            )
+            stdout = completed.stdout or b""
+            stderr = completed.stderr or b""
 
             output_parts = []
 
@@ -156,7 +154,7 @@ class ExecTool(Tool):
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
 
-            output_parts.append(f"\nExit code: {process.returncode}")
+            output_parts.append(f"\nExit code: {completed.returncode}")
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
@@ -171,8 +169,45 @@ class ExecTool(Tool):
 
             return result
 
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after {effective_timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
+
+    @staticmethod
+    def _run_subprocess(
+        command: str,
+        cwd: str,
+        env: dict[str, str],
+        timeout: int,
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run *command* in a blocking subprocess suitable for asyncio.to_thread()."""
+        return subprocess.run(
+            ExecTool._build_process_args(command, env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+            shell=False,
+        )
+
+    @staticmethod
+    def _build_process_args(command: str, env: dict[str, str]) -> list[str]:
+        """Build platform-specific process args for subprocess.run()."""
+        if _IS_WINDOWS:
+            comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
+            translated = ExecTool._translate_windows_posix_command(command)
+            if translated is not None:
+                return [comspec, "/d", "/s", "/c", translated]
+            if ExecTool._should_use_bash_on_windows(command):
+                bash = shutil.which("bash")
+                if bash:
+                    return [bash, "-lc", command]
+            return [comspec, "/d", "/s", "/c", command]
+
+        bash = shutil.which("bash") or "/bin/bash"
+        return [bash, "-l", "-c", command]
 
     def _apply_prompt_mode(self, command: str) -> tuple[str, str | None]:
         """Normalize known interactive commands according to prompt policy.
@@ -217,15 +252,18 @@ class ExecTool(Tool):
     ) -> asyncio.subprocess.Process:
         """Launch *command* in a platform-appropriate shell."""
         if _IS_WINDOWS:
+            comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
+
+            translated = ExecTool._translate_windows_posix_command(command)
+            if translated is not None:
+                command = translated
+
             # Prefer bash for clearly POSIX-style commands when available on Windows.
             # This keeps commands like `sleep 10` and `bash -c ...` functional.
-            if ExecTool._should_use_bash_on_windows(command):
+            if translated is None and ExecTool._should_use_bash_on_windows(command):
                 bash = shutil.which("bash")
                 if bash:
-                    stripped = command.strip()
-                    lower = stripped.lower()
-                    if lower.startswith("bash -c ") or lower.startswith("bash -lc "):
-                        # Keep original quoting intact for `bash -c ...` payloads.
+                    try:
                         return await asyncio.create_subprocess_exec(
                             bash,
                             "-lc",
@@ -235,20 +273,20 @@ class ExecTool(Tool):
                             cwd=cwd,
                             env=env,
                         )
-                    return await asyncio.create_subprocess_exec(
-                        bash,
-                        "-lc",
-                        command,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=cwd,
-                        env=env,
-                    )
+                    except (FileNotFoundError, PermissionError, OSError) as e:
+                        logger.debug("Falling back from bash on Windows: {}", e)
+                        translated = ExecTool._translate_windows_posix_command(command)
+                        if translated is not None:
+                            command = translated
+                        else:
+                            raise
 
-            comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
-            return await asyncio.create_subprocess_shell(
+            return await asyncio.create_subprocess_exec(
+                comspec,
+                "/d",
+                "/s",
+                "/c",
                 command,
-                executable=comspec,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
@@ -273,6 +311,38 @@ class ExecTool(Tool):
         if re.search(r"(^|\s)sleep\s+\d", lower):
             return True
         return False
+
+    @staticmethod
+    def _translate_windows_posix_command(command: str) -> str | None:
+        """Translate a small POSIX-oriented subset for Windows shell execution."""
+        stripped = command.strip()
+        lower = stripped.lower()
+
+        sleep_match = re.fullmatch(r"sleep\s+(\d+)", lower)
+        if sleep_match:
+            seconds = int(sleep_match.group(1))
+            return f"ping -n {seconds + 1} 127.0.0.1 >nul"
+
+        try:
+            parts = shlex.split(stripped, posix=True)
+        except ValueError:
+            return None
+
+        if len(parts) >= 3 and parts[0].lower() == "bash" and parts[1].lower() in {"-c", "-lc"}:
+            script = parts[2]
+            loop_match = re.fullmatch(
+                r"for\s+\w+\s+in\s+\{1\.\.(\d+)\};\s*do\s+echo\s+(['\"]?)(.*?)\2;\s*done",
+                script,
+                re.IGNORECASE,
+            )
+            if loop_match:
+                count = loop_match.group(1)
+                text = loop_match.group(3).replace('"', r"\"")
+                return f'for /L %i in (1,1,{count}) do @echo {text}'
+            if re.fullmatch(r"echo\s+.+", script, re.IGNORECASE):
+                return script
+
+        return None
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:

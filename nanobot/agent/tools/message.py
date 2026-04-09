@@ -10,7 +10,7 @@ from nanobot.bus.events import OutboundMessage
 @tool_parameters(
     tool_parameters_schema(
         content=StringSchema("The message content to send"),
-        channel=StringSchema("Optional: target channel (telegram, slack, etc.)"),
+        channel=StringSchema("Optional: target channel (telegram or installed plugin)"),
         chat_id=StringSchema("Optional: target chat/user ID"),
         media=ArraySchema(
             StringSchema(""),
@@ -78,10 +78,8 @@ class MessageTool(Tool):
         channel = channel or self._default_channel
         chat_id = chat_id or self._default_chat_id
         # Only inherit default message_id when targeting the same channel+chat.
-        # Cross-chat sends must not carry the original message_id, because
-        # some channels (e.g. Feishu) use it to determine the target
-        # conversation via their Reply API, which would route the message
-        # to the wrong chat entirely.
+        # Cross-chat sends must not carry the original message_id because
+        # some channel implementations use it to resolve the reply target.
         if channel == self._default_channel and chat_id == self._default_chat_id:
             message_id = message_id or self._default_message_id
         else:

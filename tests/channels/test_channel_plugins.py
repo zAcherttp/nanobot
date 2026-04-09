@@ -783,14 +783,14 @@ async def test_enabled_channels_returns_channel_names():
     mgr.bus = MessageBus()
     mgr.channels = {
         "telegram": _StartableChannel(fake_config, mgr.bus),
-        "slack": _StartableChannel(fake_config, mgr.bus),
+        "pluginchat": _StartableChannel(fake_config, mgr.bus),
     }
     mgr._dispatch_task = None
 
     enabled = mgr.enabled_channels
 
     assert "telegram" in enabled
-    assert "slack" in enabled
+    assert "pluginchat" in enabled
     assert len(enabled) == 2
 
 
@@ -961,18 +961,18 @@ async def test_notify_restart_done_enqueues_outbound_message():
     mgr = ChannelManager.__new__(ChannelManager)
     mgr.config = fake_config
     mgr.bus = MessageBus()
-    mgr.channels = {"feishu": _StartableChannel(fake_config, mgr.bus)}
+    mgr.channels = {"pluginchat": _StartableChannel(fake_config, mgr.bus)}
     mgr._dispatch_task = None
     mgr._send_with_retry = AsyncMock()
 
-    notice = RestartNotice(channel="feishu", chat_id="oc_123", started_at_raw="100.0")
+    notice = RestartNotice(channel="pluginchat", chat_id="oc_123", started_at_raw="100.0")
     with patch("nanobot.channels.manager.consume_restart_notice_from_env", return_value=notice):
         mgr._notify_restart_done_if_needed()
 
     await asyncio.sleep(0)
     mgr._send_with_retry.assert_awaited_once()
     sent_channel, sent_msg = mgr._send_with_retry.await_args.args
-    assert sent_channel is mgr.channels["feishu"]
-    assert sent_msg.channel == "feishu"
+    assert sent_channel is mgr.channels["pluginchat"]
+    assert sent_msg.channel == "pluginchat"
     assert sent_msg.chat_id == "oc_123"
     assert sent_msg.content.startswith("Restart completed")

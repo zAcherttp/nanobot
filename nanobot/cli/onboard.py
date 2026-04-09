@@ -762,14 +762,15 @@ def _configure_providers(config: Config) -> None:
 
 @lru_cache(maxsize=1)
 def _get_channel_info() -> dict[str, tuple[str, type[BaseModel]]]:
-    """Get channel info (display name + config class) from channel modules."""
+    """Get built-in channel info (display name + config class) for onboarding."""
     import importlib
 
-    from nanobot.channels.registry import discover_all
+    from nanobot.channels.registry import discover_channel_names, load_channel_class
 
     result: dict[str, tuple[str, type[BaseModel]]] = {}
-    for name, channel_cls in discover_all().items():
+    for name in discover_channel_names():
         try:
+            channel_cls = load_channel_class(name)
             mod = importlib.import_module(f"nanobot.channels.{name}")
             config_name = channel_cls.__name__.replace("Channel", "Config")
             config_cls = getattr(mod, config_name, None)
@@ -777,7 +778,7 @@ def _get_channel_info() -> dict[str, tuple[str, type[BaseModel]]]:
                 display_name = getattr(channel_cls, "display_name", name.capitalize())
                 result[name] = (display_name, config_cls)
         except Exception:
-            logger.warning(f"Failed to load channel module: {name}")
+            logger.warning(f"Failed to load built-in channel module: {name}")
     return result
 
 

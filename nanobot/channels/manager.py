@@ -22,7 +22,7 @@ class ChannelManager:
     Manages chat channels and coordinates message routing.
 
     Responsibilities:
-    - Initialize enabled channels (Telegram, Slack, etc.)
+    - Initialize enabled channels (Telegram and installed plugins)
     - Start/stop channels
     - Route outbound messages
     """
