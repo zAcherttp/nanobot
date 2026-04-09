@@ -106,15 +106,15 @@ class TestSpawnWindows:
         env = {"COMSPEC": r"C:\Windows\system32\cmd.exe", "PATH": ""}
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_shell,
         ):
-            mock_exec.return_value = AsyncMock()
+            mock_shell.return_value = AsyncMock()
             await ExecTool._spawn("dir", r"C:\Users", env)
 
-        args = mock_exec.call_args[0]
-        assert "cmd.exe" in args[0]
-        assert "/c" in args
-        assert "dir" in args
+        args = mock_shell.call_args[0]
+        kwargs = mock_shell.call_args[1]
+        assert args[0] == "dir"
+        assert "cmd.exe" in kwargs["executable"]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_comspec(self):
@@ -122,13 +122,13 @@ class TestSpawnWindows:
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
             patch.dict("os.environ", {}, clear=True),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_shell,
         ):
-            mock_exec.return_value = AsyncMock()
+            mock_shell.return_value = AsyncMock()
             await ExecTool._spawn("dir", r"C:\Users", env)
 
-        args = mock_exec.call_args[0]
-        assert args[0] == "cmd.exe"
+        kwargs = mock_shell.call_args[1]
+        assert kwargs["executable"] == "cmd.exe"
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +249,28 @@ class TestExecuteEndToEnd:
 
         assert "hello world" in result
         assert "Exit code: 0" in result
+
+    @pytest.mark.asyncio
+    async def test_windows_normalizes_backslash_escaped_quotes(self):
+        """Windows cmd path should normalize \"...\" into "..." before spawn."""
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"ok\r\n", b"")
+        mock_proc.returncode = 0
+
+        with (
+            patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc) as mock_spawn,
+            patch.object(ExecTool, "_guard_command", return_value=None),
+        ):
+            tool = ExecTool()
+            await tool.execute(
+                command='ffmpeg -i \\"C:\\tmp\\in.ogg\\" -ac 1 \\"C:\\tmp\\out.wav\\"'
+            )
+
+        spawned_cmd = mock_spawn.call_args[0][0]
+        assert '\\"' not in spawned_cmd
+        assert '"C:\\tmp\\in.ogg"' in spawned_cmd
+        assert '"C:\\tmp\\out.wav"' in spawned_cmd
 
     @pytest.mark.asyncio
     async def test_unix_full_path(self):

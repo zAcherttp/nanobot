@@ -46,6 +46,7 @@ class ExecTool(Tool):
         restrict_to_workspace: bool = False,
         sandbox: str = "",
         path_append: str = "",
+        prompt_mode: str = "auto",
     ):
         self.timeout = timeout
         self.working_dir = working_dir
@@ -64,6 +65,7 @@ class ExecTool(Tool):
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
+        self.prompt_mode = prompt_mode
 
     @property
     def name(self) -> str:
@@ -94,6 +96,11 @@ class ExecTool(Tool):
         **kwargs: Any,
     ) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
+
+        command, prompt_error = self._apply_prompt_mode(command)
+        if prompt_error:
+            return prompt_error
+
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -117,6 +124,12 @@ class ExecTool(Tool):
                 env["PATH"] = env.get("PATH", "") + ";" + self.path_append
             else:
                 command = f'export PATH="$PATH:{self.path_append}"; {command}'
+
+        if _IS_WINDOWS and not self._should_use_bash_on_windows(command):
+            # LLMs often emit JSON-escaped quotes (\") around Windows paths.
+            # cmd.exe treats backslash as a literal character, so "C:\path"
+            # becomes a malformed path for tools like ffmpeg.
+            command = command.replace("\\\"", "\"")
 
         try:
             process = await self._spawn(command, cwd, env)
@@ -161,6 +174,43 @@ class ExecTool(Tool):
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
+    def _apply_prompt_mode(self, command: str) -> tuple[str, str | None]:
+        """Normalize known interactive commands according to prompt policy.
+
+        Modes:
+        - auto: patch known commands to non-interactive variants when safe.
+        - strict: fail fast when known interactive flags are missing.
+        - off: do not patch or block.
+        """
+        mode = (self.prompt_mode or "auto").strip().lower()
+        if mode not in {"auto", "strict", "off"}:
+            mode = "auto"
+
+        head = re.match(r"^(\s*)(\"[^\"]+\"|'[^']+'|\S+)", command)
+        if not head:
+            return command, None
+
+        token = head.group(2).strip("\"'")
+        token_base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+        # ffmpeg prompts for overwrite confirmation unless -y or -n is present.
+        if token_base not in {"ffmpeg", "ffmpeg.exe"}:
+            return command, None
+        if re.search(r"(^|\s)-(?:y|n)(?=\s|$)", command):
+            return command, None
+        if mode == "off":
+            return command, None
+        if mode == "strict":
+            return (
+                command,
+                "Error: Command may block on an interactive ffmpeg overwrite prompt. "
+                "Add -y (overwrite) or -n (never overwrite) to run non-interactively.",
+            )
+
+        insert_at = head.end(2)
+        normalized = f"{command[:insert_at]} -y{command[insert_at:]}"
+        return normalized, None
+
     @staticmethod
     async def _spawn(
         command: str, cwd: str, env: dict[str, str],
@@ -196,8 +246,9 @@ class ExecTool(Tool):
                     )
 
             comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
-            return await asyncio.create_subprocess_exec(
-                comspec, "/c", command,
+            return await asyncio.create_subprocess_shell(
+                command,
+                executable=comspec,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,

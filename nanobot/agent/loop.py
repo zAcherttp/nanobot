@@ -245,6 +245,7 @@ class AgentLoop:
                     restrict_to_workspace=self.restrict_to_workspace,
                     sandbox=self.exec_config.sandbox,
                     path_append=self.exec_config.path_append,
+                    prompt_mode=self.exec_config.prompt_mode,
                 )
             )
         if self.web_config.enable:
