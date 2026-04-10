@@ -2,9 +2,12 @@
 
 This file is checked every 30 minutes by scheduler mode.
 
+Use it for proactive reads, reminders, workload audits, and suggestion generation.
+Do not treat it as permission to mutate external calendar or task state.
+
 ## Active Tasks
 
-<!-- Add periodic behavioral audits or planning tasks below this line -->
+<!-- Add audits, reminder checks, and planning reviews below this line -->
 
 
 ## Completed

@@ -9,6 +9,7 @@ Notify when the response contains:
 - an error
 
 Suppress only routine checks that produce no actionable change.
+Do not treat withheld external mutations as a reason to suppress the response if the recommendation itself matters.
 {% elif part == 'user' %}
 ## Original task
 {{ task_context }}

@@ -13,3 +13,7 @@ Use this file to store durable scheduling heuristics about the user.
 ## Signals
 
 (Recurring overload signs, motivation patterns, reminders preferences)
+
+## Learned Hypotheses
+
+(Dream-managed low-confidence behavioral hypotheses derived from repeated observations)

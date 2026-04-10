@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import weakref
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,15 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from nanobot.utils.prompt_templates import render_template
+from nanobot.agent.scheduler_state import (
+    diff_insights_path,
+    load_sync_state,
+    observations_path,
+    read_jsonl,
+    replace_markdown_section,
+    save_sync_state,
+    utc_now_iso,
+)
 from nanobot.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -439,13 +449,112 @@ class Dream:
         tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace))
         return tools
 
+    @staticmethod
+    def _normalize_observation_summary(entry: dict[str, Any]) -> str:
+        summary = str(entry.get("summary") or "").strip()
+        summary = re.sub(r"\s+", " ", summary)
+        return summary.lower()
+
+    def _run_scheduler_audit(self) -> list[str]:
+        """Promote repeated scheduler observations and recent diff insights into durable files."""
+        if self.mode != "scheduler":
+            return []
+
+        workspace = self.store.workspace
+        state = load_sync_state(workspace)
+        dream_state = state.setdefault("dream", {})
+
+        all_observations = read_jsonl(observations_path(workspace))
+        all_diffs = read_jsonl(diff_insights_path(workspace))
+        last_observation_cursor = int(dream_state.get("last_observation_cursor") or 0)
+        last_diff_cursor = int(dream_state.get("last_diff_cursor") or 0)
+
+        new_observations = [
+            item
+            for item in all_observations
+            if int(item.get("cursor") or 0) > last_observation_cursor
+        ]
+        new_diffs = [
+            item
+            for item in all_diffs
+            if int(item.get("cursor") or 0) > last_diff_cursor
+        ]
+        if not new_observations and not new_diffs:
+            return []
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for entry in all_observations:
+            key = self._normalize_observation_summary(entry)
+            if not key:
+                continue
+            grouped.setdefault(key, []).append(entry)
+
+        learned_hypotheses: list[str] = []
+        for key, entries in grouped.items():
+            if len(entries) < 2:
+                continue
+            latest = max(entries, key=lambda item: int(item.get("cursor") or 0))
+            summary = str(latest.get("summary") or key).strip()
+            learned_hypotheses.append(
+                f"- Low confidence: {summary} (seen {len(entries)} times; last source: {latest.get('source') or 'unknown'})"
+            )
+        learned_hypotheses.sort()
+        learned_body = "\n".join(learned_hypotheses) if learned_hypotheses else "(none yet)"
+
+        user_before = self.store.read_user()
+        user_after = replace_markdown_section(user_before, "Learned Hypotheses", learned_body)
+
+        recent_changes = all_diffs[-5:]
+        recent_change_lines = [
+            f"- {str(item.get('summary') or '').strip()}"
+            for item in recent_changes
+            if str(item.get("summary") or "").strip()
+        ]
+        goals_body = "\n".join(recent_change_lines) if recent_change_lines else "(none yet)"
+        goals_path = workspace / "GOALS.md"
+        try:
+            goals_before = goals_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            goals_before = "# Active Goals\n\n## Recent External Changes\n\n(none yet)\n"
+        goals_after = replace_markdown_section(
+            goals_before,
+            "Recent External Changes",
+            goals_body,
+        )
+
+        changes: list[str] = []
+        if user_after != user_before:
+            self.store.write_user(user_after)
+            changes.append("scheduler_audit: USER.md")
+        if goals_after != goals_before:
+            goals_path.write_text(goals_after, encoding="utf-8")
+            changes.append("scheduler_audit: GOALS.md")
+
+        if all_observations:
+            dream_state["last_observation_cursor"] = int(all_observations[-1].get("cursor") or 0)
+        if all_diffs:
+            dream_state["last_diff_cursor"] = int(all_diffs[-1].get("cursor") or 0)
+        dream_state["last_audited_at"] = utc_now_iso()
+        save_sync_state(workspace, state)
+
+        return changes
+
     # -- main entry ----------------------------------------------------------
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
+        scheduler_audit_changes = self._run_scheduler_audit()
         if not entries:
+            if scheduler_audit_changes:
+                if self.store.git.is_initialized():
+                    sha = self.store.git.auto_commit(
+                        f"dream: scheduler audit, {len(scheduler_audit_changes)} change(s)"
+                    )
+                    if sha:
+                        logger.info("Dream commit: {}", sha)
+                return True
             return False
 
         batch = entries[: self.max_batch_size]
@@ -465,15 +574,39 @@ class Dream:
         current_memory = self.store.read_memory() or "(empty)"
         current_soul = self.store.read_soul() or "(empty)"
         current_user = self.store.read_user() or "(empty)"
-        file_context = (
-            f"## Current Date\n{current_date}\n\n"
-            f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
-            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
-            f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
-        )
+        file_context = [
+            f"## Current Date\n{current_date}",
+            f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}",
+            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}",
+            f"## Current USER.md ({len(current_user)} chars)\n{current_user}",
+        ]
+        if self.mode == "scheduler":
+            goals_path = self.store.workspace / "GOALS.md"
+            try:
+                current_goals = goals_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                current_goals = "(empty)"
+            recent_observations = read_jsonl(observations_path(self.store.workspace))[-8:]
+            recent_diffs = read_jsonl(diff_insights_path(self.store.workspace))[-8:]
+            file_context.extend(
+                [
+                    f"## Current GOALS.md ({len(current_goals)} chars)\n{current_goals}",
+                    "## Recent observations\n"
+                    + ("\n".join(
+                        f"- {item.get('summary') or item.get('kind') or 'observation'}"
+                        for item in recent_observations
+                    ) or "(none)"),
+                    "## Recent diff insights\n"
+                    + ("\n".join(
+                        f"- {item.get('summary') or item.get('kind') or 'change'}"
+                        for item in recent_diffs
+                    ) or "(none)"),
+                ]
+            )
+        file_context_text = "\n\n".join(file_context)
 
         # Phase 1: Analyze
-        phase1_prompt = f"## Conversation History\n{history_text}\n\n{file_context}"
+        phase1_prompt = f"## Conversation History\n{history_text}\n\n{file_context_text}"
 
         try:
             phase1_response = await self.provider.chat_with_retry(
@@ -495,7 +628,7 @@ class Dream:
             return False
 
         # Phase 2: Delegate to AgentRunner with read_file / edit_file
-        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{file_context}"
+        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{file_context_text}"
 
         tools = self._tools
         messages: list[dict[str, Any]] = [
@@ -529,7 +662,7 @@ class Dream:
             result = None
 
         # Build changelog from tool events
-        changelog: list[str] = []
+        changelog: list[str] = list(scheduler_audit_changes)
         if result and result.tool_events:
             for event in result.tool_events:
                 if event["status"] == "ok":

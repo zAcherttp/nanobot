@@ -12,9 +12,16 @@ from typing import Any, Literal
 
 from loguru import logger
 from pydantic import Field
-from telegram import BotCommand, ReactionTypeEmoji, ReplyParameters, Update
+from telegram import (
+    BotCommand,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReactionTypeEmoji,
+    ReplyParameters,
+    Update,
+)
 from telegram.error import BadRequest, NetworkError, TimedOut
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
@@ -245,6 +252,7 @@ class TelegramChannel(BaseChannel):
         self._bot_username: str | None = None
         self._stream_bufs: dict[str, _StreamBuf] = {}  # chat_id -> streaming state
         self._stream_draft_supported: bool | None = None
+        self._approval_prompt_requests: dict[tuple[str, int], str] = {}
 
     def is_allowed(self, sender_id: str) -> bool:
         """Extended id|username allowlist matching for Telegram."""
@@ -326,6 +334,12 @@ class TelegramChannel(BaseChannel):
                 self._forward_command,
             )
         )
+        self._app.add_handler(
+            CallbackQueryHandler(
+                self._on_callback_query,
+                pattern=r"^approval:(approve_once|approve_always|deny):[A-Za-z0-9_-]+$",
+            )
+        )
         self._app.add_handler(MessageHandler(filters.Regex(r"^/help(?:@\w+)?$"), self._on_help))
 
         # Add message handler for text, photos, voice, documents, and locations
@@ -357,7 +371,7 @@ class TelegramChannel(BaseChannel):
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
             drop_pending_updates=False,  # Process pending messages on startup
             error_callback=self._on_polling_error,
         )
@@ -488,14 +502,18 @@ class TelegramChannel(BaseChannel):
         # Send text content
         if msg.content and msg.content != "[empty message]":
             render_as_blockquote = bool(msg.metadata.get("_tool_hint"))
-            for chunk in split_message(msg.content, TELEGRAM_MAX_MESSAGE_LEN):
-                await self._send_text(
+            reply_markup = self._reply_markup_from_actions(msg.metadata.get("actions"))
+            for idx, chunk in enumerate(split_message(msg.content, TELEGRAM_MAX_MESSAGE_LEN)):
+                sent = await self._send_text(
                     chat_id,
                     chunk,
                     reply_params,
                     thread_kwargs,
                     render_as_blockquote=render_as_blockquote,
+                    reply_markup=reply_markup if idx == 0 else None,
                 )
+                if idx == 0:
+                    self._remember_approval_prompt(msg, sent)
 
     async def _call_with_retry(self, fn, *args, **kwargs):
         """Call an async Telegram API function with retry on pool/network timeout and RetryAfter."""
@@ -534,7 +552,8 @@ class TelegramChannel(BaseChannel):
         reply_params=None,
         thread_kwargs: dict | None = None,
         render_as_blockquote: bool = False,
-    ) -> None:
+        reply_markup=None,
+    ):
         """Send a plain text message with HTML fallback."""
         try:
             html = (
@@ -542,27 +561,63 @@ class TelegramChannel(BaseChannel):
                 if render_as_blockquote
                 else _markdown_to_telegram_html(text)
             )
-            await self._call_with_retry(
+            return await self._call_with_retry(
                 self._app.bot.send_message,
                 chat_id=chat_id,
                 text=html,
                 parse_mode="HTML",
                 reply_parameters=reply_params,
+                reply_markup=reply_markup,
                 **(thread_kwargs or {}),
             )
         except Exception as e:
             logger.warning("HTML parse failed, falling back to plain text: {}", e)
             try:
-                await self._call_with_retry(
+                return await self._call_with_retry(
                     self._app.bot.send_message,
                     chat_id=chat_id,
                     text=text,
                     reply_parameters=reply_params,
+                    reply_markup=reply_markup,
                     **(thread_kwargs or {}),
                 )
             except Exception as e2:
                 logger.error("Error sending Telegram message: {}", e2)
                 raise
+
+    @staticmethod
+    def _reply_markup_from_actions(actions) -> InlineKeyboardMarkup | None:
+        if not isinstance(actions, list) or not actions:
+            return None
+        buttons: list[list[InlineKeyboardButton]] = []
+        for item in actions:
+            if not isinstance(item, dict) or item.get("kind") != "approval":
+                continue
+            action = item.get("action")
+            request_id = item.get("request_id")
+            label = item.get("label")
+            if not all(isinstance(value, str) and value for value in (action, request_id, label)):
+                continue
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=label,
+                        callback_data=f"approval:{action}:{request_id}",
+                    )
+                ]
+            )
+        return InlineKeyboardMarkup(buttons) if buttons else None
+
+    def _remember_approval_prompt(self, msg: OutboundMessage, sent) -> None:
+        if sent is None or not isinstance(msg.metadata.get("actions"), list):
+            return
+        actions = msg.metadata.get("actions") or []
+        for item in actions:
+            if isinstance(item, dict) and item.get("kind") == "approval" and item.get("request_id"):
+                self._approval_prompt_requests[(msg.chat_id, sent.message_id)] = str(item["request_id"])
+                if len(self._approval_prompt_requests) > 1000:
+                    self._approval_prompt_requests.pop(next(iter(self._approval_prompt_requests)))
+                return
 
     @staticmethod
     def _is_not_modified_error(exc: Exception) -> bool:
@@ -786,6 +841,34 @@ class TelegramChannel(BaseChannel):
         if not update.message:
             return
         await update.message.reply_text(build_help_text())
+
+    async def _on_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Forward approval button callbacks into the shared inbound pipeline."""
+        query = getattr(update, "callback_query", None)
+        user = getattr(update, "effective_user", None)
+        message = getattr(query, "message", None)
+        if query is None or user is None or message is None:
+            return
+        data = getattr(query, "data", "") or ""
+        match = re.match(r"^approval:(approve_once|approve_always|deny):([A-Za-z0-9_-]+)$", data)
+        if match is None:
+            return
+        action, request_id = match.groups()
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        self._remember_thread_context(message)
+        metadata = self._build_message_metadata(message, user)
+        metadata["approval_action"] = action
+        metadata["approval_request_id"] = request_id
+        await self._handle_message(
+            sender_id=self._sender_id(user),
+            chat_id=str(message.chat_id),
+            content="",
+            metadata=metadata,
+            session_key=self._derive_topic_session_key(message),
+        )
 
     @staticmethod
     def _sender_id(user) -> str:
@@ -1053,6 +1136,11 @@ class TelegramChannel(BaseChannel):
 
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)
+        reply_to_message_id = metadata.get("reply_to_message_id")
+        if isinstance(reply_to_message_id, int):
+            request_id = self._approval_prompt_requests.get((str_chat_id, reply_to_message_id))
+            if request_id:
+                metadata["approval_request_id"] = request_id
         session_key = self._derive_topic_session_key(message)
 
         # Telegram media groups: buffer briefly, forward as one aggregated turn.

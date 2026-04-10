@@ -13,3 +13,7 @@ Use this file for active scheduler-facing goals and planning constraints.
 ## Protected Anchors
 
 (Fixed commitments, non-movable blocks, and hard constraints)
+
+## Recent External Changes
+
+(Dream-managed summary of reconciled manual calendar or task edits)

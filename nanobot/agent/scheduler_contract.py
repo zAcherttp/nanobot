@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from nanobot.agent.scheduler_state import diff_insights_path, memory_dir, read_jsonl_tail, read_text
+
 PlannerStatus = Literal[
     "done",
     "needs_approval",
@@ -24,41 +26,11 @@ _VALID_PLANNER_STATUSES = frozenset(
     {"done", "needs_approval", "needs_clarification", "schedule_followup", "blocked"}
 )
 
-
-def _read_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return ""
-
-
 def _truncate_text(value: str, limit: int) -> str:
     text = value.strip()
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 17)].rstrip() + "\n...[truncated]"
-
-
-def _read_jsonl_tail(path: Path, limit: int) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(payload, dict):
-                    items.append(payload)
-    except FileNotFoundError:
-        return []
-    if limit <= 0:
-        return []
-    return items[-limit:]
-
 
 def _render_record_lines(items: list[dict[str, Any]], *, fallback_title: str) -> str:
     if not items:
@@ -131,19 +103,19 @@ def build_planning_snapshot(
 ) -> PlanningSnapshot:
     """Load a compact scheduler planning snapshot from workspace files."""
 
-    memory_dir = workspace / "memory"
+    scheduler_memory_dir = memory_dir(workspace)
     return PlanningSnapshot(
-        user_profile=_truncate_text(_read_text(workspace / "USER.md"), max_profile_chars),
-        goals=_truncate_text(_read_text(workspace / "GOALS.md"), max_goals_chars),
+        user_profile=_truncate_text(read_text(workspace / "USER.md").strip(), max_profile_chars),
+        goals=_truncate_text(read_text(workspace / "GOALS.md").strip(), max_goals_chars),
         operational_memory=_truncate_text(
-            _read_text(memory_dir / "MEMORY.md"),
+            read_text(scheduler_memory_dir / "MEMORY.md").strip(),
             max_memory_chars,
         ),
         recent_observations=tuple(
-            _read_jsonl_tail(memory_dir / "observations.jsonl", observation_limit)
+            read_jsonl_tail(scheduler_memory_dir / "observations.jsonl", observation_limit)
         ),
         recent_diff_insights=tuple(
-            _read_jsonl_tail(memory_dir / "diff_insights.jsonl", diff_limit)
+            read_jsonl_tail(diff_insights_path(workspace), diff_limit)
         ),
     )
 

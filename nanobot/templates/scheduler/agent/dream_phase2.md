@@ -4,6 +4,7 @@ Update scheduler memory files based on the analysis below.
 - SOUL.md
 - USER.md
 - memory/MEMORY.md
+- GOALS.md
 
 ## Editing rules
 - Make surgical edits only
@@ -16,3 +17,5 @@ Update scheduler memory files based on the analysis below.
 - Prefer durable heuristics over one-off events
 - Keep entries concise and scheduling-relevant
 - Preserve clear headers and readable bullet lists
+- Promote repeated patterns as low-confidence hypotheses before stronger claims
+- Record recent external calendar/task changes as planning signals, not as direct schedule rewrites

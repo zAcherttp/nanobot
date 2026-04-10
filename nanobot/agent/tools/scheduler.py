@@ -8,6 +8,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from nanobot.agent.scheduler_state import (
+    append_jsonl,
+    diff_insights_path,
+    load_sync_state,
+    memory_dir,
+    observations_path,
+    read_jsonl,
+    read_jsonl_tail,
+    read_text,
+    reconcile_external_changes,
+    sync_state_path,
+    utc_now_iso,
+)
 from nanobot.agent.tools.base import Tool, tool_parameters
 from nanobot.agent.tools.schema import (
     ArraySchema,
@@ -31,11 +44,6 @@ def _parse_datetime(value: str) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
 
 @dataclass(frozen=True, slots=True)
 class _ScheduledItem:
@@ -104,41 +112,22 @@ _OBSERVATION_SCHEMA = ObjectSchema(
     ),
     required=["kind", "summary", "source"],
 )
+_GENERIC_OBJECT_SCHEMA = ObjectSchema(additional_properties=True)
 
 
 class _SchedulerTool(Tool):
     def __init__(self, workspace: Path):
         self._workspace = workspace
-        self._memory_dir = workspace / "memory"
-        self._observations_path = self._memory_dir / "observations.jsonl"
+        self._memory_dir = memory_dir(workspace)
+        self._observations_path = observations_path(workspace)
+        self._diff_insights_path = diff_insights_path(workspace)
+        self._sync_state_path = sync_state_path(workspace)
         self._memory_path = self._memory_dir / "MEMORY.md"
         self._user_path = workspace / "USER.md"
         self._goals_path = workspace / "GOALS.md"
 
-    @staticmethod
-    def _read_text(path: Path) -> str:
-        try:
-            return path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return ""
-
     def _read_observations(self) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        try:
-            with self._observations_path.open("r", encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        payload = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(payload, dict):
-                        items.append(payload)
-        except FileNotFoundError:
-            return []
-        return items
+        return read_jsonl(self._observations_path)
 
     def _next_cursor(self) -> int:
         items = self._read_observations()
@@ -165,14 +154,13 @@ class SchedulerRecordObservationTool(_SchedulerTool):
 
     async def execute(self, observation: dict[str, Any], **kwargs: Any) -> str:
         self._memory_dir.mkdir(parents=True, exist_ok=True)
-        cursor = self._next_cursor()
-        entry = {
-            "cursor": cursor,
-            "timestamp": _utc_now_iso(),
-            **observation,
-        }
-        with self._observations_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        cursor = append_jsonl(
+            self._observations_path,
+            {
+                "timestamp": utc_now_iso(),
+                **observation,
+            },
+        )
         return _compact_json(
             {
                 "cursor": cursor,
@@ -190,6 +178,18 @@ class SchedulerRecordObservationTool(_SchedulerTool):
             StringSchema("Observation kind"),
             description="Optional allowed observation kinds",
             nullable=True,
+        ),
+        include_diff_insights=BooleanSchema(
+            description="Include recent external diff insights", default=True
+        ),
+        limit_diff_insights=IntegerSchema(
+            description="Maximum diff insights to return",
+            minimum=1,
+            maximum=200,
+            nullable=True,
+        ),
+        include_sync_state=BooleanSchema(
+            description="Include scheduler sync state metadata", default=True
         ),
         limit_observations=IntegerSchema(
             description="Maximum observations to return",
@@ -218,6 +218,9 @@ class SchedulerRecallContextTool(_SchedulerTool):
         query: str | None = None,
         scope: str | None = None,
         kinds: list[str] | None = None,
+        include_diff_insights: bool = True,
+        limit_diff_insights: int | None = None,
+        include_sync_state: bool = True,
         limit_observations: int | None = None,
         include_goals: bool = True,
         **kwargs: Any,
@@ -239,14 +242,105 @@ class SchedulerRecallContextTool(_SchedulerTool):
             if limit_observations is not None and len(filtered) >= limit_observations:
                 break
 
+        diff_insights: list[dict[str, Any]] = []
+        if include_diff_insights:
+            for item in reversed(read_jsonl(self._diff_insights_path)):
+                haystack = json.dumps(item, ensure_ascii=False).lower()
+                if query_lower and query_lower not in haystack:
+                    continue
+                if scope and item.get("scope") not in (None, scope):
+                    continue
+                diff_insights.append(item)
+                if limit_diff_insights is not None and len(diff_insights) >= limit_diff_insights:
+                    break
+
         return _compact_json(
             {
-                "goals": self._read_text(self._goals_path) if include_goals and self._goals_path.exists() else None,
+                "diff_insights": list(reversed(diff_insights)),
+                "goals": read_text(self._goals_path) if include_goals and self._goals_path.exists() else None,
                 "observations": list(reversed(filtered)),
-                "operational_memory": self._read_text(self._memory_path),
-                "user_profile": self._read_text(self._user_path),
+                "operational_memory": read_text(self._memory_path),
+                "sync_state": load_sync_state(self._workspace) if include_sync_state else None,
+                "user_profile": read_text(self._user_path),
             }
         )
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        source=StringSchema("External source name", enum=["calendar", "tasks"]),
+        scope=StringSchema("Optional scope label", nullable=True),
+        cursor=_GENERIC_OBJECT_SCHEMA,
+        changes=ArraySchema(
+            _GENERIC_OBJECT_SCHEMA,
+            description="Raw external delta items to condense into local diff insights",
+            nullable=True,
+        ),
+        max_insights=IntegerSchema(
+            description="Maximum changes to condense into new insights",
+            minimum=1,
+            maximum=100,
+            nullable=True,
+        ),
+        required=["source"],
+    )
+)
+class SchedulerReconcileExternalChangesTool(_SchedulerTool):
+    @property
+    def name(self) -> str:
+        return "scheduler_reconcile_external_changes"
+
+    @property
+    def description(self) -> str:
+        return "Persist compact scheduler diff insights and sync cursors for external calendar/task changes."
+
+    async def execute(
+        self,
+        source: str,
+        scope: str | None = None,
+        cursor: dict[str, Any] | None = None,
+        changes: list[dict[str, Any]] | None = None,
+        max_insights: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        return _compact_json(
+            reconcile_external_changes(
+                self._workspace,
+                source=source,
+                scope=scope,
+                cursor=cursor,
+                changes=changes,
+                max_insights=max_insights or 20,
+            )
+        )
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        source=StringSchema("Optional source filter", enum=["calendar", "tasks"], nullable=True),
+    )
+)
+class SchedulerGetSyncStateTool(_SchedulerTool):
+    @property
+    def name(self) -> str:
+        return "scheduler_get_sync_state"
+
+    @property
+    def description(self) -> str:
+        return "Read scheduler-local sync cursors and reconciliation state."
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(self, source: str | None = None, **kwargs: Any) -> str:
+        state = load_sync_state(self._workspace)
+        if source:
+            state = {
+                "dream": state.get("dream", {}),
+                "sources": {source: state.get("sources", {}).get(source, {})},
+            }
+        return _compact_json(state)
 
 
 @tool_parameters(
@@ -519,5 +613,7 @@ def build_scheduler_tools(workspace: Path) -> list[Tool]:
     return [
         SchedulerRecordObservationTool(workspace),
         SchedulerRecallContextTool(workspace),
+        SchedulerReconcileExternalChangesTool(workspace),
+        SchedulerGetSyncStateTool(workspace),
         SchedulerReflowTimespanTool(workspace),
     ]

@@ -773,8 +773,13 @@ def gateway(
         """Pick a routable channel/chat target for heartbeat-triggered messages."""
         enabled = set(channels.enabled_channels)
         # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
+        candidates: list[dict[str, object]] = []
+        for mode_name in ModeRegistry().names():
+            runtime_sessions = agent._runtime_for_mode(mode_name).sessions
+            candidates.extend(runtime_sessions.list_sessions())
+        candidates.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        for item in candidates:
+            key = str(item.get("key") or "")
             if ":" not in key:
                 continue
             channel, chat_id = key.split(":", 1)
@@ -785,54 +790,56 @@ def gateway(
         # Fallback keeps prior behavior but remains explicit.
         return "cli", "direct"
 
-    # Create heartbeat service
-    async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop."""
-        channel, chat_id = _pick_heartbeat_target()
-
-        async def _silent(*_args, **_kwargs):
-            pass
-
-        resp = await agent.process_direct(
-            tasks,
-            session_key=f"heartbeat:{DEFAULT_MODE}",
-            channel=channel,
-            chat_id=chat_id,
-            mode=DEFAULT_MODE,
-            on_progress=_silent,
-        )
-
-        # Keep a small tail of heartbeat history so the loop stays bounded
-        # without losing all short-term context between runs.
-        runtime = agent._runtime_for_mode(DEFAULT_MODE)
-        session = runtime.sessions.get_or_create(f"heartbeat:{DEFAULT_MODE}")
-        session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
-        runtime.sessions.save(session)
-
-        return resp.content if resp else ""
-
-    async def on_heartbeat_notify(response: str) -> None:
-        """Deliver a heartbeat response to the user's channel."""
-        from nanobot.bus.events import OutboundMessage
-
-        channel, chat_id = _pick_heartbeat_target()
-        if channel == "cli":
-            return  # No external channel available to deliver to
-        await bus.publish_outbound(
-            OutboundMessage(channel=channel, chat_id=chat_id, content=response)
-        )
-
     hb_cfg = config.gateway.heartbeat
-    heartbeat = HeartbeatService(
-        workspace=ModeRegistry().workspace_path(config.workspace_path, DEFAULT_MODE),
-        provider=provider,
-        model=agent.model,
-        on_execute=on_heartbeat_execute,
-        on_notify=on_heartbeat_notify,
-        interval_s=hb_cfg.interval_s,
-        enabled=hb_cfg.enabled,
-        timezone=config.agents.defaults.timezone,
-    )
+    heartbeat_services: dict[str, HeartbeatService] = {}
+    for mode_name in ModeRegistry().names():
+
+        async def on_heartbeat_execute(tasks: str, *, _mode: str = mode_name) -> str:
+            """Phase 2: execute heartbeat tasks through the full agent loop."""
+            channel, chat_id = _pick_heartbeat_target()
+
+            async def _silent(*_args, **_kwargs):
+                pass
+
+            resp = await agent.process_direct(
+                tasks,
+                session_key=f"heartbeat:{_mode}",
+                channel=channel,
+                chat_id=chat_id,
+                mode=_mode,
+                on_progress=_silent,
+            )
+
+            runtime = agent._runtime_for_mode(_mode)
+            session = runtime.sessions.get_or_create(f"heartbeat:{_mode}")
+            session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
+            runtime.sessions.save(session)
+
+            return resp.content if resp else ""
+
+        async def on_heartbeat_notify(response: str, *, _mode: str = mode_name) -> None:
+            """Deliver a heartbeat response to the user's channel."""
+            from nanobot.bus.events import OutboundMessage
+
+            _ = _mode
+            channel, chat_id = _pick_heartbeat_target()
+            if channel == "cli":
+                return
+            await bus.publish_outbound(
+                OutboundMessage(channel=channel, chat_id=chat_id, content=response)
+            )
+
+        heartbeat_services[mode_name] = HeartbeatService(
+            workspace=ModeRegistry().workspace_path(config.workspace_path, mode_name),
+            provider=provider,
+            model=agent.model,
+            on_execute=on_heartbeat_execute,
+            on_notify=on_heartbeat_notify,
+            interval_s=hb_cfg.interval_s,
+            enabled=hb_cfg.enabled,
+            timezone=config.agents.defaults.timezone,
+            mode=mode_name,
+        )
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
@@ -843,7 +850,10 @@ def gateway(
     if cron_job_count > 0:
         console.print(f"[green]✓[/green] Cron: {cron_job_count} scheduled jobs")
 
-    console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
+    console.print(
+        f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s "
+        f"({', '.join(heartbeat_services)})"
+    )
 
     # Register Dream system job (always-on, idempotent on restart)
     dream_cfg = config.agents.defaults.dream
@@ -869,7 +879,8 @@ def gateway(
         try:
             for cron in cron_services.values():
                 await cron.start()
-            await heartbeat.start()
+            for heartbeat in heartbeat_services.values():
+                await heartbeat.start()
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -883,7 +894,8 @@ def gateway(
             console.print(traceback.format_exc())
         finally:
             await agent.close_mcp()
-            heartbeat.stop()
+            for heartbeat in heartbeat_services.values():
+                heartbeat.stop()
             for cron in cron_services.values():
                 cron.stop()
             agent.stop()

@@ -98,3 +98,59 @@ class TestDreamRun:
         # After Dream, cursor is advanced and 3, compact keeps last max_history_entries
         entries = store.read_unprocessed_history(since_cursor=0)
         assert all(e["cursor"] > 0 for e in entries)
+
+    async def test_scheduler_audit_promotes_repeated_behavior_as_low_confidence_hypothesis(
+        self, tmp_path, mock_provider, mock_runner
+    ):
+        store = MemoryStore(tmp_path)
+        (tmp_path / "USER.md").write_text(
+            "# Behavioral Profile\n\n## Signals\n\n(none)\n\n## Learned Hypotheses\n\n(none yet)\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "GOALS.md").write_text(
+            "# Active Goals\n\n## Recent External Changes\n\n(none yet)\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "memory" / "observations.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"cursor":1,"timestamp":"2026-04-10T01:00:00Z","summary":"Afternoon admin keeps getting deferred","kind":"pattern","source":"chat"}',
+                    '{"cursor":2,"timestamp":"2026-04-11T01:00:00Z","summary":"Afternoon admin keeps getting deferred","kind":"pattern","source":"chat"}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        dream = Dream(store=store, provider=mock_provider, model="test-model", mode="scheduler")
+        dream._runner = mock_runner
+
+        result = await dream.run()
+
+        assert result is True
+        assert "Low confidence: Afternoon admin keeps getting deferred" in store.read_user()
+        mock_provider.chat_with_retry.assert_not_called()
+        mock_runner.run.assert_not_called()
+
+    async def test_scheduler_audit_updates_goals_from_reconciled_external_changes(
+        self, tmp_path, mock_provider, mock_runner
+    ):
+        store = MemoryStore(tmp_path)
+        (tmp_path / "USER.md").write_text("# Behavioral Profile\n", encoding="utf-8")
+        (tmp_path / "GOALS.md").write_text(
+            "# Active Goals\n\n## Recent External Changes\n\n(none yet)\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "memory" / "diff_insights.jsonl").write_text(
+            '{"cursor":1,"timestamp":"2026-04-10T02:00:00Z","summary":"Calendar event \'Review\' now appears at 2026-04-12T09:00:00+07:00.","source":"calendar"}\n',
+            encoding="utf-8",
+        )
+        dream = Dream(store=store, provider=mock_provider, model="test-model", mode="scheduler")
+        dream._runner = mock_runner
+
+        result = await dream.run()
+
+        assert result is True
+        assert "Calendar event 'Review' now appears at 2026-04-12T09:00:00+07:00." in (
+            (tmp_path / "GOALS.md").read_text(encoding="utf-8")
+        )

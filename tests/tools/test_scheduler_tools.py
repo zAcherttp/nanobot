@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from nanobot.agent.tools.scheduler import (
+    SchedulerGetSyncStateTool,
     SchedulerRecallContextTool,
+    SchedulerReconcileExternalChangesTool,
     SchedulerRecordObservationTool,
     SchedulerReflowTimespanTool,
 )
@@ -88,6 +90,68 @@ async def test_scheduler_recall_context_filters_observations_without_mutation(tm
     assert len(payload["observations"]) == 1
     assert payload["observations"][0]["cursor"] == 2
     assert (tmp_path / "USER.md").read_text(encoding="utf-8") == before_user
+
+
+@pytest.mark.asyncio
+async def test_scheduler_reconcile_external_changes_writes_diff_insights_and_sync_state(
+    tmp_path: Path,
+) -> None:
+    tool = SchedulerReconcileExternalChangesTool(tmp_path)
+
+    result = await tool.execute(
+        source="calendar",
+        scope="primary",
+        cursor={"sync_token": "sync-123"},
+        changes=[
+            {
+                "id": "evt-1",
+                "summary": "Review block",
+                "start": {"dateTime": "2026-04-11T09:00:00+07:00"},
+                "updated": "2026-04-10T08:00:00Z",
+            },
+            {
+                "id": "evt-1",
+                "summary": "Review block",
+                "start": {"dateTime": "2026-04-11T09:00:00+07:00"},
+                "updated": "2026-04-10T08:00:00Z",
+            },
+        ],
+    )
+    payload = json.loads(result)
+
+    assert payload["recorded_count"] == 1
+    assert payload["skipped_count"] == 1
+    diff_lines = (tmp_path / "memory" / "diff_insights.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(diff_lines) == 1
+    diff_entry = json.loads(diff_lines[0])
+    assert diff_entry["source"] == "calendar"
+    assert "Review block" in diff_entry["summary"]
+
+    sync_state = json.loads((tmp_path / "memory" / "sync_state.json").read_text(encoding="utf-8"))
+    assert sync_state["sources"]["calendar"]["cursor"]["sync_token"] == "sync-123"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_get_sync_state_filters_by_source(tmp_path: Path) -> None:
+    (tmp_path / "memory").mkdir(parents=True)
+    (tmp_path / "memory" / "sync_state.json").write_text(
+        json.dumps(
+            {
+                "dream": {"last_audited_at": "2026-04-10T01:00:00Z"},
+                "sources": {
+                    "calendar": {"cursor": {"sync_token": "one"}},
+                    "tasks": {"cursor": {"updated_min": "2026-04-10T00:00:00Z"}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    tool = SchedulerGetSyncStateTool(tmp_path)
+
+    payload = json.loads(await tool.execute(source="tasks"))
+
+    assert "calendar" not in payload["sources"]
+    assert payload["sources"]["tasks"]["cursor"]["updated_min"] == "2026-04-10T00:00:00Z"
 
 
 @pytest.mark.asyncio
@@ -200,6 +264,8 @@ def test_scheduler_mode_registers_tasks_and_scheduler_primitives(tmp_path: Path)
     assert "mcp_gws_tasks_create_task" in scheduler_tools
     assert "scheduler_record_observation" in scheduler_tools
     assert "scheduler_recall_context" in scheduler_tools
+    assert "scheduler_reconcile_external_changes" in scheduler_tools
+    assert "scheduler_get_sync_state" in scheduler_tools
     assert "scheduler_reflow_timespan" in scheduler_tools
     assert "mcp_gws_tasks_list_tasks" not in general_tools
     assert "scheduler_record_observation" not in general_tools

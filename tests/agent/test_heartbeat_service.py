@@ -297,3 +297,88 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
     user_msg = captured_messages[1]
     assert user_msg["role"] == "user"
     assert "Current Time:" in user_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_mode_uses_scheduler_decision_prompt(tmp_path) -> None:
+    captured_messages: list[dict] = []
+
+    class CapturingProvider(LLMProvider):
+        async def chat(self, *, messages=None, **kwargs) -> LLMResponse:
+            if messages:
+                captured_messages.extend(messages)
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="hb_1",
+                        name="heartbeat",
+                        arguments={"action": "skip"},
+                    )
+                ],
+            )
+
+        def get_default_model(self) -> str:
+            return "test-model"
+
+    service = HeartbeatService(
+        workspace=tmp_path,
+        provider=CapturingProvider(),
+        model="test-model",
+        mode="scheduler",
+    )
+
+    await service._decide("- [ ] audit schedule drift")
+
+    system_msg = captured_messages[0]
+    assert system_msg["role"] == "system"
+    assert "scheduler heartbeat agent" in system_msg["content"]
+    assert "Never assume permission to apply external changes directly" in system_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_tick_passes_scheduler_mode_to_evaluator(tmp_path, monkeypatch) -> None:
+    (tmp_path / "HEARTBEAT.md").write_text("- [ ] audit workload risk", encoding="utf-8")
+
+    provider = DummyProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="hb_1",
+                        name="heartbeat",
+                        arguments={"action": "run", "tasks": "audit workload risk"},
+                    )
+                ],
+            ),
+        ]
+    )
+    seen_modes: list[str] = []
+    notified: list[str] = []
+
+    async def _execute(tasks: str) -> str:
+        return "Need to reduce tomorrow's load."
+
+    async def _notify(response: str) -> None:
+        notified.append(response)
+
+    async def _eval(response, task_context, provider, model, mode="general"):
+        seen_modes.append(mode)
+        return True
+
+    monkeypatch.setattr("nanobot.utils.evaluator.evaluate_response", _eval)
+
+    service = HeartbeatService(
+        workspace=tmp_path,
+        provider=provider,
+        model="openai/gpt-4o-mini",
+        on_execute=_execute,
+        on_notify=_notify,
+        mode="scheduler",
+    )
+
+    await service._tick()
+
+    assert seen_modes == ["scheduler"]
+    assert notified == ["Need to reduce tomorrow's load."]

@@ -163,3 +163,31 @@ async def test_process_message_propagates_planner_metadata(tmp_path: Path) -> No
     assert response is not None
     assert response.metadata["_planner_status"] == "needs_approval"
     assert response.metadata["_planner_approval_family"] == "timespan_apply"
+
+
+@pytest.mark.asyncio
+async def test_process_message_propagates_done_status(tmp_path: Path) -> None:
+    from nanobot.agent.loop import _LoopRunResult
+
+    loop, _ = _make_loop(tmp_path)
+    loop._run_agent_loop = AsyncMock(
+        return_value=_LoopRunResult(
+            final_content="The task block already fits your schedule.",
+            tools_used=[],
+            messages=[{"role": "assistant", "content": "The task block already fits your schedule."}],
+            stop_reason="completed",
+            planner_decision=PlannerDecision(
+                status="done",
+                summary="No further action needed",
+            ),
+        )
+    )
+
+    response = await loop._process_message(
+        InboundMessage(channel="telegram", sender_id="u1", chat_id="chat", content="is this okay?"),
+        session_key="telegram:chat",
+        mode="scheduler",
+    )
+
+    assert response is not None
+    assert response.metadata["_planner_status"] == "done"

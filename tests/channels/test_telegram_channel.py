@@ -172,6 +172,28 @@ def _make_telegram_update(
     return SimpleNamespace(message=message, effective_user=user)
 
 
+def _make_callback_update(*, data: str, chat_id: int = -100123, message_id: int = 7):
+    user = SimpleNamespace(id=12345, username="alice", first_name="Alice")
+    answers: list[bool] = []
+
+    async def _answer():
+        answers.append(True)
+
+    message = SimpleNamespace(
+        chat=SimpleNamespace(type="group", is_forum=False),
+        chat_id=chat_id,
+        message_id=message_id,
+        message_thread_id=None,
+        reply_to_message=None,
+        text="approval prompt",
+        caption=None,
+    )
+    query = SimpleNamespace(data=data, message=message, answer=_answer)
+    update = SimpleNamespace(callback_query=query, effective_user=user)
+    update._answers = answers
+    return update
+
+
 @pytest.mark.asyncio
 async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     _FakeHTTPXRequest.clear()
@@ -611,6 +633,95 @@ async def test_forward_command_routes_mode_with_bot_suffix() -> None:
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
         MessageBus(),
     )
+
+
+@pytest.mark.asyncio
+async def test_send_approval_actions_renders_inline_keyboard() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    await channel.send(
+        OutboundMessage(
+            channel="telegram",
+            chat_id="123",
+            content="Approval required",
+            metadata={
+                "actions": [
+                    {
+                        "kind": "approval",
+                        "action": "approve_once",
+                        "request_id": "req123",
+                        "label": "Approve once",
+                    },
+                    {
+                        "kind": "approval",
+                        "action": "deny",
+                        "request_id": "req123",
+                        "label": "Deny",
+                    },
+                ]
+            },
+        )
+    )
+
+    sent = channel._app.bot.sent_messages[0]
+    markup = sent["reply_markup"]
+    assert markup is not None
+    assert markup.inline_keyboard[0][0].callback_data == "approval:approve_once:req123"
+    assert markup.inline_keyboard[1][0].callback_data == "approval:deny:req123"
+    assert channel._approval_prompt_requests[("123", 1)] == "req123"
+
+
+@pytest.mark.asyncio
+async def test_on_callback_query_forwards_approval_metadata() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._handle_message = AsyncMock()
+    update = _make_callback_update(data="approval:approve_once:req123")
+
+    await channel._on_callback_query(update, SimpleNamespace())
+
+    channel._handle_message.assert_awaited_once_with(
+        sender_id="12345|alice",
+        chat_id="-100123",
+        content="",
+        metadata={
+            "message_id": 7,
+            "user_id": 12345,
+            "username": "alice",
+            "first_name": "Alice",
+            "is_group": True,
+            "message_thread_id": None,
+            "is_forum": False,
+            "reply_to_message_id": None,
+            "approval_action": "approve_once",
+            "approval_request_id": "req123",
+        },
+        session_key=None,
+    )
+    assert update._answers == [True]
+
+
+@pytest.mark.asyncio
+async def test_reply_to_approval_prompt_tags_request_id() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        MessageBus(),
+    )
+    channel._handle_message = AsyncMock()
+    channel._approval_prompt_requests[("-100123", 88)] = "req123"
+    reply = SimpleNamespace(message_id=88, text="Approval required", caption=None, from_user=None)
+    update = _make_telegram_update(text="approve", reply_to_message=reply)
+
+    await channel._on_message(update, SimpleNamespace())
+
+    metadata = channel._handle_message.await_args.kwargs["metadata"]
+    assert metadata["approval_request_id"] == "req123"
     channel._handle_message = AsyncMock()
     update = _make_telegram_update(text="/mode@nanobot_test scheduler")
 

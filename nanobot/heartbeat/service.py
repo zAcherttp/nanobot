@@ -60,6 +60,7 @@ class HeartbeatService:
         interval_s: int = 30 * 60,
         enabled: bool = True,
         timezone: str | None = None,
+        mode: str = "general",
     ):
         self.workspace = workspace
         self.provider = provider
@@ -69,6 +70,7 @@ class HeartbeatService:
         self.interval_s = interval_s
         self.enabled = enabled
         self.timezone = timezone
+        self.mode = mode
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -91,11 +93,21 @@ class HeartbeatService:
         """
         from nanobot.utils.helpers import current_time_str
 
+        if self.mode == "scheduler":
+            system_prompt = (
+                "You are a scheduler heartbeat agent. Review scheduler heartbeat tasks and decide "
+                "whether a scheduler follow-up should run. Use `run` only for reminders, scheduling "
+                "drift, workload risk, or actionable planning checks. Never assume permission to apply "
+                "external changes directly."
+            )
+        else:
+            system_prompt = "You are a heartbeat agent. Call the heartbeat tool to report your decision."
+
         response = await self.provider.chat_with_retry(
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision.",
+                    "content": system_prompt,
                 },
                 {
                     "role": "user",
@@ -176,6 +188,7 @@ class HeartbeatService:
                         tasks,
                         self.provider,
                         self.model,
+                        mode=self.mode,
                     )
                     if should_notify and self.on_notify:
                         logger.info("Heartbeat: completed, delivering response")
