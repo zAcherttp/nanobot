@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from nanobot.agent.scheduler_contract import ProposalBundle, _parse_proposal_bundle
+from nanobot.agent.scheduler_executor import SchedulerBundleExecutor
 from nanobot.agent.scheduler_state import (
     append_jsonl,
     diff_insights_path,
@@ -135,6 +137,42 @@ class _SchedulerTool(Tool):
             return 1
         last = items[-1].get("cursor")
         return int(last) + 1 if isinstance(last, int) else len(items) + 1
+
+    @staticmethod
+    def _render_bundle_report(bundle: ProposalBundle, payload: dict[str, Any]) -> str:
+        completed = payload.get("completed") or []
+        failed = payload.get("failed") or []
+        skipped = payload.get("skipped") or []
+        lines = [
+            f"Applied scheduler proposal bundle `{bundle.bundle_id}`.",
+            f"Completed: {len(completed)}",
+            f"Failed: {len(failed)}",
+            f"Skipped: {len(skipped)}",
+            "Partial application: yes" if payload.get("partial_application") else "Partial application: no",
+        ]
+        if completed:
+            lines.append("Completed operations:")
+            lines.extend(
+                f"- {item.get('operation_id')}: {item.get('summary') or item.get('tool_name')}"
+                for item in completed
+            )
+        if failed:
+            lines.append("Failed operations:")
+            lines.extend(
+                f"- {item.get('operation_id')}: {item.get('detail') or item.get('tool_name')}"
+                for item in failed
+            )
+        if skipped:
+            lines.append("Skipped operations:")
+            lines.extend(
+                f"- {item.get('operation_id')}: {item.get('detail') or item.get('tool_name')}"
+                for item in skipped
+            )
+        recovery_steps = payload.get("recovery_steps") or []
+        if recovery_steps:
+            lines.append("Recovery:")
+            lines.extend(f"- {item}" for item in recovery_steps)
+        return "\n".join(lines)
 
 
 @tool_parameters(
@@ -341,6 +379,61 @@ class SchedulerGetSyncStateTool(_SchedulerTool):
                 "sources": {source: state.get("sources", {}).get(source, {})},
             }
         return _compact_json(state)
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        bundle=_GENERIC_OBJECT_SCHEMA,
+        required=["bundle"],
+    )
+)
+class SchedulerApplyProposalBundleTool(_SchedulerTool):
+    def __init__(self, workspace: Path):
+        super().__init__(workspace)
+        self._registry = None
+
+    @property
+    def name(self) -> str:
+        return "scheduler_apply_proposal_bundle"
+
+    @property
+    def description(self) -> str:
+        return "Apply an approved scheduler proposal bundle with deterministic best-effort execution."
+
+    @property
+    def approval_family(self) -> str | None:
+        return "timespan_apply"
+
+    def attach_registry(self, registry: Any) -> None:
+        self._registry = registry
+
+    def approval_scope_key(self, params: dict[str, Any]) -> str | None:
+        bundle = _parse_proposal_bundle(params.get("bundle"))
+        if bundle is None:
+            return self.name
+        return bundle.approval_scope_key
+
+    def build_approval_preview(self, params: dict[str, Any]) -> str:
+        bundle = _parse_proposal_bundle(params.get("bundle"))
+        if bundle is None:
+            return "Apply the proposed scheduler change bundle."
+        lines = [
+            f"Apply scheduler bundle '{bundle.summary or bundle.bundle_id}' ({bundle.bundle_id}).",
+        ]
+        if bundle.expected_side_effects:
+            lines.append("Expected effects: " + "; ".join(bundle.expected_side_effects))
+        for item in bundle.operations[:10]:
+            lines.append(f"- {item.summary or item.tool_name}")
+        return "\n".join(lines)
+
+    async def execute(self, bundle: dict[str, Any], **kwargs: Any) -> str:
+        parsed = _parse_proposal_bundle(bundle)
+        if parsed is None:
+            return "Error: invalid proposal bundle"
+        if self._registry is None:
+            return "Error: scheduler proposal executor is not attached to the runtime registry"
+        result = await SchedulerBundleExecutor(self._registry).execute_bundle(parsed)
+        return self._render_bundle_report(parsed, result.to_dict())
 
 
 @tool_parameters(
@@ -615,5 +708,6 @@ def build_scheduler_tools(workspace: Path) -> list[Tool]:
         SchedulerRecallContextTool(workspace),
         SchedulerReconcileExternalChangesTool(workspace),
         SchedulerGetSyncStateTool(workspace),
+        SchedulerApplyProposalBundleTool(workspace),
         SchedulerReflowTimespanTool(workspace),
     ]

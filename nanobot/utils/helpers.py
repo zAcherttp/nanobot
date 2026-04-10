@@ -446,6 +446,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
 
     try:
         tpl = pkg_files("nanobot") / "templates"
+        skills_pkg = pkg_files("nanobot") / "skills"
     except Exception:
         return []
     if not tpl.is_dir():
@@ -460,6 +461,18 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
         added.append(str(dest.relative_to(workspace)))
 
+    def _copy_skill_tree(src_dir, dest_dir: Path):
+        if dest_dir.exists():
+            return
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        for item in src_dir.iterdir():
+            target = dest_dir / item.name
+            if item.is_dir():
+                _copy_skill_tree(item, target)
+                continue
+            target.write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+            added.append(str(target.relative_to(workspace)))
+
     for mode in BUILTIN_MODES:
         mode_root = workspace / mode.name
         mode_tpl = tpl / mode.template_namespace
@@ -470,7 +483,13 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
                 _write(item, mode_root / item.name)
         _write(mode_tpl / "memory" / "MEMORY.md", mode_root / "memory" / "MEMORY.md")
         _write(None, mode_root / "memory" / "history.jsonl")
-        (mode_root / "skills").mkdir(parents=True, exist_ok=True)
+        skills_root = mode_root / "skills"
+        skills_root.mkdir(parents=True, exist_ok=True)
+        if skills_pkg.is_dir():
+            for skill_name in mode.default_skills:
+                skill_src = skills_pkg / skill_name
+                if skill_src.is_dir():
+                    _copy_skill_tree(skill_src, skills_root / skill_name)
 
     if added and not silent:
         from rich.console import Console

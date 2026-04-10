@@ -226,6 +226,7 @@ def _default_tool_permissions() -> dict[str, ApprovalPolicy]:
         "mcp_gws_tasks_move_task": "ask",
         "mcp_gws_tasks_delete_task": "ask",
         "mcp_gws_tasks_complete_task": "ask",
+        "scheduler_apply_proposal_bundle": "ask",
     }
 
 

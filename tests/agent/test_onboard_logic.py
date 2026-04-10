@@ -338,13 +338,38 @@ class TestSyncWorkspaceTemplates:
         assert (workspace / "general" / "memory").exists()
         assert (workspace / "scheduler" / "memory").exists()
 
+    def test_seeds_default_runtime_skills(self, tmp_path):
+        """Should copy curated default skill packs into each runtime workspace."""
+        workspace = tmp_path / "workspace"
+
+        sync_workspace_templates(workspace, silent=True)
+
+        assert (workspace / "general" / "skills" / "memory" / "SKILL.md").exists()
+        assert (workspace / "general" / "skills" / "github" / "SKILL.md").exists()
+        assert (workspace / "scheduler" / "skills" / "gws-calendar" / "SKILL.md").exists()
+        assert (workspace / "scheduler" / "skills" / "gws-tasks" / "SKILL.md").exists()
+
+    def test_does_not_overwrite_existing_seeded_skill(self, tmp_path):
+        """Should preserve customized workspace skill copies on subsequent syncs."""
+        workspace = tmp_path / "workspace"
+        skill_path = workspace / "general" / "skills" / "memory" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text("customized memory skill", encoding="utf-8")
+
+        sync_workspace_templates(workspace, silent=True)
+
+        assert skill_path.read_text(encoding="utf-8") == "customized memory skill"
+
     def test_returns_list_of_added_files(self, tmp_path):
         """Should return list of relative paths for added files."""
         workspace = tmp_path / "workspace"
 
         added = sync_workspace_templates(workspace, silent=True)
+        normalized = {Path(path).as_posix() for path in added}
 
         assert isinstance(added, list)
+        assert "general/skills/memory/SKILL.md" in normalized
+        assert "scheduler/skills/gws-calendar/SKILL.md" in normalized
         # All paths should be relative to workspace
         for path in added:
             assert not Path(path).is_absolute()

@@ -273,6 +273,7 @@ def test_default_permissions_include_calendar_and_tasks_scheduler_tools() -> Non
     assert permissions.tools["mcp_gws_calendar_update_event"] == "ask"
     assert permissions.tools["mcp_gws_tasks_list_tasks"] == "allow"
     assert permissions.tools["mcp_gws_tasks_create_task"] == "ask"
+    assert permissions.tools["scheduler_apply_proposal_bundle"] == "ask"
 
 
 def test_default_permissions_allow_task_reads_and_request_task_write_approval(tmp_path: Path) -> None:

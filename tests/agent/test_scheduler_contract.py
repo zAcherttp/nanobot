@@ -72,6 +72,19 @@ def test_parse_planner_decision_strips_trailing_tag() -> None:
     assert list(decision.proposed_changes) == ["Move review to Thursday"]
 
 
+def test_parse_planner_decision_reads_proposal_bundle() -> None:
+    visible, decision = parse_planner_decision(
+        "I can move the writing block.\n\n"
+        '<planner_decision>{"status":"needs_approval","summary":"Need approval to move the writing block","proposed_changes":["Move writing block to tomorrow morning"],"approval_family":"timespan_apply","follow_up_at":null,"blockers":[],"proposal_bundle":{"bundle_id":"bundle-1","summary":"Move writing block","approval_family":"timespan_apply","operations":[{"id":"op-1","tool_name":"mcp_gws_calendar_update_event","params":{"event_id":"evt-1","start_time":"2026-04-11T09:00:00+07:00","end_time":"2026-04-11T10:00:00+07:00"},"summary":"Move the writing block","depends_on":[]}],"expected_side_effects":["Calendar event will move"],"rollback_guidance":"Move the event back if needed."}}</planner_decision>'
+    )
+
+    assert visible == "I can move the writing block."
+    assert decision is not None
+    assert decision.proposal_bundle is not None
+    assert decision.proposal_bundle.bundle_id == "bundle-1"
+    assert decision.proposal_bundle.operations[0].tool_name == "mcp_gws_calendar_update_event"
+
+
 @pytest.mark.asyncio
 async def test_apply_scheduler_contract_rewrites_visible_content(tmp_path: Path) -> None:
     from nanobot.agent.loop import _LoopRunResult
@@ -100,6 +113,36 @@ async def test_apply_scheduler_contract_rewrites_visible_content(tmp_path: Path)
     assert updated.planner_decision is not None
     assert updated.planner_decision.status == "needs_approval"
     assert updated.messages[-1]["content"] == updated.final_content
+
+
+@pytest.mark.asyncio
+async def test_apply_scheduler_contract_creates_bundle_approval_request(tmp_path: Path) -> None:
+    from nanobot.agent.loop import _LoopRunResult
+
+    loop, _ = _make_loop(tmp_path)
+    runtime = loop._runtime_for_mode("scheduler")
+    raw = (
+        "I can move the writing block to tomorrow morning.\n\n"
+        '<planner_decision>{"status":"needs_approval","summary":"Need approval to move the writing block","proposed_changes":["Move writing block to tomorrow morning"],"approval_family":"timespan_apply","follow_up_at":null,"blockers":[],"proposal_bundle":{"bundle_id":"bundle-1","summary":"Move writing block","approval_family":"timespan_apply","operations":[{"id":"op-1","tool_name":"mcp_gws_calendar_update_event","params":{"event_id":"evt-1","start_time":"2026-04-11T09:00:00+07:00","end_time":"2026-04-11T10:00:00+07:00"},"summary":"Move the writing block","depends_on":[]}],"expected_side_effects":["Calendar event will move"],"rollback_guidance":"Move the event back if needed."}}</planner_decision>'
+    )
+    result = _LoopRunResult(
+        final_content=raw,
+        tools_used=[],
+        messages=[{"role": "assistant", "content": raw}],
+        stop_reason="completed",
+    )
+
+    updated = await loop._apply_scheduler_contract(
+        runtime,
+        result,
+        channel="telegram",
+        chat_id="chat",
+    )
+
+    assert updated.stop_reason == "approval_pending"
+    assert updated.approval_request is not None
+    assert updated.approval_request.tool_name == "scheduler_apply_proposal_bundle"
+    assert updated.approval_request.approval_family == "timespan_apply"
 
 
 @pytest.mark.asyncio

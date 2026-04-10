@@ -57,6 +57,8 @@ class HeartbeatService:
         model: str,
         on_execute: Callable[[str], Coroutine[Any, Any, str]] | None = None,
         on_notify: Callable[[str], Coroutine[Any, Any, None]] | None = None,
+        on_scheduler_sync: Callable[[], Coroutine[Any, Any, Any]] | None = None,
+        on_scheduler_reflection: Callable[[], Coroutine[Any, Any, list[str] | str | None]] | None = None,
         interval_s: int = 30 * 60,
         enabled: bool = True,
         timezone: str | None = None,
@@ -67,6 +69,8 @@ class HeartbeatService:
         self.model = model
         self.on_execute = on_execute
         self.on_notify = on_notify
+        self.on_scheduler_sync = on_scheduler_sync
+        self.on_scheduler_reflection = on_scheduler_reflection
         self.interval_s = interval_s
         self.enabled = enabled
         self.timezone = timezone
@@ -172,6 +176,17 @@ class HeartbeatService:
         logger.info("Heartbeat: checking for tasks...")
 
         try:
+            if self.mode == "scheduler" and self.on_scheduler_sync is not None:
+                await self.on_scheduler_sync()
+            if self.mode == "scheduler" and self.on_scheduler_reflection is not None:
+                reflections = await self.on_scheduler_reflection()
+                if reflections and self.on_notify:
+                    if isinstance(reflections, str):
+                        reflections = [reflections]
+                    for message in reflections:
+                        if message:
+                            await self.on_notify(message)
+
             action, tasks = await self._decide(content)
 
             if action != "run":

@@ -382,3 +382,50 @@ async def test_scheduler_tick_passes_scheduler_mode_to_evaluator(tmp_path, monke
 
     assert seen_modes == ["scheduler"]
     assert notified == ["Need to reduce tomorrow's load."]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_tick_runs_sync_and_reflection_callbacks(tmp_path) -> None:
+    (tmp_path / "HEARTBEAT.md").write_text("- [ ] audit workload risk", encoding="utf-8")
+
+    provider = DummyProvider(
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="hb_1",
+                        name="heartbeat",
+                        arguments={"action": "skip"},
+                    )
+                ],
+            ),
+        ]
+    )
+    called: list[str] = []
+    notified: list[str] = []
+
+    async def _sync() -> None:
+        called.append("sync")
+
+    async def _reflection():
+        called.append("reflection")
+        return ["How did the day go?"]
+
+    async def _notify(message: str) -> None:
+        notified.append(message)
+
+    service = HeartbeatService(
+        workspace=tmp_path,
+        provider=provider,
+        model="openai/gpt-4o-mini",
+        on_notify=_notify,
+        on_scheduler_sync=_sync,
+        on_scheduler_reflection=_reflection,
+        mode="scheduler",
+    )
+
+    await service._tick()
+
+    assert called == ["sync", "reflection"]
+    assert notified == ["How did the day go?"]

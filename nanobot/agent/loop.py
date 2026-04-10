@@ -20,7 +20,7 @@ from nanobot.approval import ApprovalAction, ApprovalContext, ApprovalManager, A
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from nanobot.agent.memory import Consolidator, Dream
-from nanobot.agent.scheduler_contract import PlannerDecision, parse_planner_decision
+from nanobot.agent.scheduler_contract import PlannerDecision, ProposalBundle, parse_planner_decision
 from nanobot.agent.tools.calendar import build_gws_calendar_tools
 from nanobot.agent.tools.scheduler import build_scheduler_tools
 from nanobot.agent.tools.tasks import build_gws_tasks_tools
@@ -382,8 +382,13 @@ class AgentLoop:
             for tool in build_gws_tasks_tools(self.tasks_config):
                 tools.register(tool)
         if mode_name == "scheduler":
-            for tool in build_scheduler_tools(workspace):
+            scheduler_tools = build_scheduler_tools(workspace)
+            for tool in scheduler_tools:
                 tools.register(tool)
+            for tool in scheduler_tools:
+                attach_registry = getattr(tool, "attach_registry", None)
+                if callable(attach_registry):
+                    attach_registry(tools)
         return tools
 
     def _runtime_for_mode(self, mode: str) -> ModeRuntime:
@@ -418,7 +423,7 @@ class AgentLoop:
     @classmethod
     def _approval_prompt_message(cls, request: ApprovalRequest) -> str:
         return (
-            "Approval required before I run this calendar action:\n\n"
+            "Approval required before I run this action:\n\n"
             f"{request.preview}\n\n"
             "Use the buttons below, or reply with `approve` or `deny`."
         )
@@ -633,6 +638,8 @@ class AgentLoop:
             metadata["_planner_blockers"] = list(decision.blockers)
         if decision.proposed_changes:
             metadata["_planner_proposed_changes"] = list(decision.proposed_changes)
+        if decision.proposal_bundle is not None:
+            metadata["_planner_bundle_id"] = decision.proposal_bundle.bundle_id
         return metadata
 
     @staticmethod
@@ -695,6 +702,38 @@ class AgentLoop:
         )
         return "\n\n".join(body)
 
+    def _create_scheduler_bundle_request(
+        self,
+        runtime: ModeRuntime,
+        bundle: ProposalBundle,
+        decision: PlannerDecision,
+        *,
+        channel: str,
+        chat_id: str,
+        message_thread_id: int | None = None,
+    ) -> ApprovalRequest | None:
+        tool = runtime.tools.get("scheduler_apply_proposal_bundle")
+        if tool is None:
+            return None
+        params = {"bundle": bundle.to_dict()}
+        preview = tool.build_approval_preview(params)
+        context = ApprovalContext(
+            mode=runtime.mode,
+            session_key=f"{channel}:{chat_id}",
+            conversation_key=f"{channel}:{chat_id}",
+            channel=channel,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
+        return self.approvals.create_request(
+            tool_name=tool.name,
+            approval_family=decision.approval_family or bundle.approval_family or tool.approval_family or "timespan_apply",
+            approval_scope_key=tool.approval_scope_key(params) or bundle.approval_scope_key,
+            params=params,
+            preview=preview,
+            context=context,
+        )
+
     async def _maybe_schedule_planner_follow_up(
         self,
         runtime: ModeRuntime,
@@ -737,6 +776,7 @@ class AgentLoop:
         *,
         channel: str,
         chat_id: str,
+        message_thread_id: int | None = None,
     ) -> _LoopRunResult:
         if runtime.mode != "scheduler":
             return run_result
@@ -759,6 +799,23 @@ class AgentLoop:
                 if final_content and follow_up_note not in final_content
                 else follow_up_note
             )
+
+        if (
+            decision.status == "needs_approval"
+            and decision.proposal_bundle is not None
+            and run_result.approval_request is None
+        ):
+            request = self._create_scheduler_bundle_request(
+                runtime,
+                decision.proposal_bundle,
+                decision,
+                channel=channel,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+            )
+            if request is not None:
+                run_result.approval_request = request
+                run_result.stop_reason = "approval_pending"
 
         self._replace_final_assistant_content(run_result.messages, final_content)
         run_result.final_content = final_content
@@ -918,6 +975,7 @@ class AgentLoop:
             loop_result,
             channel=channel,
             chat_id=chat_id,
+            message_thread_id=message_thread_id,
         )
 
     async def run(self) -> None:

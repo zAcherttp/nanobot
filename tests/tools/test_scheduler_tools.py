@@ -7,18 +7,64 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from nanobot.agent.tools.scheduler import (
+    SchedulerApplyProposalBundleTool,
     SchedulerGetSyncStateTool,
     SchedulerRecallContextTool,
     SchedulerReconcileExternalChangesTool,
     SchedulerRecordObservationTool,
     SchedulerReflowTimespanTool,
 )
+from nanobot.agent.tools.base import Tool, tool_parameters
+from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.agent.tools.schema import StringSchema, tool_parameters_schema
 from nanobot.config.schema import (
     CalendarToolConfig,
     ExecToolConfig,
     TasksToolConfig,
     WebToolsConfig,
 )
+
+
+@tool_parameters(tool_parameters_schema(event_id=StringSchema("Event id"), required=["event_id"]))
+class _FakeCalendarUpdateTool(Tool):
+    @property
+    def name(self) -> str:
+        return "mcp_gws_calendar_update_event"
+
+    @property
+    def description(self) -> str:
+        return "fake calendar update"
+
+    async def execute(self, event_id: str, **kwargs):
+        return f"updated {event_id}"
+
+
+@tool_parameters(tool_parameters_schema(task_id=StringSchema("Task id"), required=["task_id"]))
+class _FakeTaskCompleteTool(Tool):
+    @property
+    def name(self) -> str:
+        return "mcp_gws_tasks_complete_task"
+
+    @property
+    def description(self) -> str:
+        return "fake task complete"
+
+    async def execute(self, task_id: str, **kwargs):
+        return f"completed {task_id}"
+
+
+@tool_parameters(tool_parameters_schema(task_id=StringSchema("Task id"), required=["task_id"]))
+class _FailingTaskUpdateTool(Tool):
+    @property
+    def name(self) -> str:
+        return "mcp_gws_tasks_update_task"
+
+    @property
+    def description(self) -> str:
+        return "fake failing task update"
+
+    async def execute(self, task_id: str, **kwargs):
+        return f"Error: failed to update {task_id}"
 
 
 @pytest.mark.asyncio
@@ -155,6 +201,56 @@ async def test_scheduler_get_sync_state_filters_by_source(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_scheduler_apply_proposal_bundle_reports_partial_failures(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    registry.register(_FakeCalendarUpdateTool())
+    registry.register(_FakeTaskCompleteTool())
+    registry.register(_FailingTaskUpdateTool())
+
+    tool = SchedulerApplyProposalBundleTool(tmp_path)
+    tool.attach_registry(registry)
+
+    result = await tool.execute(
+        bundle={
+            "bundle_id": "bundle-1",
+            "summary": "Move and complete work",
+            "approval_family": "timespan_apply",
+            "operations": [
+                {
+                    "id": "op-1",
+                    "tool_name": "mcp_gws_calendar_update_event",
+                    "params": {"event_id": "evt-1"},
+                    "summary": "Move review block",
+                    "depends_on": [],
+                },
+                {
+                    "id": "op-2",
+                    "tool_name": "mcp_gws_tasks_update_task",
+                    "params": {"task_id": "task-2"},
+                    "summary": "Retitle draft task",
+                    "depends_on": [],
+                },
+                {
+                    "id": "op-3",
+                    "tool_name": "mcp_gws_tasks_complete_task",
+                    "params": {"task_id": "task-3"},
+                    "summary": "Complete draft task",
+                    "depends_on": ["op-2"],
+                },
+            ],
+            "expected_side_effects": ["Calendar event will move"],
+            "rollback_guidance": "Move the event back if needed.",
+        }
+    )
+
+    assert "Applied scheduler proposal bundle `bundle-1`." in result
+    assert "Completed: 1" in result
+    assert "Failed: 1" in result
+    assert "Skipped: 1" in result
+    assert "Partial application: yes" in result
+
+
+@pytest.mark.asyncio
 async def test_scheduler_reflow_timespan_keeps_protected_anchors_and_is_stable(tmp_path: Path) -> None:
     tool = SchedulerReflowTimespanTool(tmp_path)
     params = {
@@ -266,6 +362,7 @@ def test_scheduler_mode_registers_tasks_and_scheduler_primitives(tmp_path: Path)
     assert "scheduler_recall_context" in scheduler_tools
     assert "scheduler_reconcile_external_changes" in scheduler_tools
     assert "scheduler_get_sync_state" in scheduler_tools
+    assert "scheduler_apply_proposal_bundle" in scheduler_tools
     assert "scheduler_reflow_timespan" in scheduler_tools
     assert "mcp_gws_tasks_list_tasks" not in general_tools
     assert "scheduler_record_observation" not in general_tools

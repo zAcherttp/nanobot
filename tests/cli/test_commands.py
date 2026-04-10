@@ -69,7 +69,11 @@ def test_onboard_fresh_install(mock_paths):
     assert config_file.exists()
     assert (workspace_dir / "general" / "AGENTS.md").exists()
     assert (workspace_dir / "general" / "memory" / "MEMORY.md").exists()
+    assert (workspace_dir / "general" / "skills" / "memory" / "SKILL.md").exists()
+    assert (workspace_dir / "general" / "skills" / "github" / "SKILL.md").exists()
     assert (workspace_dir / "scheduler" / "AGENTS.md").exists()
+    assert (workspace_dir / "scheduler" / "skills" / "gws-calendar" / "SKILL.md").exists()
+    assert (workspace_dir / "scheduler" / "skills" / "gws-tasks" / "SKILL.md").exists()
     expected_workspace = Config().workspace_path
     assert mock_ws.call_args.args == (expected_workspace,)
 
@@ -166,7 +170,9 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     saved = Config.model_validate(json.loads(config_path.read_text(encoding="utf-8")))
     assert saved.workspace_path == workspace_path
     assert (workspace_path / "general" / "AGENTS.md").exists()
+    assert (workspace_path / "general" / "skills" / "memory" / "SKILL.md").exists()
     assert (workspace_path / "scheduler" / "AGENTS.md").exists()
+    assert (workspace_path / "scheduler" / "skills" / "gws-calendar" / "SKILL.md").exists()
     stripped_output = _strip_ansi(result.stdout)
     compact_output = stripped_output.replace("\n", "")
     resolved_config = str(config_path.resolve())

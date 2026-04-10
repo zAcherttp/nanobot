@@ -1,4 +1,4 @@
-"""Scheduler-specific planning snapshot and decision helpers."""
+"""Scheduler-specific planning snapshot, bundles, and decision helpers."""
 
 from __future__ import annotations
 
@@ -24,6 +24,19 @@ _PLANNER_DECISION_PATTERN = re.compile(
 )
 _VALID_PLANNER_STATUSES = frozenset(
     {"done", "needs_approval", "needs_clarification", "schedule_followup", "blocked"}
+)
+
+_ALLOWED_BUNDLE_TOOLS = frozenset(
+    {
+        "mcp_gws_calendar_create_event",
+        "mcp_gws_calendar_update_event",
+        "mcp_gws_calendar_delete_event",
+        "mcp_gws_tasks_create_task",
+        "mcp_gws_tasks_update_task",
+        "mcp_gws_tasks_move_task",
+        "mcp_gws_tasks_delete_task",
+        "mcp_gws_tasks_complete_task",
+    }
 )
 
 def _truncate_text(value: str, limit: int) -> str:
@@ -130,6 +143,118 @@ class PlannerDecision:
     approval_family: str | None = None
     follow_up_at: str | None = None
     blockers: tuple[str, ...] = field(default_factory=tuple)
+    proposal_bundle: "ProposalBundle | None" = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalOperation:
+    """One deterministic write operation inside a planner proposal bundle."""
+
+    id: str
+    tool_name: str
+    params: dict[str, Any] = field(default_factory=dict)
+    summary: str = ""
+    depends_on: tuple[str, ...] = field(default_factory=tuple)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "tool_name": self.tool_name,
+            "params": dict(self.params),
+            "summary": self.summary,
+            "depends_on": list(self.depends_on),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalBundle:
+    """Serialized planner bundle awaiting approval and execution."""
+
+    bundle_id: str
+    summary: str = ""
+    approval_family: str | None = None
+    operations: tuple[ProposalOperation, ...] = field(default_factory=tuple)
+    expected_side_effects: tuple[str, ...] = field(default_factory=tuple)
+    rollback_guidance: str = ""
+
+    @property
+    def approval_scope_key(self) -> str:
+        family = self.approval_family or "scheduler_bundle"
+        return f"scheduler_apply_proposal_bundle:{family}:{self.bundle_id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "bundle_id": self.bundle_id,
+            "summary": self.summary,
+            "approval_family": self.approval_family,
+            "operations": [item.to_dict() for item in self.operations],
+            "expected_side_effects": list(self.expected_side_effects),
+            "rollback_guidance": self.rollback_guidance,
+        }
+
+
+def _parse_proposal_bundle(value: Any) -> ProposalBundle | None:
+    if not isinstance(value, dict):
+        return None
+    bundle_id = str(value.get("bundle_id") or "").strip()
+    if not bundle_id:
+        return None
+    operations_raw = value.get("operations")
+    if not isinstance(operations_raw, list) or not operations_raw:
+        return None
+    operations: list[ProposalOperation] = []
+    seen_ids: set[str] = set()
+    for item in operations_raw:
+        if not isinstance(item, dict):
+            return None
+        operation_id = str(item.get("id") or "").strip()
+        tool_name = str(item.get("tool_name") or "").strip()
+        params = item.get("params")
+        if (
+            not operation_id
+            or operation_id in seen_ids
+            or tool_name not in _ALLOWED_BUNDLE_TOOLS
+            or not isinstance(params, dict)
+        ):
+            return None
+        depends_on_raw = item.get("depends_on")
+        depends_on = (
+            tuple(str(dep).strip() for dep in depends_on_raw if str(dep).strip())
+            if isinstance(depends_on_raw, list)
+            else ()
+        )
+        operations.append(
+            ProposalOperation(
+                id=operation_id,
+                tool_name=tool_name,
+                params=params,
+                summary=str(item.get("summary") or "").strip(),
+                depends_on=depends_on,
+            )
+        )
+        seen_ids.add(operation_id)
+    valid_ids = {item.id for item in operations}
+    for operation in operations:
+        if any(dep not in valid_ids for dep in operation.depends_on):
+            return None
+    expected_side_effects_raw = value.get("expected_side_effects")
+    expected_side_effects = (
+        tuple(str(item).strip() for item in expected_side_effects_raw if str(item).strip())
+        if isinstance(expected_side_effects_raw, list)
+        else ()
+    )
+    return ProposalBundle(
+        bundle_id=bundle_id,
+        summary=str(value.get("summary") or "").strip(),
+        approval_family=(
+            str(value["approval_family"]).strip()
+            if value.get("approval_family") is not None
+            else None
+        ),
+        operations=tuple(operations),
+        expected_side_effects=expected_side_effects,
+        rollback_guidance=str(value.get("rollback_guidance") or "").strip(),
+    )
 
 
 def parse_planner_decision(content: str | None) -> tuple[str | None, PlannerDecision | None]:
@@ -171,5 +296,6 @@ def parse_planner_decision(content: str | None) -> tuple[str | None, PlannerDeci
             else None
         ),
         blockers=tuple(str(item) for item in blockers) if isinstance(blockers, list) else (),
+        proposal_bundle=_parse_proposal_bundle(payload.get("proposal_bundle")),
     )
     return visible or None, decision

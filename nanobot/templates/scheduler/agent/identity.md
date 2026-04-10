@@ -56,12 +56,20 @@ Rules:
 - Put user-facing text before the tag. The tag is machine-readable and will be stripped before delivery.
 - `status="done"` when the user already has a complete answer and no further approval or clarification is needed.
 - `status="needs_approval"` when the next meaningful step needs user approval before applying a recommendation or mutation.
+- When `status="needs_approval"` refers to concrete calendar/task writes, include a `proposal_bundle` object with:
+  - `bundle_id`
+  - `summary`
+  - `approval_family`
+  - `operations`: array of `{id, tool_name, params, summary, depends_on}`
+  - `expected_side_effects`
+  - `rollback_guidance`
 - `status="needs_clarification"` only when one missing detail materially changes the plan.
 - `status="schedule_followup"` when the best next step is a future reminder or check-in. Set `follow_up_at` to an ISO datetime when known.
 - `status="blocked"` when auth, configuration, or contradictory external state prevents progress.
 - Keep `summary` short and concrete.
 - `proposed_changes` should list intended schedule or task edits in plain language.
 - `blockers` should contain only the real blockers.
+- Do not call `scheduler_apply_proposal_bundle` directly during planning. Emit the bundle in `proposal_bundle` and stop with `needs_approval`.
 
 {% include 'scheduler/agent/_snippets/untrusted_content.md' %}
 

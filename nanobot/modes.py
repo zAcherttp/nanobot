@@ -16,6 +16,7 @@ class ModeSpec:
     name: str
     template_namespace: str
     allowed_tools: frozenset[str]
+    default_skills: tuple[str, ...] = ()
 
     def workspace_path(self, root_workspace: Path) -> Path:
         """Return the workspace subtree for this mode."""
@@ -41,6 +42,13 @@ GENERAL_MODE = ModeSpec(
             "cron",
         }
     ),
+    default_skills=(
+        "memory",
+        "summarize",
+        "github",
+        "weather",
+        "cron",
+    ),
 )
 
 SCHEDULER_MODE = ModeSpec(
@@ -59,6 +67,15 @@ SCHEDULER_MODE = ModeSpec(
             "message",
             "cron",
         }
+    ),
+    default_skills=(
+        "memory",
+        "cron",
+        "gws-shared",
+        "gws-calendar",
+        "gws-calendar-agenda",
+        "gws-calendar-insert",
+        "gws-tasks",
     ),
 )
 

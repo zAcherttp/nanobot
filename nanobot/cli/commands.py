@@ -650,6 +650,10 @@ def gateway(
 ):
     """Start the nanobot gateway."""
     from nanobot.agent.loop import AgentLoop
+    from nanobot.agent.scheduler_background import (
+        run_scheduler_delta_sync,
+        run_scheduler_reflection,
+    )
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.cron.types import CronJob
@@ -829,12 +833,24 @@ def gateway(
                 OutboundMessage(channel=channel, chat_id=chat_id, content=response)
             )
 
+        async def on_scheduler_sync(*, _mode: str = mode_name) -> None:
+            if _mode != "scheduler":
+                return
+            await run_scheduler_delta_sync(agent._runtime_for_mode(_mode))
+
+        async def on_scheduler_reflection(*, _mode: str = mode_name) -> list[str] | None:
+            if _mode != "scheduler":
+                return None
+            return await run_scheduler_reflection(agent._runtime_for_mode(_mode))
+
         heartbeat_services[mode_name] = HeartbeatService(
             workspace=ModeRegistry().workspace_path(config.workspace_path, mode_name),
             provider=provider,
             model=agent.model,
             on_execute=on_heartbeat_execute,
             on_notify=on_heartbeat_notify,
+            on_scheduler_sync=on_scheduler_sync,
+            on_scheduler_reflection=on_scheduler_reflection,
             interval_s=hb_cfg.interval_s,
             enabled=hb_cfg.enabled,
             timezone=config.agents.defaults.timezone,

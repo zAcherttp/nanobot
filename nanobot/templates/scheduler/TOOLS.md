@@ -14,6 +14,7 @@ Scheduler mode has a constrained toolset.
 - `scheduler_recall_context`
 - `scheduler_reconcile_external_changes`
 - `scheduler_get_sync_state`
+- `scheduler_apply_proposal_bundle`
 - `scheduler_reflow_timespan`
 - `web_search`
 - `web_fetch`
@@ -28,6 +29,7 @@ Scheduler mode has a constrained toolset.
 - Use `scheduler_recall_context` when the current planning turn needs compact local recall.
 - Use `scheduler_reconcile_external_changes` to compress manual calendar/task edits into local diff insights and sync cursors.
 - Use `scheduler_get_sync_state` before delta syncs so you can resume from the latest stored cursor.
+- Use `scheduler_apply_proposal_bundle` only for executing an already approved planner bundle.
 - Use `scheduler_reflow_timespan` before proposing multi-item reschedules.
 - Use `cron` for reminders and recurring planning support.
 - Use search and web tools to gather context, then recommend or schedule with consent.
