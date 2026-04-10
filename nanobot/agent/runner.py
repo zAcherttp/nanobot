@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.approval import ApprovalContext, ApprovalManager, ApprovalPending
 from nanobot.agent.hook import AgentHook, AgentHookContext
 from nanobot.utils.prompt_templates import render_template
 from nanobot.agent.tools.registry import ToolRegistry
@@ -66,6 +67,8 @@ class AgentRunSpec:
     progress_callback: Any | None = None
     checkpoint_callback: Any | None = None
     prompt_mode: str = "general"
+    approval_manager: ApprovalManager | None = None
+    approval_context: ApprovalContext | None = None
 
 
 @dataclass(slots=True)
@@ -79,6 +82,7 @@ class AgentRunResult:
     stop_reason: str = "completed"
     error: str | None = None
     tool_events: list[dict[str, str]] = field(default_factory=list)
+    approval_request: Any | None = None
 
 
 class AgentRunner:
@@ -159,6 +163,19 @@ class AgentRunner:
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
                 context.tool_events = list(new_events)
+                if isinstance(fatal_error, ApprovalPending):
+                    stop_reason = "approval_pending"
+                    context.stop_reason = stop_reason
+                    await hook.after_iteration(context)
+                    return AgentRunResult(
+                        final_content=None,
+                        messages=messages,
+                        tools_used=tools_used,
+                        usage=usage,
+                        stop_reason=stop_reason,
+                        tool_events=tool_events,
+                        approval_request=fatal_error.request,
+                    )
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -479,6 +496,41 @@ class AgentRunner:
                 event,
                 RuntimeError(prep_error) if spec.fail_on_tool_error else None,
             )
+        approval_manager = spec.approval_manager
+        approval_context = spec.approval_context
+        if (
+            tool is not None
+            and approval_manager is not None
+            and approval_context is not None
+            and tool.approval_family is not None
+        ):
+            outcome = approval_manager.evaluate_tool_call(
+                tool_name=tool_call.name,
+                approval_family=tool.approval_family,
+                approval_scope_key=tool.approval_scope_key(params),
+                params=params,
+                preview=tool.build_approval_preview(params),
+                context=approval_context,
+            )
+            if outcome.policy == "deny":
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": (outcome.error or "tool denied")[:120],
+                }
+                return (
+                    f"Error: {outcome.error or 'Execution denied by tool policy.'}" + _HINT,
+                    event,
+                    RuntimeError(outcome.error or "Execution denied by tool policy.")
+                    if spec.fail_on_tool_error
+                    else None,
+                )
+            if outcome.request is not None:
+                return (
+                    "",
+                    {"name": tool_call.name, "status": "approval_pending", "detail": outcome.request.id},
+                    ApprovalPending(outcome.request),
+                )
         try:
             if tool is not None:
                 result = await tool.execute(**params)

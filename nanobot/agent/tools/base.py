@@ -174,6 +174,20 @@ class Tool(ABC):
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
 
+    @property
+    def approval_family(self) -> str | None:
+        """Logical family for approval policy and conversation-scoped grants."""
+        return None
+
+    def approval_scope_key(self, params: dict[str, Any]) -> str | None:
+        """Stable scope key for conversation-scoped approval grants."""
+        _ = params
+        return self.name
+
+    def build_approval_preview(self, params: dict[str, Any]) -> str:
+        """Human-readable summary shown to the user before executing the tool."""
+        return f"{self.name}({params})"
+
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:
         """Run the tool; returns a string or list of content blocks."""

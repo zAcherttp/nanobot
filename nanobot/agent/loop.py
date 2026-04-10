@@ -5,16 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from contextlib import AsyncExitStack, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from loguru import logger
 
+from nanobot.approval import ApprovalAction, ApprovalContext, ApprovalManager, ApprovalRequest
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from nanobot.agent.memory import Consolidator, Dream
+from nanobot.agent.tools.calendar import build_gws_calendar_tools
+from nanobot.agent.tools.scheduler import build_scheduler_tools
+from nanobot.agent.tools.tasks import build_gws_tasks_tools
 from nanobot.mode_runtime import ModeRuntime
 from nanobot.modes import DEFAULT_MODE, ModeRegistry
 from nanobot.agent.runner import AgentRunSpec, AgentRunner
@@ -39,7 +45,14 @@ from nanobot.utils.helpers import image_placeholder_text, truncate_text
 from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 
 if TYPE_CHECKING:
-    from nanobot.config.schema import ChannelsConfig, ExecToolConfig, WebToolsConfig
+    from nanobot.config.schema import (
+        CalendarToolConfig,
+        ChannelsConfig,
+        ExecToolConfig,
+        TasksToolConfig,
+        ToolPermissionsConfig,
+        WebToolsConfig,
+    )
     from nanobot.cron.service import CronService
 
 
@@ -114,6 +127,20 @@ class _LoopHook(AgentHook):
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return self._loop._strip_think(content)
 
+
+@dataclass(slots=True)
+class _LoopRunResult:
+    final_content: str | None
+    tools_used: list[str]
+    messages: list[dict]
+    stop_reason: str
+    approval_request: ApprovalRequest | None = None
+
+    def __iter__(self):
+        yield self.final_content
+        yield self.tools_used
+        yield self.messages
+
 class AgentLoop:
     """
     The agent loop is the core processing engine.
@@ -141,6 +168,9 @@ class AgentLoop:
         provider_retry_mode: str = "standard",
         web_config: WebToolsConfig | None = None,
         exec_config: ExecToolConfig | None = None,
+        calendar_config: CalendarToolConfig | None = None,
+        tasks_config: TasksToolConfig | None = None,
+        tool_permissions_config: ToolPermissionsConfig | None = None,
         cron_service: CronService | None = None,
         cron_services: dict[str, CronService] | None = None,
         restrict_to_workspace: bool = False,
@@ -150,7 +180,13 @@ class AgentLoop:
         timezone: str | None = None,
         hooks: list[AgentHook] | None = None,
     ):
-        from nanobot.config.schema import ExecToolConfig, WebToolsConfig
+        from nanobot.config.schema import (
+            CalendarToolConfig,
+            ExecToolConfig,
+            TasksToolConfig,
+            ToolPermissionsConfig,
+            WebToolsConfig,
+        )
 
         defaults = AgentDefaults()
         self.bus = bus
@@ -175,6 +211,9 @@ class AgentLoop:
         self.provider_retry_mode = provider_retry_mode
         self.web_config = web_config or WebToolsConfig()
         self.exec_config = exec_config or ExecToolConfig()
+        self.calendar_config = calendar_config or CalendarToolConfig()
+        self.tasks_config = tasks_config or TasksToolConfig()
+        self.tool_permissions_config = tool_permissions_config or ToolPermissionsConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
         self._last_usage: dict[str, int] = {}
@@ -182,6 +221,11 @@ class AgentLoop:
         self.runner = AgentRunner(provider)
         self.mode_registry = ModeRegistry()
         self.mode_store = ConversationModeStore(workspace)
+        self.approvals = ApprovalManager(
+            workspace,
+            default_policy=self.tool_permissions_config.default_policy,
+            tool_policies=self.tool_permissions_config.tools,
+        )
         self._runtimes: dict[str, ModeRuntime] = {}
         self._cron_services = cron_services or {}
 
@@ -326,6 +370,15 @@ class AgentLoop:
             tools.register(
                 CronTool(cron_service, default_timezone=timezone or "UTC")
             )
+        if self.calendar_config.enable and "calendar" in allowed:
+            for tool in build_gws_calendar_tools(self.calendar_config, timezone=timezone or "UTC"):
+                tools.register(tool)
+        if self.tasks_config.enable and "tasks" in allowed:
+            for tool in build_gws_tasks_tools(self.tasks_config):
+                tools.register(tool)
+        if mode_name == "scheduler":
+            for tool in build_scheduler_tools(workspace):
+                tools.register(tool)
         return tools
 
     def _runtime_for_mode(self, mode: str) -> ModeRuntime:
@@ -333,6 +386,232 @@ class AgentLoop:
 
     def _resolve_mode(self, key: str, explicit_mode: str | None = None) -> str:
         return explicit_mode or self.mode_store.get(key)
+
+    @staticmethod
+    def _approval_action_buttons(request: ApprovalRequest) -> list[dict[str, str]]:
+        return [
+            {
+                "kind": "approval",
+                "action": "approve_once",
+                "request_id": request.id,
+                "label": "Approve once",
+            },
+            {
+                "kind": "approval",
+                "action": "approve_always",
+                "request_id": request.id,
+                "label": "Always allow in this conversation",
+            },
+            {
+                "kind": "approval",
+                "action": "deny",
+                "request_id": request.id,
+                "label": "Deny",
+            },
+        ]
+
+    @classmethod
+    def _approval_prompt_message(cls, request: ApprovalRequest) -> str:
+        return (
+            "Approval required before I run this calendar action:\n\n"
+            f"{request.preview}\n\n"
+            "Use the buttons below, or reply with `approve` or `deny`."
+        )
+
+    @staticmethod
+    def _stringify_tool_result(result: Any) -> str:
+        if result is None:
+            return "(no output)"
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _approval_text_action(text: str) -> ApprovalAction | None:
+        cleaned = re.sub(r"\s+", " ", text.strip().lower())
+        if cleaned in {
+            "approve",
+            "approved",
+            "approve once",
+            "allow",
+            "allow it",
+            "go ahead",
+            "yes approve",
+            "yes, approve",
+            "ok approve",
+            "okay approve",
+        }:
+            return "approve_once"
+        if cleaned in {
+            "always allow",
+            "always allow in this conversation",
+            "approve always",
+        }:
+            return "approve_always"
+        if cleaned in {
+            "deny",
+            "denied",
+            "reject",
+            "cancel",
+            "do not approve",
+            "don't approve",
+            "no deny",
+        }:
+            return "deny"
+        return None
+
+    async def _execute_approval_action(
+        self,
+        request: ApprovalRequest,
+        action: ApprovalAction,
+        *,
+        message_thread_id: int | None = None,
+    ) -> OutboundMessage:
+        if not request.is_pending():
+            return OutboundMessage(
+                channel=request.channel,
+                chat_id=request.chat_id,
+                content="This approval request is no longer pending.",
+                metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+            )
+
+        if action == "deny":
+            self.approvals.resolve_request(
+                request.id,
+                status="denied",
+                resolution_message="Denied by the user.",
+            )
+            return OutboundMessage(
+                channel=request.channel,
+                chat_id=request.chat_id,
+                content="Request denied. Calendar action cancelled.",
+                metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+            )
+
+        if action == "approve_always":
+            self.approvals.add_grant(request)
+
+        runtime = self._runtime_for_mode(request.mode)
+        tool = runtime.tools.get(request.tool_name)
+        if tool is None:
+            self.approvals.resolve_request(
+                request.id,
+                status="denied",
+                resolution_message=f"Tool '{request.tool_name}' is no longer available.",
+            )
+            return OutboundMessage(
+                channel=request.channel,
+                chat_id=request.chat_id,
+                content=f"Couldn't execute approval request because tool `{request.tool_name}` is unavailable.",
+                metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+            )
+
+        try:
+            result = await tool.execute(**request.params)
+            rendered = self._stringify_tool_result(result)
+        except Exception as exc:
+            rendered = f"Error executing {request.tool_name}: {exc}"
+        prefix = (
+            "Approved for this conversation and executed."
+            if action == "approve_always"
+            else "Approved and executed."
+        )
+        self.approvals.resolve_request(
+            request.id,
+            status="approved",
+            resolution_message=rendered[:500],
+        )
+        return OutboundMessage(
+            channel=request.channel,
+            chat_id=request.chat_id,
+            content=f"{prefix}\n\n{rendered}",
+            metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+        )
+
+    async def _maybe_handle_approval_message(
+        self,
+        msg: InboundMessage,
+    ) -> tuple[bool, InboundMessage | None, OutboundMessage | None]:
+        self.approvals.expire_requests()
+        meta = dict(msg.metadata or {})
+        conversation_key = msg.session_key
+        message_thread_id = meta.get("message_thread_id")
+        request_id = meta.get("approval_request_id")
+
+        if request_id and meta.get("approval_action"):
+            request = self.approvals.get_request(str(request_id))
+            if request is None or request.conversation_key != conversation_key:
+                return (
+                    True,
+                    None,
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="This approval request is no longer pending.",
+                        metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+                    ),
+                )
+            return True, None, await self._execute_approval_action(
+                request,
+                str(meta["approval_action"]),  # type: ignore[arg-type]
+                message_thread_id=message_thread_id,
+            )
+
+        explicit_action = self._approval_text_action(msg.content)
+        linked_request = None
+        if request_id:
+            linked_request = self.approvals.get_request(str(request_id))
+        if linked_request is None:
+            linked_request = self.approvals.find_pending_by_message(
+                conversation_key,
+                meta.get("reply_to_message_id"),
+            )
+        pending = self.approvals.list_pending_for_conversation(conversation_key)
+        if explicit_action is not None:
+            if linked_request is None and len(pending) == 1:
+                linked_request = pending[0]
+            if linked_request is None:
+                return (
+                    True,
+                    None,
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="I couldn't tell which approval request you meant. Use the approval buttons or reply to the approval message.",
+                        metadata={"render_as": "text", **({"message_thread_id": message_thread_id} if message_thread_id is not None else {})},
+                    ),
+                )
+            return True, None, await self._execute_approval_action(
+                linked_request,
+                explicit_action,
+                message_thread_id=message_thread_id,
+            )
+
+        if linked_request is None and len(pending) == 1:
+            linked_request = pending[0]
+        if linked_request is None:
+            return False, msg, None
+
+        self.approvals.resolve_request(
+            linked_request.id,
+            status="superseded",
+            resolution_message="Superseded by user revision.",
+        )
+        revised = InboundMessage(
+            channel=msg.channel,
+            sender_id=msg.sender_id,
+            chat_id=msg.chat_id,
+            content=(
+                f"[The user is revising a pending approval request for {linked_request.tool_name}. "
+                "Do not rely on the old pending action. Plan a new action if needed.]\n\n"
+                f"{msg.content}"
+            ),
+            timestamp=msg.timestamp,
+            media=list(msg.media),
+            metadata=meta,
+            session_key_override=msg.session_key_override,
+        )
+        return False, revised, None
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -403,7 +682,8 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         message_id: str | None = None,
-    ) -> tuple[str | None, list[str], list[dict]]:
+        message_thread_id: int | None = None,
+    ) -> _LoopRunResult:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -457,6 +737,16 @@ class AgentLoop:
                 progress_callback=on_progress,
                 checkpoint_callback=_checkpoint,
                 prompt_mode=runtime.mode,
+                approval_manager=self.approvals,
+                approval_context=ApprovalContext(
+                    mode=runtime.mode,
+                    session_key=session.key if session else f"{channel}:{chat_id}",
+                    conversation_key=session.key if session else f"{channel}:{chat_id}",
+                    channel=channel,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    request_message_id=int(message_id) if message_id and str(message_id).isdigit() else None,
+                ),
             )
         )
         self._last_usage = result.usage
@@ -464,7 +754,13 @@ class AgentLoop:
             logger.warning("Max iterations ({}) reached", self.max_iterations)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages
+        return _LoopRunResult(
+            final_content=result.final_content,
+            tools_used=result.tools_used,
+            messages=result.messages,
+            stop_reason=result.stop_reason,
+            approval_request=result.approval_request,
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -485,6 +781,14 @@ class AgentLoop:
                 continue
             except Exception as e:
                 logger.warning("Error consuming inbound message: {}, continuing...", e)
+                continue
+
+            handled, msg, approval_response = await self._maybe_handle_approval_message(msg)
+            if approval_response is not None:
+                await self.bus.publish_outbound(approval_response)
+            if handled:
+                continue
+            if msg is None:
                 continue
 
             raw = msg.content.strip()
@@ -641,14 +945,16 @@ class AgentLoop:
                 chat_id=chat_id,
                 current_role=current_role,
             )
-            final_content, _, all_msgs = await self._run_agent_loop(
+            run_result = await self._run_agent_loop(
                 runtime,
                 messages,
                 session=session,
                 channel=channel,
                 chat_id=chat_id,
                 message_id=msg.metadata.get("message_id"),
+                message_thread_id=msg.metadata.get("message_thread_id"),
             )
+            final_content, _, all_msgs = run_result
             self._save_turn(session, all_msgs, 1 + len(history))
             self._clear_runtime_checkpoint(session)
             runtime.sessions.save(session)
@@ -712,7 +1018,7 @@ class AgentLoop:
                 )
             )
 
-        final_content, _, all_msgs = await self._run_agent_loop(
+        run_result = await self._run_agent_loop(
             runtime,
             initial_messages,
             on_progress=on_progress or _bus_progress,
@@ -722,7 +1028,22 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
+            message_thread_id=msg.metadata.get("message_thread_id"),
         )
+        final_content, _, all_msgs = run_result
+
+        if run_result.stop_reason == "approval_pending" and run_result.approval_request is not None:
+            request = run_result.approval_request
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=self._approval_prompt_message(request),
+                metadata={
+                    **dict(msg.metadata or {}),
+                    "render_as": "text",
+                    "actions": self._approval_action_buttons(request),
+                },
+            )
 
         if final_content is None or not final_content.strip():
             final_content = EMPTY_FINAL_RESPONSE_MESSAGE

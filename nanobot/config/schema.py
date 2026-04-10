@@ -187,6 +187,55 @@ class ExecToolConfig(Base):
     sandbox: str = ""  # sandbox backend: "" (none) or "bwrap"
 
 
+class CalendarToolConfig(Base):
+    """Google Calendar tool configuration backed by the gws CLI."""
+
+    enable: bool = False
+    command: str = "gws"
+    timeout: int = 30
+
+
+class TasksToolConfig(Base):
+    """Google Tasks tool configuration backed by the gws CLI."""
+
+    enable: bool = False
+    command: str = "gws"
+    timeout: int = 30
+
+
+ApprovalPolicy = Literal["allow", "ask", "deny"]
+
+
+def _default_tool_permissions() -> dict[str, ApprovalPolicy]:
+    return {
+        "mcp_gws_calendar_agenda": "allow",
+        "mcp_gws_calendar_list_calendars": "allow",
+        "mcp_gws_calendar_list_events": "allow",
+        "mcp_gws_calendar_get_event": "allow",
+        "mcp_gws_calendar_find_free_time": "allow",
+        "mcp_gws_calendar_list_event_changes": "allow",
+        "mcp_gws_calendar_create_event": "ask",
+        "mcp_gws_calendar_update_event": "ask",
+        "mcp_gws_calendar_delete_event": "ask",
+        "mcp_gws_tasks_list_tasklists": "allow",
+        "mcp_gws_tasks_list_tasks": "allow",
+        "mcp_gws_tasks_get_task": "allow",
+        "mcp_gws_tasks_list_task_changes": "allow",
+        "mcp_gws_tasks_create_task": "ask",
+        "mcp_gws_tasks_update_task": "ask",
+        "mcp_gws_tasks_move_task": "ask",
+        "mcp_gws_tasks_delete_task": "ask",
+        "mcp_gws_tasks_complete_task": "ask",
+    }
+
+
+class ToolPermissionsConfig(Base):
+    """Per-tool approval policies."""
+
+    default_policy: ApprovalPolicy | None = None
+    tools: dict[str, ApprovalPolicy] = Field(default_factory=_default_tool_permissions)
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -207,6 +256,9 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    calendar: CalendarToolConfig = Field(default_factory=CalendarToolConfig)
+    tasks: TasksToolConfig = Field(default_factory=TasksToolConfig)
+    permissions: ToolPermissionsConfig = Field(default_factory=ToolPermissionsConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(

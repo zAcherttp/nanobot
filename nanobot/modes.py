@@ -48,6 +48,8 @@ SCHEDULER_MODE = ModeSpec(
     template_namespace="scheduler",
     allowed_tools=frozenset(
         {
+            "calendar",
+            "tasks",
             "read_file",
             "list_dir",
             "glob",
