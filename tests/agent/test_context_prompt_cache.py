@@ -210,6 +210,35 @@ def test_build_messages_passes_channel_to_system_prompt(tmp_path) -> None:
     assert "messaging app" in system
 
 
+def test_scheduler_system_prompt_uses_planning_snapshot_and_contract(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (workspace / "USER.md").write_text("Best work starts after lunch.", encoding="utf-8")
+    (workspace / "GOALS.md").write_text("Ship chapter draft by Friday.", encoding="utf-8")
+    (memory_dir / "MEMORY.md").write_text("Protect Wednesday afternoon for deep work.", encoding="utf-8")
+    (memory_dir / "observations.jsonl").write_text(
+        '{"timestamp":"2026-02-24T08:00:00Z","summary":"Morning meetings lower focus","kind":"energy"}\n',
+        encoding="utf-8",
+    )
+    (memory_dir / "diff_insights.jsonl").write_text(
+        '{"timestamp":"2026-02-24T09:00:00Z","summary":"User moved review call to Thursday","source":"calendar"}\n',
+        encoding="utf-8",
+    )
+
+    builder = ContextBuilder(workspace, mode="scheduler")
+    prompt = builder.build_system_prompt(channel="telegram")
+
+    assert "# Planning Snapshot" in prompt
+    assert "Best work starts after lunch." in prompt
+    assert "Ship chapter draft by Friday." in prompt
+    assert "Protect Wednesday afternoon for deep work." in prompt
+    assert "Morning meetings lower focus" in prompt
+    assert "User moved review call to Thursday" in prompt
+    assert "<planner_decision>" in prompt
+    assert "## USER.md" not in prompt
+
+
 def test_subagent_result_does_not_create_consecutive_assistant_messages(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)

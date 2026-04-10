@@ -8,6 +8,7 @@ from typing import Any
 
 from nanobot.utils.helpers import current_time_str
 
+from nanobot.agent.scheduler_contract import build_planning_snapshot
 from nanobot.agent.memory import MemoryStore
 from nanobot.utils.prompt_templates import render_template
 from nanobot.agent.skills import SkillsLoader
@@ -40,9 +41,12 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
+        if self.mode == "scheduler":
+            parts.append(build_planning_snapshot(self.workspace).render())
+        else:
+            memory = self.memory.get_memory_context()
+            if memory:
+                parts.append(f"# Memory\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -111,7 +115,11 @@ class ContextBuilder:
         """Load all bootstrap files from workspace."""
         parts = []
 
-        for filename in self.BOOTSTRAP_FILES:
+        bootstrap_files = self.BOOTSTRAP_FILES
+        if self.mode == "scheduler":
+            bootstrap_files = [name for name in self.BOOTSTRAP_FILES if name != "USER.md"]
+
+        for filename in bootstrap_files:
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")

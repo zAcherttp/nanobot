@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -18,6 +20,7 @@ from nanobot.approval import ApprovalAction, ApprovalContext, ApprovalManager, A
 from nanobot.agent.context import ContextBuilder
 from nanobot.agent.hook import AgentHook, AgentHookContext, CompositeHook
 from nanobot.agent.memory import Consolidator, Dream
+from nanobot.agent.scheduler_contract import PlannerDecision, parse_planner_decision
 from nanobot.agent.tools.calendar import build_gws_calendar_tools
 from nanobot.agent.tools.scheduler import build_scheduler_tools
 from nanobot.agent.tools.tasks import build_gws_tasks_tools
@@ -38,6 +41,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.bus.queue import MessageBus
 from nanobot.config.schema import AgentDefaults
+from nanobot.cron.types import CronSchedule
 from nanobot.providers.base import LLMProvider
 from nanobot.modes import ConversationModeStore
 from nanobot.session.manager import Session, SessionManager
@@ -135,6 +139,7 @@ class _LoopRunResult:
     messages: list[dict]
     stop_reason: str
     approval_request: ApprovalRequest | None = None
+    planner_decision: PlannerDecision | None = None
 
     def __iter__(self):
         yield self.final_content
@@ -613,6 +618,153 @@ class AgentLoop:
         )
         return False, revised, None
 
+    @staticmethod
+    def _planner_decision_metadata(decision: PlannerDecision | None) -> dict[str, Any]:
+        if decision is None:
+            return {}
+        metadata: dict[str, Any] = {"_planner_status": decision.status}
+        if decision.summary:
+            metadata["_planner_summary"] = decision.summary
+        if decision.follow_up_at:
+            metadata["_planner_follow_up_at"] = decision.follow_up_at
+        if decision.approval_family:
+            metadata["_planner_approval_family"] = decision.approval_family
+        if decision.blockers:
+            metadata["_planner_blockers"] = list(decision.blockers)
+        if decision.proposed_changes:
+            metadata["_planner_proposed_changes"] = list(decision.proposed_changes)
+        return metadata
+
+    @staticmethod
+    def _planner_fallback_message(decision: PlannerDecision) -> str:
+        if decision.summary:
+            return decision.summary
+        if decision.status == "needs_clarification":
+            return "I need one more detail before I can finish this plan."
+        if decision.status == "needs_approval":
+            return "I have a proposed change, but I need your approval before applying it."
+        if decision.status == "schedule_followup":
+            return "I will follow up on this plan later."
+        if decision.status == "blocked":
+            if decision.blockers:
+                return "Blocked: " + "; ".join(decision.blockers)
+            return "I am blocked on this scheduler task."
+        return "Done."
+
+    @staticmethod
+    def _replace_final_assistant_content(messages: list[dict], content: str | None) -> None:
+        for message in reversed(messages):
+            if message.get("role") != "assistant" or message.get("tool_calls"):
+                continue
+            if not isinstance(message.get("content"), str):
+                continue
+            message["content"] = content or ""
+            return
+
+    @staticmethod
+    def _parse_follow_up_at(value: str, timezone: str | None) -> datetime | None:
+        text = value.strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            follow_up_at = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if follow_up_at.tzinfo is None:
+            follow_up_at = follow_up_at.replace(tzinfo=ZoneInfo(timezone or "UTC"))
+        return follow_up_at
+
+    @staticmethod
+    def _build_scheduler_follow_up_message(decision: PlannerDecision) -> str:
+        summary = decision.summary or "Check back on the pending scheduler item."
+        planned = "\n".join(
+            f"- {item}" for item in decision.proposed_changes if str(item).strip()
+        )
+        body = [
+            "Follow up on this scheduler item.",
+            f"Prior planner summary: {summary}",
+        ]
+        if planned:
+            body.extend(["Planned changes:", planned])
+        if decision.blockers:
+            body.extend(["Known blockers:", "\n".join(f"- {item}" for item in decision.blockers)])
+        body.append(
+            "Reassess the current context, then send the user a concise reminder or next-step recommendation."
+        )
+        return "\n\n".join(body)
+
+    async def _maybe_schedule_planner_follow_up(
+        self,
+        runtime: ModeRuntime,
+        decision: PlannerDecision,
+        *,
+        channel: str,
+        chat_id: str,
+        tools_used: list[str],
+    ) -> str | None:
+        if decision.status != "schedule_followup":
+            return None
+        if "cron" in tools_used:
+            return None
+        if runtime.cron_service is None or not decision.follow_up_at:
+            return None
+
+        scheduled_for = self._parse_follow_up_at(decision.follow_up_at, runtime.context.timezone)
+        if scheduled_for is None:
+            return "I couldn't schedule the follow-up because `follow_up_at` was not a valid ISO datetime."
+
+        job = runtime.cron_service.add_job(
+            name="scheduler-followup",
+            schedule=CronSchedule(kind="at", at_ms=int(scheduled_for.timestamp() * 1000)),
+            message=self._build_scheduler_follow_up_message(decision),
+            deliver=True,
+            channel=channel,
+            to=chat_id,
+            mode=runtime.mode,
+            delete_after_run=True,
+        )
+        return (
+            "Follow-up scheduled for "
+            f"{scheduled_for.isoformat()} (job `{job.id}`)."
+        )
+
+    async def _apply_scheduler_contract(
+        self,
+        runtime: ModeRuntime,
+        run_result: _LoopRunResult,
+        *,
+        channel: str,
+        chat_id: str,
+    ) -> _LoopRunResult:
+        if runtime.mode != "scheduler":
+            return run_result
+
+        visible, decision = parse_planner_decision(run_result.final_content)
+        if decision is None:
+            return run_result
+
+        final_content = (visible or "").strip() or self._planner_fallback_message(decision)
+        follow_up_note = await self._maybe_schedule_planner_follow_up(
+            runtime,
+            decision,
+            channel=channel,
+            chat_id=chat_id,
+            tools_used=run_result.tools_used,
+        )
+        if follow_up_note:
+            final_content = (
+                f"{final_content}\n\n{follow_up_note}"
+                if final_content and follow_up_note not in final_content
+                else follow_up_note
+            )
+
+        self._replace_final_assistant_content(run_result.messages, final_content)
+        run_result.final_content = final_content
+        run_result.planner_decision = decision
+        return run_result
+
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
@@ -754,12 +906,18 @@ class AgentLoop:
             logger.warning("Max iterations ({}) reached", self.max_iterations)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return _LoopRunResult(
+        loop_result = _LoopRunResult(
             final_content=result.final_content,
             tools_used=result.tools_used,
             messages=result.messages,
             stop_reason=result.stop_reason,
             approval_request=result.approval_request,
+        )
+        return await self._apply_scheduler_contract(
+            runtime,
+            loop_result,
+            channel=channel,
+            chat_id=chat_id,
         )
 
     async def run(self) -> None:
@@ -963,6 +1121,7 @@ class AgentLoop:
                 channel=channel,
                 chat_id=chat_id,
                 content=final_content or "Background task completed.",
+                metadata=self._planner_decision_metadata(run_result.planner_decision),
             )
 
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
@@ -1062,6 +1221,7 @@ class AgentLoop:
         meta = dict(msg.metadata or {})
         if on_stream is not None:
             meta["_streamed"] = True
+        meta.update(self._planner_decision_metadata(run_result.planner_decision))
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
