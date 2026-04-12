@@ -1,4 +1,3 @@
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -24,7 +23,7 @@ async def test_read_interactive_input_async_returns_input(mock_prompt_session):
     mock_prompt_session.prompt_async.return_value = "hello world"
 
     result = await commands._read_interactive_input_async()
-    
+
     assert result == "hello world"
     mock_prompt_session.prompt_async.assert_called_once()
     args, _ = mock_prompt_session.prompt_async.call_args
@@ -44,18 +43,18 @@ def test_init_prompt_session_creates_session():
     """Test that _init_prompt_session initializes the global session."""
     # Ensure global is None before test
     commands._PROMPT_SESSION = None
-    
-    with patch("nanobot.cli.commands.PromptSession") as MockSession, \
-         patch("nanobot.cli.commands.FileHistory") as MockHistory, \
+
+    with patch("nanobot.cli.commands.PromptSession") as mock_session_cls, \
+         patch("nanobot.cli.commands.FileHistory"), \
          patch("pathlib.Path.home") as mock_home:
-        
+
         mock_home.return_value = MagicMock()
-        
+
         commands._init_prompt_session()
-        
+
         assert commands._PROMPT_SESSION is not None
-        MockSession.assert_called_once()
-        _, kwargs = MockSession.call_args
+        mock_session_cls.assert_called_once()
+        _, kwargs = mock_session_cls.call_args
         assert kwargs["multiline"] is False
         assert kwargs["enable_open_in_editor"] is False
 
@@ -156,13 +155,13 @@ def test_stream_renderer_stop_for_input_stops_spinner():
     # Create renderer with mocked console
     with patch.object(stream_mod, "_make_console", return_value=mock_console):
         renderer = stream_mod.StreamRenderer(show_spinner=True)
-        
+
         # Verify spinner started
         spinner.start.assert_called_once()
-        
+
         # Stop for input
         renderer.stop_for_input()
-        
+
         # Verify spinner stopped
         spinner.stop.assert_called_once()
 
@@ -171,3 +170,4 @@ def test_make_console_uses_force_terminal():
     """Console should be created with force_terminal=True for proper ANSI handling."""
     console = stream_mod._make_console()
     assert console._force_terminal is True
+

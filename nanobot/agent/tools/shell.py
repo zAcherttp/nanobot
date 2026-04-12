@@ -1,6 +1,7 @@
 """Shell execution tool."""
 
 import asyncio
+from contextlib import suppress
 import os
 import re
 import shutil
@@ -92,6 +93,7 @@ class ExecTool(Tool):
         self, command: str, working_dir: str | None = None,
         timeout: int | None = None, **kwargs: Any,
     ) -> str:
+        command = self._normalize_command(command)
         cwd = working_dir or self.working_dir or os.getcwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
@@ -119,17 +121,24 @@ class ExecTool(Tool):
 
         try:
             process = await self._spawn(command, cwd, env)
+            communicate_task = asyncio.create_task(process.communicate())
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
+                done, _pending = await asyncio.wait(
+                    {communicate_task},
                     timeout=effective_timeout,
                 )
-            except asyncio.TimeoutError:
-                await self._kill_process(process)
-                return f"Error: Command timed out after {effective_timeout} seconds"
+                if not done:
+                    await self._kill_process(process)
+                    with suppress(Exception):
+                        await communicate_task
+                    return f"Error: Command timed out after {effective_timeout} seconds"
+                stdout, stderr = communicate_task.result()
             except asyncio.CancelledError:
+                communicate_task.cancel()
                 await self._kill_process(process)
+                with suppress(Exception):
+                    await communicate_task
                 raise
 
             output_parts = []
@@ -167,8 +176,9 @@ class ExecTool(Tool):
         """Launch *command* in a platform-appropriate shell."""
         if _IS_WINDOWS:
             comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
-            return await asyncio.create_subprocess_exec(
-                comspec, "/c", command,
+            return await asyncio.create_subprocess_shell(
+                command,
+                executable=comspec,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
@@ -186,7 +196,9 @@ class ExecTool(Tool):
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
         """Kill a subprocess and reap it to prevent zombies."""
-        process.kill()
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
         try:
             await asyncio.wait_for(process.wait(), timeout=5.0)
         except asyncio.TimeoutError:
@@ -244,6 +256,19 @@ class ExecTool(Tool):
                 env[key] = val
         return env
 
+    @staticmethod
+    def _normalize_command(command: str) -> str:
+        """Normalize cross-platform command aliases before execution."""
+        if not _IS_WINDOWS:
+            return command
+
+        match = re.fullmatch(r"\s*sleep\s+([0-9]+(?:\.[0-9]+)?)\s*", command, re.IGNORECASE)
+        if not match:
+            return command
+
+        seconds = match.group(1)
+        return f'powershell -NoProfile -Command "Start-Sleep -Seconds {seconds}"'
+
     def _guard_command(self, command: str, cwd: str) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""
         cmd = command.strip()
@@ -275,8 +300,8 @@ class ExecTool(Tool):
                     continue
 
                 media_path = get_media_dir().resolve()
-                if (p.is_absolute() 
-                    and cwd_path not in p.parents 
+                if (p.is_absolute()
+                    and cwd_path not in p.parents
                     and p != cwd_path
                     and media_path not in p.parents
                     and p != media_path

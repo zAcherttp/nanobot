@@ -2,15 +2,21 @@
 
 import difflib
 import mimetypes
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from nanobot.agent.tools.base import Tool, tool_parameters
-from nanobot.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
 from nanobot.agent.tools import file_state
-from nanobot.utils.helpers import build_image_content_blocks, detect_image_mime
+from nanobot.agent.tools.base import Tool, tool_parameters
+from nanobot.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from nanobot.config.paths import get_media_dir
+from nanobot.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
 def _resolve_path(
@@ -26,7 +32,7 @@ def _resolve_path(
     resolved = p.resolve()
     if allowed_dir:
         media_path = get_media_dir().resolve()
-        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or []) 
+        all_dirs = [allowed_dir] + [media_path] + (extra_allowed_dirs or [])
         if not any(_is_under(resolved, d) for d in all_dirs):
             raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
     return resolved
@@ -73,10 +79,19 @@ _BLOCKED_DEVICE_PATHS = frozenset({
 def _is_blocked_device(path: str | Path) -> bool:
     """Check if path is a blocked device that could hang or produce infinite output."""
     import re
-    raw = str(path)
-    if raw in _BLOCKED_DEVICE_PATHS:
+
+    raw = str(path).strip().replace("\\", "/")
+    lowered = raw.lower()
+
+    # Normalize Windows-style drive roots (e.g. C:/dev/zero -> /dev/zero).
+    if len(lowered) >= 3 and lowered[1:3] == ":/":
+        lowered = lowered[2:]
+    if not lowered.startswith("/"):
+        lowered = "/" + lowered
+
+    if lowered in _BLOCKED_DEVICE_PATHS:
         return True
-    if re.match(r"/proc/\d+/fd/[012]$", raw) or re.match(r"/proc/self/fd/[012]$", raw):
+    if re.match(r"/proc/\d+/fd/[012]$", lowered) or re.match(r"/proc/self/fd/[012]$", lowered):
         return True
     return False
 
@@ -142,6 +157,22 @@ class ReadFileTool(_FsTool):
             # Device path blacklist
             if _is_blocked_device(path):
                 return f"Error: Reading {path} is blocked (device path that could hang or produce infinite output)."
+
+            # Check symlink target before resolving, so broken links to blocked devices
+            # (e.g. /dev/zero on Windows test environments) are still rejected.
+            unresolved = Path(path).expanduser()
+            if not unresolved.is_absolute() and self._workspace:
+                unresolved = self._workspace / unresolved
+            try:
+                if unresolved.is_symlink():
+                    target = os.readlink(unresolved)
+                    if _is_blocked_device(target):
+                        return (
+                            f"Error: Reading {path} is blocked "
+                            "(device path that could hang or produce infinite output)."
+                        )
+            except OSError:
+                pass
 
             fp = self._resolve(path)
             if _is_blocked_device(fp):

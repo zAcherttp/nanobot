@@ -19,6 +19,18 @@ from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 API_SESSION_KEY = "api:default"
 API_CHAT_ID = "default"
 
+AGENT_LOOP_APP_KEY = web.AppKey("agent_loop", object)
+MODEL_NAME_APP_KEY = web.AppKey("model_name", str)
+REQUEST_TIMEOUT_APP_KEY = web.AppKey("request_timeout", float)
+SESSION_LOCKS_APP_KEY = web.AppKey("session_locks", dict)
+
+
+def _app_state(app: Any, key: web.AppKey, legacy_key: str, default: Any = None) -> Any:
+    """Read app state while remaining compatible with dict-based test doubles."""
+    if key in app:
+        return app[key]
+    return app.get(legacy_key, default)
+
 
 # ---------------------------------------------------------------------------
 # Response helpers
@@ -88,19 +100,24 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
             part.get("text", "") for part in user_content if part.get("type") == "text"
         )
 
-    agent_loop = request.app["agent_loop"]
-    timeout_s: float = request.app.get("request_timeout", 120.0)
-    model_name: str = request.app.get("model_name", "nanobot")
+    agent_loop = _app_state(request.app, AGENT_LOOP_APP_KEY, "agent_loop")
+    timeout_s: float = _app_state(request.app, REQUEST_TIMEOUT_APP_KEY, "request_timeout", 120.0)
+    model_name: str = _app_state(request.app, MODEL_NAME_APP_KEY, "model_name", "nanobot")
     if (requested_model := body.get("model")) and requested_model != model_name:
         return _error_json(400, f"Only configured model '{model_name}' is available")
 
     session_key = f"api:{body['session_id']}" if body.get("session_id") else API_SESSION_KEY
-    session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
+    session_locks: dict[str, asyncio.Lock] = _app_state(
+        request.app,
+        SESSION_LOCKS_APP_KEY,
+        "session_locks",
+        {},
+    )
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
 
     logger.info("API request session_key={} content={}", session_key, user_content[:80])
 
-    _FALLBACK = EMPTY_FINAL_RESPONSE_MESSAGE
+    fallback = EMPTY_FINAL_RESPONSE_MESSAGE
 
     try:
         async with session_lock:
@@ -136,7 +153,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                             "Empty response after retry for session {}, using fallback",
                             session_key,
                         )
-                        response_text = _FALLBACK
+                        response_text = fallback
 
             except asyncio.TimeoutError:
                 return _error_json(504, f"Request timed out after {timeout_s}s")
@@ -152,7 +169,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
 
 async def handle_models(request: web.Request) -> web.Response:
     """GET /v1/models"""
-    model_name = request.app.get("model_name", "nanobot")
+    model_name = _app_state(request.app, MODEL_NAME_APP_KEY, "model_name", "nanobot")
     return web.json_response({
         "object": "list",
         "data": [
@@ -184,10 +201,10 @@ def create_app(agent_loop, model_name: str = "nanobot", request_timeout: float =
         request_timeout: Per-request timeout in seconds.
     """
     app = web.Application()
-    app["agent_loop"] = agent_loop
-    app["model_name"] = model_name
-    app["request_timeout"] = request_timeout
-    app["session_locks"] = {}  # per-user locks, keyed by session_key
+    app[AGENT_LOOP_APP_KEY] = agent_loop
+    app[MODEL_NAME_APP_KEY] = model_name
+    app[REQUEST_TIMEOUT_APP_KEY] = request_timeout
+    app[SESSION_LOCKS_APP_KEY] = {}  # per-user locks, keyed by session_key
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)

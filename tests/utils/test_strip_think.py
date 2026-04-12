@@ -1,4 +1,3 @@
-import pytest
 
 from nanobot.utils.helpers import strip_think
 

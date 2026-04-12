@@ -490,7 +490,7 @@ def test_update_job_offline_writes_action(tmp_path) -> None:
 
     action_path = tmp_path / "cron" / "action.jsonl"
     assert action_path.exists()
-    lines = [l for l in action_path.read_text().strip().split("\n") if l]
+    lines = [line for line in action_path.read_text().strip().split("\n") if line]
     last = json.loads(lines[-1])
     assert last["action"] == "update"
     assert last["params"]["name"] == "updated-offline"
@@ -564,3 +564,4 @@ async def test_list_jobs_during_on_job_does_not_cause_stale_reload(tmp_path) -> 
         next_run = j["state"]["nextRunAtMs"]
         assert next_run is not None
         assert next_run > now_ms, f"Job '{j['name']}' next_run should be in the future"
+

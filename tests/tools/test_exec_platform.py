@@ -116,15 +116,15 @@ class TestSpawnWindows:
         env = {"COMSPEC": r"C:\Windows\system32\cmd.exe", "PATH": ""}
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_shell,
         ):
-            mock_exec.return_value = AsyncMock()
+            mock_shell.return_value = AsyncMock()
             await ExecTool._spawn("dir", r"C:\Users", env)
 
-        args = mock_exec.call_args[0]
-        assert "cmd.exe" in args[0]
-        assert "/c" in args
-        assert "dir" in args
+        args = mock_shell.call_args[0]
+        kwargs = mock_shell.call_args[1]
+        assert args[0] == "dir"
+        assert "cmd.exe" in kwargs["executable"]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_comspec(self):
@@ -132,13 +132,13 @@ class TestSpawnWindows:
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
             patch.dict("os.environ", {}, clear=True),
-            patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+            patch("asyncio.create_subprocess_shell", new_callable=AsyncMock) as mock_shell,
         ):
-            mock_exec.return_value = AsyncMock()
+            mock_shell.return_value = AsyncMock()
             await ExecTool._spawn("dir", r"C:\Users", env)
 
-        args = mock_exec.call_args[0]
-        assert args[0] == "cmd.exe"
+        kwargs = mock_shell.call_args[1]
+        assert kwargs["executable"] == "cmd.exe"
 
 
 # ---------------------------------------------------------------------------
