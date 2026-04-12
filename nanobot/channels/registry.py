@@ -1,8 +1,9 @@
-"""Discovery for built-in channel modules and external plugins."""
+"""Auto-discovery for built-in channel modules and external plugins."""
 
 from __future__ import annotations
 
 import importlib
+import pkgutil
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -10,12 +11,18 @@ from loguru import logger
 if TYPE_CHECKING:
     from nanobot.channels.base import BaseChannel
 
-_BUILTIN_CHANNELS = ("telegram",)
+_INTERNAL = frozenset({"base", "manager", "registry"})
 
 
 def discover_channel_names() -> list[str]:
-    """Return the built-in channels shipped with nanobot."""
-    return list(_BUILTIN_CHANNELS)
+    """Return all built-in channel module names by scanning the package (zero imports)."""
+    import nanobot.channels as pkg
+
+    return [
+        name
+        for _, name, ispkg in pkgutil.iter_modules(pkg.__path__)
+        if name not in _INTERNAL and not ispkg
+    ]
 
 
 def load_channel_class(module_name: str) -> type[BaseChannel]:

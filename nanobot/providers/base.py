@@ -18,7 +18,6 @@ from nanobot.utils.helpers import image_placeholder_text
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""
-
     id: str
     name: str
     arguments: dict[str, Any]
@@ -41,16 +40,13 @@ class ToolCallRequest:
         if self.provider_specific_fields:
             tool_call["provider_specific_fields"] = self.provider_specific_fields
         if self.function_provider_specific_fields:
-            tool_call["function"]["provider_specific_fields"] = (
-                self.function_provider_specific_fields
-            )
+            tool_call["function"]["provider_specific_fields"] = self.function_provider_specific_fields
         return tool_call
 
 
 @dataclass
 class LLMResponse:
     """Response from an LLM provider."""
-
     content: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
@@ -104,28 +100,24 @@ class LLMProvider(ABC):
     )
     _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429})
     _TRANSIENT_ERROR_KINDS = frozenset({"timeout", "connection"})
-    _NON_RETRYABLE_429_ERROR_TOKENS = frozenset(
-        {
-            "insufficient_quota",
-            "quota_exceeded",
-            "quota_exhausted",
-            "billing_hard_limit_reached",
-            "insufficient_balance",
-            "credit_balance_too_low",
-            "billing_not_active",
-            "payment_required",
-        }
-    )
-    _RETRYABLE_429_ERROR_TOKENS = frozenset(
-        {
-            "rate_limit_exceeded",
-            "rate_limit_error",
-            "too_many_requests",
-            "request_limit_exceeded",
-            "requests_limit_exceeded",
-            "overloaded_error",
-        }
-    )
+    _NON_RETRYABLE_429_ERROR_TOKENS = frozenset({
+        "insufficient_quota",
+        "quota_exceeded",
+        "quota_exhausted",
+        "billing_hard_limit_reached",
+        "insufficient_balance",
+        "credit_balance_too_low",
+        "billing_not_active",
+        "payment_required",
+    })
+    _RETRYABLE_429_ERROR_TOKENS = frozenset({
+        "rate_limit_exceeded",
+        "rate_limit_error",
+        "too_many_requests",
+        "request_limit_exceeded",
+        "requests_limit_exceeded",
+        "overloaded_error",
+    })
     _NON_RETRYABLE_429_TEXT_MARKERS = (
         "insufficient_quota",
         "insufficient quota",
@@ -169,11 +161,7 @@ class LLMProvider(ABC):
 
             if isinstance(content, str) and not content:
                 clean = dict(msg)
-                clean["content"] = (
-                    None
-                    if (msg.get("role") == "assistant" and msg.get("tool_calls"))
-                    else "(empty)"
-                )
+                clean["content"] = None if (msg.get("role") == "assistant" and msg.get("tool_calls")) else "(empty)"
                 result.append(clean)
                 continue
 
@@ -293,7 +281,7 @@ class LLMProvider(ABC):
 
     @classmethod
     def _is_transient_response(cls, response: LLMResponse) -> bool:
-        """Prefer structured error metadata, fallback to text markers."""
+        """Prefer structured error metadata, fallback to text markers for legacy providers."""
         if response.error_should_retry is not None:
             return bool(response.error_should_retry)
 
@@ -347,7 +335,10 @@ class LLMProvider(ABC):
     def _is_retryable_429_response(cls, response: LLMResponse) -> bool:
         type_token = cls._normalize_error_token(response.error_type)
         code_token = cls._normalize_error_token(response.error_code)
-        semantic_tokens = {token for token in (type_token, code_token) if token is not None}
+        semantic_tokens = {
+            token for token in (type_token, code_token)
+            if token is not None
+        }
         if any(token in cls._NON_RETRYABLE_429_ERROR_TOKENS for token in semantic_tokens):
             return False
 
@@ -361,6 +352,50 @@ class LLMProvider(ABC):
             return True
         # Unknown 429 defaults to WAIT+retry.
         return True
+
+    @staticmethod
+    def _enforce_role_alternation(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Merge consecutive same-role messages and drop trailing assistant messages.
+
+        Some providers (OpenAI-compat, Azure, vLLM, Ollama, etc.) reject requests
+        where the last message is 'assistant' (prefill not supported) or two
+        consecutive non-system messages share the same role.
+        """
+        if not messages:
+            return messages
+
+        merged: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role")
+            if (
+                merged
+                and role != "system"
+                and role not in ("tool",)
+                and merged[-1].get("role") == role
+                and role in ("user", "assistant")
+            ):
+                prev = merged[-1]
+                if role == "assistant":
+                    prev_has_tools = bool(prev.get("tool_calls"))
+                    curr_has_tools = bool(msg.get("tool_calls"))
+                    if curr_has_tools:
+                        merged[-1] = dict(msg)
+                        continue
+                    if prev_has_tools:
+                        continue
+                prev_content = prev.get("content") or ""
+                curr_content = msg.get("content") or ""
+                if isinstance(prev_content, str) and isinstance(curr_content, str):
+                    prev["content"] = (prev_content + "\n\n" + curr_content).strip()
+                else:
+                    merged[-1] = dict(msg)
+            else:
+                merged.append(dict(msg))
+
+        while merged and merged[-1].get("role") == "assistant":
+            merged.pop()
+
+        return merged
 
     @staticmethod
     def _strip_image_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
@@ -412,13 +447,9 @@ class LLMProvider(ABC):
         streaming should override this method.
         """
         response = await self.chat(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tool_choice=tool_choice,
+            messages=messages, tools=tools, model=model,
+            max_tokens=max_tokens, temperature=temperature,
+            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
         )
         if on_content_delta and response.content:
             await on_content_delta(response.content)
@@ -455,13 +486,9 @@ class LLMProvider(ABC):
             reasoning_effort = self.generation.reasoning_effort
 
         kw: dict[str, Any] = dict(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tool_choice=tool_choice,
+            messages=messages, tools=tools, model=model,
+            max_tokens=max_tokens, temperature=temperature,
+            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
             on_content_delta=on_content_delta,
         )
         return await self._run_with_retry(
@@ -498,13 +525,9 @@ class LLMProvider(ABC):
             reasoning_effort = self.generation.reasoning_effort
 
         kw: dict[str, Any] = dict(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tool_choice=tool_choice,
+            messages=messages, tools=tools, model=model,
+            max_tokens=max_tokens, temperature=temperature,
+            reasoning_effort=reasoning_effort, tool_choice=tool_choice,
         )
         return await self._run_with_retry(
             self._safe_chat,
@@ -632,7 +655,7 @@ class LLMProvider(ABC):
             if response.finish_reason != "error":
                 return response
             last_response = response
-            error_key = (response.content or "").strip().lower() or None
+            error_key = ((response.content or "").strip().lower() or None)
             if error_key and error_key == last_error_key:
                 identical_error_count += 1
             else:

@@ -57,24 +57,18 @@ class HeartbeatService:
         model: str,
         on_execute: Callable[[str], Coroutine[Any, Any, str]] | None = None,
         on_notify: Callable[[str], Coroutine[Any, Any, None]] | None = None,
-        on_scheduler_sync: Callable[[], Coroutine[Any, Any, Any]] | None = None,
-        on_scheduler_reflection: Callable[[], Coroutine[Any, Any, list[str] | str | None]] | None = None,
         interval_s: int = 30 * 60,
         enabled: bool = True,
         timezone: str | None = None,
-        mode: str = "general",
     ):
         self.workspace = workspace
         self.provider = provider
         self.model = model
         self.on_execute = on_execute
         self.on_notify = on_notify
-        self.on_scheduler_sync = on_scheduler_sync
-        self.on_scheduler_reflection = on_scheduler_reflection
         self.interval_s = interval_s
         self.enabled = enabled
         self.timezone = timezone
-        self.mode = mode
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -97,30 +91,14 @@ class HeartbeatService:
         """
         from nanobot.utils.helpers import current_time_str
 
-        if self.mode == "scheduler":
-            system_prompt = (
-                "You are a scheduler heartbeat agent. Review scheduler heartbeat tasks and decide "
-                "whether a scheduler follow-up should run. Use `run` only for reminders, scheduling "
-                "drift, workload risk, or actionable planning checks. Never assume permission to apply "
-                "external changes directly."
-            )
-        else:
-            system_prompt = "You are a heartbeat agent. Call the heartbeat tool to report your decision."
-
         response = await self.provider.chat_with_retry(
             messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Current Time: {current_time_str(self.timezone)}\n\n"
-                        "Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n"
-                        f"{content}"
-                    ),
-                },
+                {"role": "system", "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
+                {"role": "user", "content": (
+                    f"Current Time: {current_time_str(self.timezone)}\n\n"
+                    "Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n"
+                    f"{content}"
+                )},
             ],
             tools=_HEARTBEAT_TOOL,
             model=self.model,
@@ -176,17 +154,6 @@ class HeartbeatService:
         logger.info("Heartbeat: checking for tasks...")
 
         try:
-            if self.mode == "scheduler" and self.on_scheduler_sync is not None:
-                await self.on_scheduler_sync()
-            if self.mode == "scheduler" and self.on_scheduler_reflection is not None:
-                reflections = await self.on_scheduler_reflection()
-                if reflections and self.on_notify:
-                    if isinstance(reflections, str):
-                        reflections = [reflections]
-                    for message in reflections:
-                        if message:
-                            await self.on_notify(message)
-
             action, tasks = await self._decide(content)
 
             if action != "run":
@@ -199,11 +166,7 @@ class HeartbeatService:
 
                 if response:
                     should_notify = await evaluate_response(
-                        response,
-                        tasks,
-                        self.provider,
-                        self.model,
-                        mode=self.mode,
+                        response, tasks, self.provider, self.model,
                     )
                     if should_notify and self.on_notify:
                         logger.info("Heartbeat: completed, delivering response")

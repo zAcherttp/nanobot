@@ -44,9 +44,7 @@ class Schema(ABC):
         Used by :class:`Tool` and each concrete Schema's :meth:`validate_value`.
         """
         raw_type = schema.get("type")
-        nullable = (isinstance(raw_type, list) and "null" in raw_type) or schema.get(
-            "nullable", False
-        )
+        nullable = (isinstance(raw_type, list) and "null" in raw_type) or schema.get("nullable", False)
         t = Schema.resolve_json_schema_type(raw_type)
         label = path or "parameter"
 
@@ -58,11 +56,7 @@ class Schema(ABC):
             not isinstance(val, _JSON_TYPE_MAP["number"]) or isinstance(val, bool)
         ):
             return [f"{label} should be number"]
-        if (
-            t in _JSON_TYPE_MAP
-            and t not in ("integer", "number")
-            and not isinstance(val, _JSON_TYPE_MAP[t])
-        ):
+        if t in _JSON_TYPE_MAP and t not in ("integer", "number") and not isinstance(val, _JSON_TYPE_MAP[t]):
             return [f"{label} should be {t}"]
 
         errors: list[str] = []
@@ -85,9 +79,7 @@ class Schema(ABC):
                     errors.append(f"missing required {Schema.subpath(path, k)}")
             for k, v in val.items():
                 if k in props:
-                    errors.extend(
-                        Schema.validate_json_schema_value(v, props[k], Schema.subpath(path, k))
-                    )
+                    errors.extend(Schema.validate_json_schema_value(v, props[k], Schema.subpath(path, k)))
         if t == "array":
             if "minItems" in schema and len(val) < schema["minItems"]:
                 errors.append(f"{label} must have at least {schema['minItems']} items")
@@ -173,20 +165,6 @@ class Tool(ABC):
     def exclusive(self) -> bool:
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
-
-    @property
-    def approval_family(self) -> str | None:
-        """Logical family for approval policy and conversation-scoped grants."""
-        return None
-
-    def approval_scope_key(self, params: dict[str, Any]) -> str | None:
-        """Stable scope key for conversation-scoped approval grants."""
-        _ = params
-        return self.name
-
-    def build_approval_preview(self, params: dict[str, Any]) -> str:
-        """Human-readable summary shown to the user before executing the tool."""
-        return f"{self.name}({params})"
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> Any:

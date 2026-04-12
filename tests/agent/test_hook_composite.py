@@ -67,16 +67,11 @@ async def test_composite_fans_out_all_async_methods():
     await hook.after_iteration(ctx)
 
     assert events == [
-        "before_iteration",
-        "before_iteration",
-        "on_stream:hi",
-        "on_stream:hi",
-        "on_stream_end:True",
-        "on_stream_end:True",
-        "before_execute_tools",
-        "before_execute_tools",
-        "after_iteration",
-        "after_iteration",
+        "before_iteration", "before_iteration",
+        "on_stream:hi", "on_stream:hi",
+        "on_stream_end:True", "on_stream_end:True",
+        "before_execute_tools", "before_execute_tools",
+        "after_iteration", "after_iteration",
     ]
 
 
@@ -127,20 +122,16 @@ async def test_composite_error_isolation_all_async():
     class Bad(AgentHook):
         async def on_stream_end(self, context, *, resuming):
             raise RuntimeError("err")
-
         async def before_execute_tools(self, context):
             raise RuntimeError("err")
-
         async def after_iteration(self, context):
             raise RuntimeError("err")
 
     class Good(AgentHook):
         async def on_stream_end(self, context, *, resuming):
             calls.append("on_stream_end")
-
         async def before_execute_tools(self, context):
             calls.append("before_execute_tools")
-
         async def after_iteration(self, context):
             calls.append("after_iteration")
 
@@ -284,19 +275,14 @@ def _make_loop(tmp_path, hooks=None):
     provider.get_default_model.return_value = "test-model"
     provider.generation.max_tokens = 4096
 
-    with (
-        patch("nanobot.agent.loop.ContextBuilder"),
-        patch("nanobot.agent.loop.SessionManager"),
-        patch("nanobot.agent.loop.SubagentManager") as mock_sub_mgr,
-        patch("nanobot.agent.loop.Consolidator"),
-        patch("nanobot.agent.loop.Dream"),
-    ):
+    with patch("nanobot.agent.loop.ContextBuilder"), \
+         patch("nanobot.agent.loop.SessionManager"), \
+         patch("nanobot.agent.loop.SubagentManager") as mock_sub_mgr, \
+         patch("nanobot.agent.loop.Consolidator"), \
+         patch("nanobot.agent.loop.Dream"):
         mock_sub_mgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(
-            bus=bus,
-            provider=provider,
-            workspace=tmp_path,
-            hooks=hooks,
+            bus=bus, provider=provider, workspace=tmp_path, hooks=hooks,
         )
     return loop
 
@@ -321,7 +307,9 @@ async def test_agent_loop_extra_hook_receives_calls(tmp_path):
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
 
-    content, tools_used, messages = await loop._run_agent_loop([{"role": "user", "content": "hi"}])
+    content, tools_used, messages, _, _ = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}]
+    )
 
     assert content == "done"
     assert "before_iter:0" in events
@@ -343,7 +331,9 @@ async def test_agent_loop_extra_hook_error_isolation(tmp_path):
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
 
-    content, _, _ = await loop._run_agent_loop([{"role": "user", "content": "hi"}])
+    content, _, _, _, _ = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}]
+    )
 
     assert content == "still works"
 
@@ -354,13 +344,11 @@ async def test_agent_loop_extra_hooks_do_not_swallow_loop_hook_errors(tmp_path):
     from nanobot.providers.base import LLMResponse, ToolCallRequest
 
     loop = _make_loop(tmp_path, hooks=[AgentHook()])
-    loop.provider.chat_with_retry = AsyncMock(
-        return_value=LLMResponse(
-            content="working",
-            tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
-            usage={},
-        )
-    )
+    loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="working",
+        tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+        usage={},
+    ))
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.tools.execute = AsyncMock(return_value="ok")
 
@@ -377,17 +365,15 @@ async def test_agent_loop_no_hooks_backward_compat(tmp_path):
     from nanobot.providers.base import LLMResponse, ToolCallRequest
 
     loop = _make_loop(tmp_path)
-    loop.provider.chat_with_retry = AsyncMock(
-        return_value=LLMResponse(
-            content="working",
-            tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
-        )
-    )
+    loop.provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
+        content="working",
+        tool_calls=[ToolCallRequest(id="c1", name="list_dir", arguments={"path": "."})],
+    ))
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.tools.execute = AsyncMock(return_value="ok")
     loop.max_iterations = 2
 
-    content, tools_used, _ = await loop._run_agent_loop([])
+    content, tools_used, _, _, _ = await loop._run_agent_loop([])
     assert content == (
         "I reached the maximum number of tool call iterations (2) "
         "without completing the task. You can try breaking the task into smaller steps."

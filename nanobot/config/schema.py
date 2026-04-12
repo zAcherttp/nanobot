@@ -15,7 +15,6 @@ class Base(BaseModel):
 
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-
 class ChannelsConfig(Base):
     """Configuration for chat channels.
 
@@ -28,9 +27,7 @@ class ChannelsConfig(Base):
 
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
-    send_max_retries: int = Field(
-        default=3, ge=0, le=10
-    )  # Max delivery attempts (initial send included)
+    send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
 
 
@@ -40,6 +37,7 @@ class DreamConfig(Base):
     _HOUR_MS = 3_600_000
 
     interval_h: int = Field(default=2, ge=1)  # Every 2 hours by default
+    cron: str | None = Field(default=None, exclude=True)  # Legacy compatibility override
     model_override: str | None = Field(
         default=None,
         validation_alias=AliasChoices("modelOverride", "model", "model_override"),
@@ -48,12 +46,17 @@ class DreamConfig(Base):
     max_iterations: int = Field(default=10, ge=1)  # Max tool calls per Phase 2
 
     def build_schedule(self, timezone: str) -> CronSchedule:
-        """Build the runtime schedule from interval_h."""
+        """Build the runtime schedule, preferring the legacy cron override if present."""
+        if self.cron:
+            return CronSchedule(kind="cron", expr=self.cron, tz=timezone)
         return CronSchedule(kind="every", every_ms=self.interval_h * self._HOUR_MS)
 
     def describe_schedule(self) -> str:
         """Return a human-readable summary for logs and startup output."""
-        return f"every {self.interval_h}h"
+        if self.cron:
+            return f"cron {self.cron} (legacy)"
+        hours = self.interval_h
+        return f"every {hours}h"
 
 
 class AgentDefaults(Base):
@@ -73,6 +76,13 @@ class AgentDefaults(Base):
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     reasoning_effort: str | None = None  # low / medium / high / adaptive - enables LLM thinking mode
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
+    unified_session: bool = False  # Share one session across all channels (single-user multi-device)
+    session_ttl_minutes: int = Field(
+        default=0,
+        ge=0,
+        validation_alias=AliasChoices("idleCompactAfterMinutes", "sessionTtlMinutes"),
+        serialization_alias="idleCompactAfterMinutes",
+    )  # Auto-compact idle threshold in minutes (0 = disabled)
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
@@ -94,9 +104,7 @@ class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # Azure OpenAI (model = deployment name)
+    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -116,21 +124,11 @@ class ProvidersConfig(Base):
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(
-        default_factory=ProviderConfig
-    )  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(
-        default_factory=ProviderConfig, exclude=True
-    )  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(
-        default_factory=ProviderConfig, exclude=True
-    )  # Github Copilot (OAuth)
+    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
+    byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
+    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
+    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
+    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
 
 
@@ -161,7 +159,7 @@ class GatewayConfig(Base):
 class WebSearchConfig(Base):
     """Web search tool configuration."""
 
-    provider: str = "duckduckgo"  # brave, tavily, duckduckgo, searxng, jina
+    provider: str = "duckduckgo"  # brave, tavily, duckduckgo, searxng, jina, kagi
     api_key: str = ""
     base_url: str = ""  # SearXNG base URL
     max_results: int = 5
@@ -185,57 +183,7 @@ class ExecToolConfig(Base):
     timeout: int = 60
     path_append: str = ""
     sandbox: str = ""  # sandbox backend: "" (none) or "bwrap"
-
-
-class CalendarToolConfig(Base):
-    """Google Calendar tool configuration backed by the gws CLI."""
-
-    enable: bool = False
-    command: str = "gws"
-    timeout: int = 30
-
-
-class TasksToolConfig(Base):
-    """Google Tasks tool configuration backed by the gws CLI."""
-
-    enable: bool = False
-    command: str = "gws"
-    timeout: int = 30
-
-
-ApprovalPolicy = Literal["allow", "ask", "deny"]
-
-
-def _default_tool_permissions() -> dict[str, ApprovalPolicy]:
-    return {
-        "mcp_gws_calendar_agenda": "allow",
-        "mcp_gws_calendar_list_calendars": "allow",
-        "mcp_gws_calendar_list_events": "allow",
-        "mcp_gws_calendar_get_event": "allow",
-        "mcp_gws_calendar_find_free_time": "allow",
-        "mcp_gws_calendar_list_event_changes": "allow",
-        "mcp_gws_calendar_create_event": "ask",
-        "mcp_gws_calendar_update_event": "ask",
-        "mcp_gws_calendar_delete_event": "ask",
-        "mcp_gws_tasks_list_tasklists": "allow",
-        "mcp_gws_tasks_list_tasks": "allow",
-        "mcp_gws_tasks_get_task": "allow",
-        "mcp_gws_tasks_list_task_changes": "allow",
-        "mcp_gws_tasks_create_task": "ask",
-        "mcp_gws_tasks_update_task": "ask",
-        "mcp_gws_tasks_move_task": "ask",
-        "mcp_gws_tasks_delete_task": "ask",
-        "mcp_gws_tasks_complete_task": "ask",
-        "scheduler_apply_proposal_bundle": "ask",
-    }
-
-
-class ToolPermissionsConfig(Base):
-    """Per-tool approval policies."""
-
-    default_policy: ApprovalPolicy | None = None
-    tools: dict[str, ApprovalPolicy] = Field(default_factory=_default_tool_permissions)
-
+    allowed_env_keys: list[str] = Field(default_factory=list)  # Env var names to pass through to subprocess (e.g. ["GOPATH", "JAVA_HOME"])
 
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
@@ -247,24 +195,16 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
-    enabled_tools: list[str] = Field(
-        default_factory=lambda: ["*"]
-    )  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
-
+    enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
 class ToolsConfig(Base):
     """Tools configuration."""
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
-    calendar: CalendarToolConfig = Field(default_factory=CalendarToolConfig)
-    tasks: TasksToolConfig = Field(default_factory=TasksToolConfig)
-    permissions: ToolPermissionsConfig = Field(default_factory=ToolPermissionsConfig)
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-    ssrf_whitelist: list[str] = Field(
-        default_factory=list
-    )  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
+    ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
 
 class Config(BaseSettings):

@@ -13,15 +13,6 @@ from nanobot.utils.helpers import build_status_content
 from nanobot.utils.restart import set_restart_notice_to_env
 
 
-def _runtime_or_legacy(ctx: CommandContext):
-    if ctx.runtime is not None:
-        return ctx.runtime
-    resolver = getattr(ctx.loop, "_runtime_for_mode", None)
-    if callable(resolver):
-        return resolver(ctx.mode)
-    return None
-
-
 async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
     """Cancel all active tasks and subagents for the session."""
     loop = ctx.loop
@@ -33,13 +24,12 @@ async def cmd_stop(ctx: CommandContext) -> OutboundMessage:
             await t
         except (asyncio.CancelledError, Exception):
             pass
-    runtime = _runtime_or_legacy(ctx)
-    subagent_manager = runtime.subagents if runtime is not None else loop.subagents
-    sub_cancelled = await subagent_manager.cancel_by_session(msg.session_key)
+    sub_cancelled = await loop.subagents.cancel_by_session(msg.session_key)
     total = cancelled + sub_cancelled
     content = f"Stopped {total} task(s)." if total else "No active task to stop."
     return OutboundMessage(
-        channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=dict(msg.metadata or {})
+        channel=msg.channel, chat_id=msg.chat_id, content=content,
+        metadata=dict(msg.metadata or {})
     )
 
 
@@ -54,32 +44,27 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
 
     asyncio.create_task(_do_restart())
     return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="Restarting...",
-        metadata=dict(msg.metadata or {}),
+        channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
+        metadata=dict(msg.metadata or {})
     )
 
 
 async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     """Build an outbound status message for a session."""
     loop = ctx.loop
-    runtime = _runtime_or_legacy(ctx)
-    session = ctx.session or (runtime.sessions.get_or_create(ctx.key) if runtime is not None else loop.sessions.get_or_create(ctx.key))
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
     ctx_est = 0
     try:
-        consolidator = runtime.consolidator if runtime is not None else loop.consolidator
-        ctx_est, _ = consolidator.estimate_session_prompt_tokens(session)
+        ctx_est, _ = loop.consolidator.estimate_session_prompt_tokens(session)
     except Exception:
         pass
     if ctx_est <= 0:
         ctx_est = loop._last_usage.get("prompt_tokens", 0)
-
+    
     # Fetch web search provider usage (best-effort, never blocks the response)
     search_usage_text: str | None = None
     try:
         from nanobot.utils.searchusage import fetch_search_usage
-
         web_cfg = getattr(loop, "web_config", None)
         search_cfg = getattr(web_cfg, "search", None) if web_cfg else None
         if search_cfg is not None:
@@ -93,11 +78,8 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=build_status_content(
-            version=__version__,
-            mode=ctx.mode,
-            model=loop.model,
-            start_time=loop._start_time,
-            last_usage=loop._last_usage,
+            version=__version__, model=loop.model,
+            start_time=loop._start_time, last_usage=loop._last_usage,
             context_window_tokens=loop.context_window_tokens,
             session_msg_count=len(session.get_history(max_messages=0)),
             context_tokens_estimate=ctx_est,
@@ -110,21 +92,17 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
 async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     """Start a fresh session."""
     loop = ctx.loop
-    runtime = _runtime_or_legacy(ctx)
-    session = ctx.session or (runtime.sessions.get_or_create(ctx.key) if runtime is not None else loop.sessions.get_or_create(ctx.key))
-    snapshot = session.messages[session.last_consolidated :]
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    snapshot = session.messages[session.last_consolidated:]
     session.clear()
-    sessions = runtime.sessions if runtime is not None else loop.sessions
-    sessions.save(session)
-    sessions.invalidate(session.key)
+    loop.sessions.save(session)
+    loop.sessions.invalidate(session.key)
     if snapshot:
-        consolidator = runtime.consolidator if runtime is not None else loop.consolidator
-        loop._schedule_background(consolidator.archive(snapshot))
+        loop._schedule_background(loop.consolidator.archive(snapshot))
     return OutboundMessage(
-        channel=ctx.msg.channel,
-        chat_id=ctx.msg.chat_id,
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="New session started.",
-        metadata=dict(ctx.msg.metadata or {}),
+        metadata=dict(ctx.msg.metadata or {})
     )
 
 
@@ -133,35 +111,27 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
     import time
 
     loop = ctx.loop
-    runtime = _runtime_or_legacy(ctx)
     msg = ctx.msg
 
     async def _run_dream():
         t0 = time.monotonic()
         try:
-            dream = runtime.dream if runtime is not None else loop.dream
-            did_work = await dream.run()
+            did_work = await loop.dream.run()
             elapsed = time.monotonic() - t0
             if did_work:
-                content = f"Dream completed in {elapsed:.1f}s for `{ctx.mode}` mode."
+                content = f"Dream completed in {elapsed:.1f}s."
             else:
-                content = f"Dream: nothing to process for `{ctx.mode}` mode."
+                content = "Dream: nothing to process."
         except Exception as e:
             elapsed = time.monotonic() - t0
             content = f"Dream failed after {elapsed:.1f}s: {e}"
-        await loop.bus.publish_outbound(
-            OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=content,
-            )
-        )
+        await loop.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content=content,
+        ))
 
     asyncio.create_task(_run_dream())
     return OutboundMessage(
-        channel=msg.channel,
-        chat_id=msg.chat_id,
-        content="Dreaming...",
+        channel=msg.channel, chat_id=msg.chat_id, content="Dreaming...",
     )
 
 
@@ -197,32 +167,26 @@ def _format_dream_log_content(commit, diff: str, *, requested_sha: str | None = 
     lines = [
         "## Dream Update",
         "",
-        "Here is the selected Dream memory change."
-        if requested_sha
-        else "Here is the latest Dream memory change.",
+        "Here is the selected Dream memory change." if requested_sha else "Here is the latest Dream memory change.",
         "",
         f"- Commit: `{commit.sha}`",
         f"- Time: {commit.timestamp}",
         f"- Changed files: {files_line}",
     ]
     if diff:
-        lines.extend(
-            [
-                "",
-                f"Use `/dream-restore {commit.sha}` to undo this change.",
-                "",
-                "```diff",
-                diff.rstrip(),
-                "```",
-            ]
-        )
+        lines.extend([
+            "",
+            f"Use `/dream-restore {commit.sha}` to undo this change.",
+            "",
+            "```diff",
+            diff.rstrip(),
+            "```",
+        ])
     else:
-        lines.extend(
-            [
-                "",
-                "Dream recorded this version, but there is no file diff to display.",
-            ]
-        )
+        lines.extend([
+            "",
+            "Dream recorded this version, but there is no file diff to display.",
+        ])
     return "\n".join(lines)
 
 
@@ -235,13 +199,11 @@ def _format_dream_restore_list(commits: list) -> str:
     ]
     for c in commits:
         lines.append(f"- `{c.sha}` {c.timestamp} - {c.message.splitlines()[0]}")
-    lines.extend(
-        [
-            "",
-            "Preview a version with `/dream-log <sha>` before restoring it.",
-            "Restore a version with `/dream-restore <sha>`.",
-        ]
-    )
+    lines.extend([
+        "",
+        "Preview a version with `/dream-log <sha>` before restoring it.",
+        "Restore a version with `/dream-restore <sha>`.",
+    ])
     return "\n".join(lines)
 
 
@@ -251,8 +213,7 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
     Default: diff of the latest commit (HEAD~1 vs HEAD).
     With /dream-log <sha>: diff of that specific commit.
     """
-    runtime = _runtime_or_legacy(ctx)
-    store = (runtime.consolidator.store if runtime is not None else ctx.loop.consolidator.store)
+    store = ctx.loop.consolidator.store
     git = store.git
 
     if not git.is_initialized():
@@ -261,10 +222,8 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
         else:
             msg = "Dream history is not available because memory versioning is not initialized."
         return OutboundMessage(
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
-            content=msg,
-            metadata={"render_as": "text"},
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=msg, metadata={"render_as": "text"},
         )
 
     args = ctx.args.strip()
@@ -293,10 +252,8 @@ async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
             content = "Dream memory has no saved versions yet."
 
     return OutboundMessage(
-        channel=ctx.msg.channel,
-        chat_id=ctx.msg.chat_id,
-        content=content,
-        metadata={"render_as": "text"},
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=content, metadata={"render_as": "text"},
     )
 
 
@@ -307,13 +264,11 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
         /dream-restore          — list recent commits
         /dream-restore <sha>    — revert a specific commit
     """
-    runtime = _runtime_or_legacy(ctx)
-    store = (runtime.consolidator.store if runtime is not None else ctx.loop.consolidator.store)
+    store = ctx.loop.consolidator.store
     git = store.git
     if not git.is_initialized():
         return OutboundMessage(
-            channel=ctx.msg.channel,
-            chat_id=ctx.msg.chat_id,
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             content="Dream history is not available because memory versioning is not initialized.",
         )
 
@@ -343,10 +298,8 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
                 "It may not exist, or it may be the first saved version with no earlier state to restore."
             )
     return OutboundMessage(
-        channel=ctx.msg.channel,
-        chat_id=ctx.msg.chat_id,
-        content=content,
-        metadata={"render_as": "text"},
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=content, metadata={"render_as": "text"},
     )
 
 
@@ -356,31 +309,6 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
         content=build_help_text(),
-        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
-    )
-
-
-async def cmd_mode(ctx: CommandContext) -> OutboundMessage:
-    """Show or update the persistent conversation mode."""
-    loop = ctx.loop
-    args = ctx.args.strip()
-    if not args:
-        modes = ", ".join(loop.mode_registry.names())
-        content = f"Current mode: `{ctx.mode}`\nAvailable modes: {modes}"
-    else:
-        mode = args.split()[0].strip().lower()
-        try:
-            loop.mode_registry.get(mode)
-        except ValueError:
-            modes = ", ".join(loop.mode_registry.names())
-            content = f"Unknown mode `{mode}`. Available modes: {modes}"
-        else:
-            loop.mode_store.set(ctx.key, mode)
-            content = f"Conversation mode switched to `{mode}`."
-    return OutboundMessage(
-        channel=ctx.msg.channel,
-        chat_id=ctx.msg.chat_id,
-        content=content,
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
 
@@ -396,7 +324,6 @@ def build_help_text() -> str:
         "/dream — Manually trigger Dream consolidation",
         "/dream-log — Show what the last Dream changed",
         "/dream-restore — Revert memory to a previous state",
-        "/mode — Show or change the active conversation mode",
         "/help — Show available commands",
     ]
     return "\n".join(lines)
@@ -407,8 +334,6 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.priority("/stop", cmd_stop)
     router.priority("/restart", cmd_restart)
     router.priority("/status", cmd_status)
-    router.priority("/mode", cmd_mode)
-    router.priority_prefix("/mode ", cmd_mode)
     router.exact("/new", cmd_new)
     router.exact("/status", cmd_status)
     router.exact("/dream", cmd_dream)

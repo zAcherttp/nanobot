@@ -58,22 +58,18 @@ class TestConvertUserMessage:
         assert result["content"] == [{"type": "input_text", "text": "hi"}]
 
     def test_image_url_block(self):
-        result = convert_user_message(
-            [
-                {"type": "image_url", "image_url": {"url": "https://img.example/a.png"}},
-            ]
-        )
+        result = convert_user_message([
+            {"type": "image_url", "image_url": {"url": "https://img.example/a.png"}},
+        ])
         assert result["content"] == [
             {"type": "input_image", "image_url": "https://img.example/a.png", "detail": "auto"},
         ]
 
     def test_mixed_text_and_image(self):
-        result = convert_user_message(
-            [
-                {"type": "text", "text": "what's this?"},
-                {"type": "image_url", "image_url": {"url": "https://img.example/b.png"}},
-            ]
-        )
+        result = convert_user_message([
+            {"type": "text", "text": "what's this?"},
+            {"type": "image_url", "image_url": {"url": "https://img.example/b.png"}},
+        ])
         assert len(result["content"]) == 2
         assert result["content"][0]["type"] == "input_text"
         assert result["content"][1]["type"] == "input_image"
@@ -92,11 +88,9 @@ class TestConvertUserMessage:
 
     def test_meta_fields_not_leaked(self):
         """_meta on content blocks must never appear in converted output."""
-        result = convert_user_message(
-            [
-                {"type": "text", "text": "hi", "_meta": {"path": "/tmp/x"}},
-            ]
-        )
+        result = convert_user_message([
+            {"type": "text", "text": "hi", "_meta": {"path": "/tmp/x"}},
+        ])
         assert "_meta" not in result["content"][0]
 
     def test_non_dict_items_skipped(self):
@@ -135,11 +129,9 @@ class TestConvertMessages:
         assert items[0]["content"][0]["type"] == "input_text"
 
     def test_assistant_text_message(self):
-        _, items = convert_messages(
-            [
-                {"role": "assistant", "content": "I'll help"},
-            ]
-        )
+        _, items = convert_messages([
+            {"role": "assistant", "content": "I'll help"},
+        ])
         assert items[0]["type"] == "message"
         assert items[0]["role"] == "assistant"
         assert items[0]["content"][0]["type"] == "output_text"
@@ -150,20 +142,14 @@ class TestConvertMessages:
         assert len(items) == 0
 
     def test_assistant_with_tool_calls(self):
-        _, items = convert_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_abc|fc_1",
-                            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
-                        }
-                    ],
-                }
-            ]
-        )
+        _, items = convert_messages([{
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "call_abc|fc_1",
+                "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+            }],
+        }])
         assert items[0]["type"] == "function_call"
         assert items[0]["call_id"] == "call_abc"
         assert items[0]["id"] == "fc_1"
@@ -171,56 +157,40 @@ class TestConvertMessages:
 
     def test_assistant_with_tool_calls_no_id(self):
         """Fallback IDs when tool_call.id is missing."""
-        _, items = convert_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"function": {"name": "f1", "arguments": "{}"}}],
-                }
-            ]
-        )
+        _, items = convert_messages([{
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"function": {"name": "f1", "arguments": "{}"}}],
+        }])
         assert items[0]["call_id"] == "call_0"
         assert items[0]["id"].startswith("fc_")
 
     def test_tool_message(self):
-        _, items = convert_messages(
-            [
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_abc",
-                    "content": "result text",
-                }
-            ]
-        )
+        _, items = convert_messages([{
+            "role": "tool",
+            "tool_call_id": "call_abc",
+            "content": "result text",
+        }])
         assert items[0]["type"] == "function_call_output"
         assert items[0]["call_id"] == "call_abc"
         assert items[0]["output"] == "result text"
 
     def test_tool_message_dict_content(self):
-        _, items = convert_messages(
-            [
-                {
-                    "role": "tool",
-                    "tool_call_id": "call_1",
-                    "content": {"key": "value"},
-                }
-            ]
-        )
+        _, items = convert_messages([{
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": {"key": "value"},
+        }])
         assert items[0]["output"] == '{"key": "value"}'
 
     def test_non_standard_keys_not_leaked(self):
         """Extra keys on messages must not appear in converted items."""
-        _, items = convert_messages(
-            [
-                {
-                    "role": "user",
-                    "content": "hi",
-                    "extra_field": "should vanish",
-                    "_meta": {"path": "/tmp"},
-                }
-            ]
-        )
+        _, items = convert_messages([{
+            "role": "user",
+            "content": "hi",
+            "extra_field": "should vanish",
+            "_meta": {"path": "/tmp"},
+        }])
         item = items[0]
         assert "extra_field" not in str(item)
         assert "_meta" not in str(item)
@@ -231,14 +201,11 @@ class TestConvertMessages:
             {"role": "system", "content": "Be concise."},
             {"role": "user", "content": "Weather in SF?"},
             {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "c1|fc1",
-                        "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
-                    }
-                ],
+                "role": "assistant", "content": None,
+                "tool_calls": [{
+                    "id": "c1|fc1",
+                    "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+                }],
             },
             {"role": "tool", "tool_call_id": "c1", "content": '{"temp":72}'},
         ]
@@ -257,16 +224,11 @@ class TestConvertMessages:
 
 class TestConvertTools:
     def test_standard_function_tool(self):
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get weather",
-                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-                },
-            }
-        ]
+        tools = [{"type": "function", "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }}]
         result = convert_tools(tools)
         assert len(result) == 1
         assert result[0]["type"] == "function"
@@ -331,13 +293,8 @@ class TestMapFinishReason:
 class TestParseResponseOutput:
     def test_text_response(self):
         resp = {
-            "output": [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "Hello!"}],
-                }
-            ],
+            "output": [{"type": "message", "role": "assistant",
+                         "content": [{"type": "output_text", "text": "Hello!"}]}],
             "status": "completed",
             "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
         }
@@ -349,15 +306,12 @@ class TestParseResponseOutput:
 
     def test_tool_call_response(self):
         resp = {
-            "output": [
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "id": "fc_1",
-                    "name": "get_weather",
-                    "arguments": '{"city": "SF"}',
-                }
-            ],
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_1", "id": "fc_1",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            }],
             "status": "completed",
             "usage": {},
         }
@@ -371,17 +325,12 @@ class TestParseResponseOutput:
     def test_malformed_tool_arguments_logged(self):
         """Malformed JSON arguments should log a warning and fallback."""
         resp = {
-            "output": [
-                {
-                    "type": "function_call",
-                    "call_id": "c1",
-                    "id": "fc1",
-                    "name": "f",
-                    "arguments": "{bad json",
-                }
-            ],
-            "status": "completed",
-            "usage": {},
+            "output": [{
+                "type": "function_call",
+                "call_id": "c1", "id": "fc1",
+                "name": "f", "arguments": "{bad json",
+            }],
+            "status": "completed", "usage": {},
         }
         with patch("nanobot.providers.openai_responses.parsing.logger") as mock_logger:
             result = parse_response_output(resp)
@@ -392,21 +341,14 @@ class TestParseResponseOutput:
     def test_reasoning_content_extracted(self):
         resp = {
             "output": [
-                {
-                    "type": "reasoning",
-                    "summary": [
-                        {"type": "summary_text", "text": "I think "},
-                        {"type": "summary_text", "text": "therefore I am."},
-                    ],
-                },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "42"}],
-                },
+                {"type": "reasoning", "summary": [
+                    {"type": "summary_text", "text": "I think "},
+                    {"type": "summary_text", "text": "therefore I am."},
+                ]},
+                {"type": "message", "role": "assistant",
+                 "content": [{"type": "output_text", "text": "42"}]},
             ],
-            "status": "completed",
-            "usage": {},
+            "status": "completed", "usage": {},
         }
         result = parse_response_output(resp)
         assert result.content == "42"
@@ -427,13 +369,8 @@ class TestParseResponseOutput:
         """parse_response_output should handle SDK objects with model_dump()."""
         mock = MagicMock()
         mock.model_dump.return_value = {
-            "output": [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "sdk"}],
-                }
-            ],
+            "output": [{"type": "message", "role": "assistant",
+                         "content": [{"type": "output_text", "text": "sdk"}]}],
             "status": "completed",
             "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
         }
@@ -499,12 +436,8 @@ class TestConsumeSdkStream:
         item_added.name = "get_weather"
         ev1 = MagicMock(type="response.output_item.added", item=item_added)
         ev2 = MagicMock(type="response.function_call_arguments.delta", call_id="c1", delta='{"ci')
-        ev3 = MagicMock(
-            type="response.function_call_arguments.done", call_id="c1", arguments='{"city":"SF"}'
-        )
-        item_done = MagicMock(
-            type="function_call", call_id="c1", id="fc1", arguments='{"city":"SF"}'
-        )
+        ev3 = MagicMock(type="response.function_call_arguments.done", call_id="c1", arguments='{"city":"SF"}')
+        item_done = MagicMock(type="function_call", call_id="c1", id="fc1", arguments='{"city":"SF"}')
         item_done.name = "get_weather"
         ev4 = MagicMock(type="response.output_item.done", item=item_done)
         resp_obj = MagicMock(status="completed", usage=None, output=[])
@@ -571,9 +504,7 @@ class TestConsumeSdkStream:
         item_added = MagicMock(type="function_call", call_id="c1", id="fc1", arguments="")
         item_added.name = "f"
         ev1 = MagicMock(type="response.output_item.added", item=item_added)
-        ev2 = MagicMock(
-            type="response.function_call_arguments.done", call_id="c1", arguments="{bad"
-        )
+        ev2 = MagicMock(type="response.function_call_arguments.done", call_id="c1", arguments="{bad")
         item_done = MagicMock(type="function_call", call_id="c1", id="fc1", arguments="{bad")
         item_done.name = "f"
         ev3 = MagicMock(type="response.output_item.done", item=item_done)

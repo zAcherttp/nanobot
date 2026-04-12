@@ -83,5 +83,4 @@ nano.*.save
 logs/
 tmp/
 temp/
-.temp/
 *.tmp

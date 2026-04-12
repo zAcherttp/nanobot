@@ -1,4 +1,9 @@
-"""Load and render mode-local runtime templates under ``nanobot/templates/<mode>/agent/``."""
+"""Load and render agent system prompt templates (Jinja2) under nanobot/templates/.
+
+Agent prompts live in ``templates/agent/`` (pass names like ``agent/identity.md``).
+Shared copy lives under ``agent/_snippets/`` and is included via
+``{% include 'agent/_snippets/....md' %}``.
+"""
 
 from functools import lru_cache
 from pathlib import Path
@@ -20,11 +25,11 @@ def _environment() -> Environment:
     )
 
 
-def render_template(mode: str, name: str, *, strip: bool = False, **kwargs: Any) -> str:
-    """Render ``templates/<mode>/agent/<name>`` with Jinja2.
+def render_template(name: str, *, strip: bool = False, **kwargs: Any) -> str:
+    """Render ``name`` (e.g. ``agent/identity.md``, ``agent/platform_policy.md``) under ``templates/``.
 
     Use ``strip=True`` for single-line user-facing strings when the file ends
     with a trailing newline you do not want preserved.
     """
-    text = _environment().get_template(f"{mode}/agent/{name}").render(**kwargs)
+    text = _environment().get_template(name).render(**kwargs)
     return text.rstrip() if strip else text

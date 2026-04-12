@@ -531,30 +531,57 @@ def test_openai_compat_preserves_message_level_reasoning_fields() -> None:
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
         provider = OpenAICompatProvider()
 
-    sanitized = provider._sanitize_messages(
-        [
-            {
-                "role": "assistant",
-                "content": "done",
-                "reasoning_content": "hidden",
-                "extra_content": {"debug": True},
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "fn", "arguments": "{}"},
-                        "extra_content": {"google": {"thought_signature": "sig"}},
-                    }
-                ],
-            }
-        ]
-    )
+    sanitized = provider._sanitize_messages([
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "done",
+            "reasoning_content": "hidden",
+            "extra_content": {"debug": True},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "fn", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "sig"}},
+                }
+            ],
+        },
+        {"role": "user", "content": "thanks"},
+    ])
 
-    assert sanitized[0]["reasoning_content"] == "hidden"
-    assert sanitized[0]["extra_content"] == {"debug": True}
-    assert sanitized[0]["tool_calls"][0]["extra_content"] == {
-        "google": {"thought_signature": "sig"}
-    }
+    assert sanitized[1]["content"] is None
+    assert sanitized[1]["reasoning_content"] == "hidden"
+    assert sanitized[1]["extra_content"] == {"debug": True}
+    assert sanitized[1]["tool_calls"][0]["extra_content"] == {"google": {"thought_signature": "sig"}}
+
+
+def test_openai_compat_keeps_tool_calls_after_consecutive_assistant_messages() -> None:
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = OpenAICompatProvider()
+
+    sanitized = provider._sanitize_messages([
+        {"role": "user", "content": "不错"},
+        {"role": "assistant", "content": "对，破 4 万指日可待"},
+        {
+            "role": "assistant",
+            "content": "<think>我再查一下</think>",
+            "tool_calls": [
+                {
+                    "id": "call_function_akxp3wqzn7ph_1",
+                    "type": "function",
+                    "function": {"name": "exec", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_function_akxp3wqzn7ph_1", "name": "exec", "content": "ok"},
+        {"role": "user", "content": "多少star了呢"},
+    ])
+
+    assert sanitized[1]["role"] == "assistant"
+    assert sanitized[1]["content"] is None
+    assert sanitized[1]["tool_calls"][0]["id"] == "3ec83c30d"
+    assert sanitized[2]["tool_call_id"] == "3ec83c30d"
 
 
 @pytest.mark.asyncio
@@ -586,19 +613,14 @@ async def test_openai_compat_stream_watchdog_returns_error_on_stall(monkeypatch)
 # Provider-specific thinking parameters (extra_body)
 # ---------------------------------------------------------------------------
 
-
 def _build_kwargs_for(provider_name: str, model: str, reasoning_effort=None):
     spec = find_by_name(provider_name)
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
         p = OpenAICompatProvider(api_key="k", default_model=model, spec=spec)
     return p._build_kwargs(
         messages=[{"role": "user", "content": "hi"}],
-        tools=None,
-        model=model,
-        max_tokens=1024,
-        temperature=0.7,
-        reasoning_effort=reasoning_effort,
-        tool_choice=None,
+        tools=None, model=model, max_tokens=1024, temperature=0.7,
+        reasoning_effort=reasoning_effort, tool_choice=None,
     )
 
 

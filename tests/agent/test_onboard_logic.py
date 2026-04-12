@@ -198,7 +198,6 @@ class TestGetFieldTypeInfo:
 
     def test_handles_none_annotation(self):
         """Field with None annotation defaults to str."""
-
         class Model(BaseModel):
             field: Any = None
 
@@ -320,13 +319,13 @@ class TestSyncWorkspaceTemplates:
     def test_does_not_overwrite_existing_files(self, tmp_path):
         """Should not overwrite files that already exist."""
         workspace = tmp_path / "workspace"
-        (workspace / "general").mkdir(parents=True)
-        (workspace / "general" / "AGENTS.md").write_text("existing content")
+        workspace.mkdir(parents=True)
+        (workspace / "AGENTS.md").write_text("existing content")
 
         sync_workspace_templates(workspace, silent=True)
 
         # Existing file should not be changed
-        content = (workspace / "general" / "AGENTS.md").read_text()
+        content = (workspace / "AGENTS.md").read_text()
         assert content == "existing content"
 
     def test_creates_memory_directory(self, tmp_path):
@@ -335,41 +334,15 @@ class TestSyncWorkspaceTemplates:
 
         sync_workspace_templates(workspace, silent=True)
 
-        assert (workspace / "general" / "memory").exists()
-        assert (workspace / "scheduler" / "memory").exists()
-
-    def test_seeds_default_runtime_skills(self, tmp_path):
-        """Should copy curated default skill packs into each runtime workspace."""
-        workspace = tmp_path / "workspace"
-
-        sync_workspace_templates(workspace, silent=True)
-
-        assert (workspace / "general" / "skills" / "memory" / "SKILL.md").exists()
-        assert (workspace / "general" / "skills" / "github" / "SKILL.md").exists()
-        assert (workspace / "scheduler" / "skills" / "gws-calendar" / "SKILL.md").exists()
-        assert (workspace / "scheduler" / "skills" / "gws-tasks" / "SKILL.md").exists()
-
-    def test_does_not_overwrite_existing_seeded_skill(self, tmp_path):
-        """Should preserve customized workspace skill copies on subsequent syncs."""
-        workspace = tmp_path / "workspace"
-        skill_path = workspace / "general" / "skills" / "memory" / "SKILL.md"
-        skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text("customized memory skill", encoding="utf-8")
-
-        sync_workspace_templates(workspace, silent=True)
-
-        assert skill_path.read_text(encoding="utf-8") == "customized memory skill"
+        assert (workspace / "memory").exists() or (workspace / "skills").exists()
 
     def test_returns_list_of_added_files(self, tmp_path):
         """Should return list of relative paths for added files."""
         workspace = tmp_path / "workspace"
 
         added = sync_workspace_templates(workspace, silent=True)
-        normalized = {Path(path).as_posix() for path in added}
 
         assert isinstance(added, list)
-        assert "general/skills/memory/SKILL.md" in normalized
-        assert "scheduler/skills/gws-calendar/SKILL.md" in normalized
         # All paths should be relative to workspace
         for path in added:
             assert not Path(path).is_absolute()
@@ -514,9 +487,7 @@ class TestRunOnboardExitBehavior:
 
         monkeypatch.setattr(onboard_wizard, "_show_main_menu_header", lambda: None)
         monkeypatch.setattr(onboard_wizard, "questionary", SimpleNamespace(select=fake_select))
-        monkeypatch.setattr(
-            onboard_wizard, "_configure_general_settings", fake_configure_general_settings
-        )
+        monkeypatch.setattr(onboard_wizard, "_configure_general_settings", fake_configure_general_settings)
 
         result = run_onboard(initial_config=initial_config)
 

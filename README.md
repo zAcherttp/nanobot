@@ -32,6 +32,7 @@
 - **2026-03-28** 📚 Provider docs refresh; skill template wording fix.
 - **2026-03-27** 🚀 Released **v0.1.4.post6** — architecture decoupling, litellm removal, end-to-end streaming, WeChat channel, and a security fix. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post6) for details.
 
+
 <details>
 <summary>Earlier news</summary>
 
@@ -80,7 +81,7 @@
 - **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/nanobot/discussions/566) about it!
 - **2026-02-11** ✨ Enhanced CLI experience and added MiniMax support!
 - **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/nanobot/discussions/431).
-- **2026-02-09** 💬 Added Slack and QQ support — nanobot now supports multiple chat platforms!
+- **2026-02-09** 💬 Added Slack, Email, and QQ support — nanobot now supports multiple chat platforms!
 - **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
 - **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post5) for details.
 - **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
@@ -93,7 +94,7 @@
 
 > 🐈 nanobot is for educational, research, and technical exchange purposes only. It is unrelated to crypto and does not involve any official token or coin.
 
-## Key Features of nanobot
+## Key Features of nanobot:
 
 🪶 **Ultra-Lightweight**: A lightweight implementation built for stable, long-running AI agents.
 
@@ -198,6 +199,13 @@ uv tool upgrade nanobot-ai
 nanobot --version
 ```
 
+**Using WhatsApp?** Rebuild the local bridge after upgrading:
+
+```bash
+rm -rf ~/.nanobot/bridge
+nanobot channels login whatsapp
+```
+
 ## 🚀 Quick Start
 
 > [!TIP]
@@ -221,7 +229,6 @@ Use `nanobot onboard --wizard` if you want the interactive setup wizard.
 Configure these **two parts** in your config (other options have defaults).
 
 *Set your API key* (e.g. OpenRouter, recommended for global users):
-
 ```json
 {
   "providers": {
@@ -233,7 +240,6 @@ Configure these **two parts** in your config (other options have defaults).
 ```
 
 *Set your model* (optionally pin a provider — defaults to auto-detection):
-
 ```json
 {
   "agents": {
@@ -260,17 +266,22 @@ Connect nanobot to your favorite chat platform. Want to build your own? See the 
 | Channel | What you need |
 |---------|---------------|
 | **Telegram** | Bot token from @BotFather |
+| **Discord** | Bot token + Message Content intent |
+| **WhatsApp** | QR code scan (`nanobot channels login whatsapp`) |
+| **WeChat (Weixin)** | QR code scan (`nanobot channels login weixin`) |
 | **Feishu** | App ID + App Secret |
 | **DingTalk** | App Key + App Secret |
 | **Slack** | Bot token + App-Level token |
+| **Matrix** | Homeserver URL + Access token |
+| **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
+| **Wecom** | Bot ID + Bot Secret |
 | **Mochat** | Claw token (auto-setup available) |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
 
 **1. Create a bot**
-
 - Open Telegram, search `@BotFather`
 - Send `/newbot`, follow prompts
 - Copy the token
@@ -291,6 +302,7 @@ Connect nanobot to your favorite chat platform. Want to build your own? See the 
 
 > You can find your **User ID** in Telegram settings. It is shown as `@yourUserId`.
 > Copy this value **without the `@` symbol** and paste it into the config file.
+
 
 **3. Run**
 
@@ -351,7 +363,170 @@ If you prefer to configure manually, add the following to `~/.nanobot/config.jso
 }
 ```
 
+
+
 </details>
+
+</details>
+
+<details>
+<summary><b>Discord</b></summary>
+
+**1. Create a bot**
+- Go to https://discord.com/developers/applications
+- Create an application → Bot → Add Bot
+- Copy the bot token
+
+**2. Enable intents**
+- In the Bot settings, enable **MESSAGE CONTENT INTENT**
+- (Optional) Enable **SERVER MEMBERS INTENT** if you plan to use allow lists based on member data
+
+**3. Get your User ID**
+- Discord Settings → Advanced → enable **Developer Mode**
+- Right-click your avatar → **Copy User ID**
+
+**4. Configure**
+
+```json
+{
+  "channels": {
+    "discord": {
+      "enabled": true,
+      "token": "YOUR_BOT_TOKEN",
+      "allowFrom": ["YOUR_USER_ID"],
+      "groupPolicy": "mention",
+      "streaming": true
+    }
+  }
+}
+```
+
+> `groupPolicy` controls how the bot responds in group channels:
+> - `"mention"` (default) — Only respond when @mentioned
+> - `"open"` — Respond to all messages
+> DMs always respond when the sender is in `allowFrom`.
+> - If you set group policy to open create new threads as private threads and then @ the bot into it. Otherwise the thread itself and the channel in which you spawned it will spawn a bot session.
+> `streaming` defaults to `true`. Disable it only if you explicitly want non-streaming replies.
+
+**5. Invite the bot**
+- OAuth2 → URL Generator
+- Scopes: `bot`
+- Bot Permissions: `Send Messages`, `Read Message History`
+- Open the generated invite URL and add the bot to your server
+
+**6. Run**
+
+```bash
+nanobot gateway
+```
+
+</details>
+
+<details>
+<summary><b>Matrix (Element)</b></summary>
+
+Install Matrix dependencies first:
+
+```bash
+pip install nanobot-ai[matrix]
+```
+
+**1. Create/choose a Matrix account**
+
+- Create or reuse a Matrix account on your homeserver (for example `matrix.org`).
+- Confirm you can log in with Element.
+
+**2. Get credentials**
+
+- You need:
+  - `userId` (example: `@nanobot:matrix.org`)
+  - `password`
+
+(Note: `accessToken` and `deviceId` are still supported for legacy reasons, but
+for reliable encryption, password login is recommended instead. If the
+`password` is provided, `accessToken` and `deviceId` will be ignored.)
+
+**3. Configure**
+
+```json
+{
+  "channels": {
+    "matrix": {
+      "enabled": true,
+      "homeserver": "https://matrix.org",
+      "userId": "@nanobot:matrix.org",
+      "password": "mypasswordhere",
+      "e2eeEnabled": true,
+      "allowFrom": ["@your_user:matrix.org"],
+      "groupPolicy": "open",
+      "groupAllowFrom": [],
+      "allowRoomMentions": false,
+      "maxMediaBytes": 20971520
+    }
+  }
+}
+```
+
+> Keep a persistent `matrix-store` — encrypted session state is lost if these change across restarts.
+
+| Option | Description |
+|--------|-------------|
+| `allowFrom` | User IDs allowed to interact. Empty denies all; use `["*"]` to allow everyone. |
+| `groupPolicy` | `open` (default), `mention`, or `allowlist`. |
+| `groupAllowFrom` | Room allowlist (used when policy is `allowlist`). |
+| `allowRoomMentions` | Accept `@room` mentions in mention mode. |
+| `e2eeEnabled` | E2EE support (default `true`). Set `false` for plaintext-only. |
+| `maxMediaBytes` | Max attachment size (default `20MB`). Set `0` to block all media. |
+
+
+
+
+**4. Run**
+
+```bash
+nanobot gateway
+```
+
+</details>
+
+<details>
+<summary><b>WhatsApp</b></summary>
+
+Requires **Node.js ≥18**.
+
+**1. Link device**
+
+```bash
+nanobot channels login whatsapp
+# Scan QR with WhatsApp → Settings → Linked Devices
+```
+
+**2. Configure**
+
+```json
+{
+  "channels": {
+    "whatsapp": {
+      "enabled": true,
+      "allowFrom": ["+1234567890"]
+    }
+  }
+}
+```
+
+**3. Run** (two terminals)
+
+```bash
+# Terminal 1
+nanobot channels login whatsapp
+
+# Terminal 2
+nanobot gateway
+```
+
+> WhatsApp bridge updates are not applied automatically for existing installations.
+> After upgrading nanobot, rebuild the local bridge with:
+> `rm -rf ~/.nanobot/bridge && nanobot channels login whatsapp`
 
 </details>
 
@@ -361,7 +536,6 @@ If you prefer to configure manually, add the following to `~/.nanobot/config.jso
 Uses **WebSocket** long connection — no public IP required.
 
 **1. Create a Feishu bot**
-
 - Visit [Feishu Open Platform](https://open.feishu.cn/app)
 - Create a new app → Enable **Bot** capability
 - **Permissions**:
@@ -386,6 +560,9 @@ Uses **WebSocket** long connection — no public IP required.
       "verificationToken": "",
       "allowFrom": ["ou_YOUR_OPEN_ID"],
       "groupPolicy": "mention",
+      "reactEmoji": "OnIt",
+      "doneEmoji": "DONE",
+      "toolHintPrefix": "🔧",
       "streaming": true
     }
   }
@@ -396,6 +573,9 @@ Uses **WebSocket** long connection — no public IP required.
 > `encryptKey` and `verificationToken` are optional for Long Connection mode.
 > `allowFrom`: Add your open_id (find it in nanobot logs when you message the bot). Use `["*"]` to allow all users.
 > `groupPolicy`: `"mention"` (default — respond only when @mentioned), `"open"` (respond to all group messages). Private chats always respond.
+> `reactEmoji`: Emoji for "processing" status (default: `OnIt`). See [available emojis](https://open.larkoffice.com/document/server-docs/im-v1/message-reaction/emojis-introduce).
+> `doneEmoji`: Optional emoji for "completed" status (e.g., `DONE`, `OK`, `HEART`). When set, bot adds this reaction after removing `reactEmoji`.
+> `toolHintPrefix`: Prefix for inline tool hints in streaming cards (default: `🔧`).
 
 **3. Run**
 
@@ -414,13 +594,11 @@ nanobot gateway
 Uses **botpy SDK** with WebSocket — no public IP required. Currently supports **private messages only**.
 
 **1. Register & create bot**
-
 - Visit [QQ Open Platform](https://q.qq.com) → Register as a developer (personal or enterprise)
 - Create a new bot application
 - Go to **开发设置 (Developer Settings)** → copy **AppID** and **AppSecret**
 
 **2. Set up sandbox for testing**
-
 - In the bot management console, find **沙箱配置 (Sandbox Config)**
 - Under **在消息列表配置**, click **添加成员** and add your own QQ number
 - Once added, scan the bot's QR code with mobile QQ → open the bot profile → tap "发消息" to start chatting
@@ -461,7 +639,6 @@ Now send a message to the bot from QQ — it should respond!
 Uses **Stream Mode** — no public IP required.
 
 **1. Create a DingTalk bot**
-
 - Visit [DingTalk Open Platform](https://open-dev.dingtalk.com/)
 - Create a new app -> Add **Robot** capability
 - **Configuration**:
@@ -501,12 +678,10 @@ nanobot gateway
 Uses **Socket Mode** — no public URL required.
 
 **1. Create a Slack app**
-
 - Go to [Slack API](https://api.slack.com/apps) → **Create New App** → "From scratch"
 - Pick a name and select your workspace
 
 **2. Configure the app**
-
 - **Socket Mode**: Toggle ON → Generate an **App-Level Token** with `connections:write` scope → copy it (`xapp-...`)
 - **OAuth & Permissions**: Add bot scopes: `chat:write`, `reactions:write`, `app_mentions:read`
 - **Event Subscriptions**: Toggle ON → Subscribe to bot events: `message.im`, `message.channels`, `app_mention` → Save Changes
@@ -538,9 +713,149 @@ nanobot gateway
 DM the bot directly or @mention it in a channel — it should respond!
 
 > [!TIP]
->
 > - `groupPolicy`: `"mention"` (default — respond only when @mentioned), `"open"` (respond to all channel messages), or `"allowlist"` (restrict to specific channels).
 > - DM policy defaults to open. Set `"dm": {"enabled": false}` to disable DMs.
+
+</details>
+
+<details>
+<summary><b>Email</b></summary>
+
+Give nanobot its own email account. It polls **IMAP** for incoming mail and replies via **SMTP** — like a personal email assistant.
+
+**1. Get credentials (Gmail example)**
+- Create a dedicated Gmail account for your bot (e.g. `my-nanobot@gmail.com`)
+- Enable 2-Step Verification → Create an [App Password](https://myaccount.google.com/apppasswords)
+- Use this app password for both IMAP and SMTP
+
+**2. Configure**
+
+> - `consentGranted` must be `true` to allow mailbox access. This is a safety gate — set `false` to fully disable.
+> - `allowFrom`: Add your email address. Use `["*"]` to accept emails from anyone.
+> - `smtpUseTls` and `smtpUseSsl` default to `true` / `false` respectively, which is correct for Gmail (port 587 + STARTTLS). No need to set them explicitly.
+> - Set `"autoReplyEnabled": false` if you only want to read/analyze emails without sending automatic replies.
+> - `allowedAttachmentTypes`: Save inbound attachments matching these MIME types — `["*"]` for all, e.g. `["application/pdf", "image/*"]` (default `[]` = disabled).
+> - `maxAttachmentSize`: Max size per attachment in bytes (default `2000000` / 2MB).
+> - `maxAttachmentsPerEmail`: Max attachments to save per email (default `5`).
+
+```json
+{
+  "channels": {
+    "email": {
+      "enabled": true,
+      "consentGranted": true,
+      "imapHost": "imap.gmail.com",
+      "imapPort": 993,
+      "imapUsername": "my-nanobot@gmail.com",
+      "imapPassword": "your-app-password",
+      "smtpHost": "smtp.gmail.com",
+      "smtpPort": 587,
+      "smtpUsername": "my-nanobot@gmail.com",
+      "smtpPassword": "your-app-password",
+      "fromAddress": "my-nanobot@gmail.com",
+      "allowFrom": ["your-real-email@gmail.com"],
+      "allowedAttachmentTypes": ["application/pdf", "image/*"]
+    }
+  }
+}
+```
+
+
+**3. Run**
+
+```bash
+nanobot gateway
+```
+
+</details>
+
+<details>
+<summary><b>WeChat (微信 / Weixin)</b></summary>
+
+Uses **HTTP long-poll** with QR-code login via the ilinkai personal WeChat API. No local WeChat desktop client is required.
+
+**1. Install with WeChat support**
+
+```bash
+pip install "nanobot-ai[weixin]"
+```
+
+**2. Configure**
+
+```json
+{
+  "channels": {
+    "weixin": {
+      "enabled": true,
+      "allowFrom": ["YOUR_WECHAT_USER_ID"]
+    }
+  }
+}
+```
+
+> - `allowFrom`: Add the sender ID you see in nanobot logs for your WeChat account. Use `["*"]` to allow all users.
+> - `token`: Optional. If omitted, log in interactively and nanobot will save the token for you.
+> - `routeTag`: Optional. When your upstream Weixin deployment requires request routing, nanobot will send it as the `SKRouteTag` header.
+> - `stateDir`: Optional. Defaults to nanobot's runtime directory for Weixin state.
+> - `pollTimeout`: Optional long-poll timeout in seconds.
+
+**3. Login**
+
+```bash
+nanobot channels login weixin
+```
+
+Use `--force` to re-authenticate and ignore any saved token:
+
+```bash
+nanobot channels login weixin --force
+```
+
+**4. Run**
+
+```bash
+nanobot gateway
+```
+
+</details>
+
+<details>
+<summary><b>Wecom (企业微信)</b></summary>
+
+> Here we use [wecom-aibot-sdk-python](https://github.com/chengyongru/wecom_aibot_sdk) (community Python version of the official [@wecom/aibot-node-sdk](https://www.npmjs.com/package/@wecom/aibot-node-sdk)).
+>
+> Uses **WebSocket** long connection — no public IP required.
+
+**1. Install the optional dependency**
+
+```bash
+pip install nanobot-ai[wecom]
+```
+
+**2. Create a WeCom AI Bot**
+
+Go to the WeCom admin console → Intelligent Robot → Create Robot → select **API mode** with **long connection**. Copy the Bot ID and Secret.
+
+**3. Configure**
+
+```json
+{
+  "channels": {
+    "wecom": {
+      "enabled": true,
+      "botId": "your_bot_id",
+      "secret": "your_bot_secret",
+      "allowFrom": ["your_id"]
+    }
+  }
+}
+```
+
+**4. Run**
+
+```bash
+nanobot gateway
+```
 
 </details>
 
@@ -571,7 +886,11 @@ Instead of storing secrets directly in `config.json`, you can use `${VAR_NAME}` 
 ```json
 {
   "channels": {
-    "telegram": { "token": "${TELEGRAM_TOKEN}" }
+    "telegram": { "token": "${TELEGRAM_TOKEN}" },
+    "email": {
+      "imapPassword": "${IMAP_PASSWORD}",
+      "smtpPassword": "${SMTP_PASSWORD}"
+    }
   },
   "providers": {
     "groq": { "apiKey": "${GROQ_API_KEY}" }
@@ -592,13 +911,13 @@ ExecStart=...
 ```bash
 # /home/youruser/nanobot_secrets.env (mode 600, owned by youruser)
 TELEGRAM_TOKEN=your-token-here
+IMAP_PASSWORD=your-password-here
 ```
 
 ### Providers
 
 > [!TIP]
->
-> - **Voice transcription**: Voice messages are automatically transcribed using Whisper. By default Groq is used (free tier). Set `"transcriptionProvider": "openai"` under `channels` to use OpenAI Whisper instead — the API key is picked from the matching provider config.
+> - **Voice transcription**: Voice messages (Telegram, WhatsApp) are automatically transcribed using Whisper. By default Groq is used (free tier). Set `"transcriptionProvider": "openai"` under `channels` to use OpenAI Whisper instead — the API key is picked from the matching provider config.
 > - **MiniMax Coding Plan**: Exclusive discount links for the nanobot community: [Overseas](https://platform.minimax.io/subscribe/coding-plan?code=9txpdXw04g&source=link) · [Mainland China](https://platform.minimaxi.com/subscribe/token-plan?code=GILTJpMTqZ&source=link)
 > - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
 > - **VolcEngine / BytePlus Coding Plan**: Use dedicated providers `volcengineCodingPlan` or `byteplusCodingPlan` instead of the pay-per-use `volcengine` / `byteplus` providers.
@@ -634,6 +953,7 @@ TELEGRAM_TOKEN=your-token-here
 | `github_copilot` | LLM (GitHub Copilot, OAuth) | `nanobot provider login github-copilot` |
 | `qianfan` | LLM (Baidu Qianfan) | [cloud.baidu.com](https://cloud.baidu.com/doc/qianfan/s/Hmh4suq26) |
 
+
 <details>
 <summary><b>OpenAI Codex (OAuth)</b></summary>
 
@@ -641,13 +961,11 @@ Codex uses OAuth instead of API keys. Requires a ChatGPT Plus or Pro account.
 No `providers.openaiCodex` block is needed in `config.json`; `nanobot provider login` stores the OAuth session outside config.
 
 **1. Login:**
-
 ```bash
 nanobot provider login openai-codex
 ```
 
 **2. Set model** (merge into `~/.nanobot/config.json`):
-
 ```json
 {
   "agents": {
@@ -659,7 +977,6 @@ nanobot provider login openai-codex
 ```
 
 **3. Chat:**
-
 ```bash
 nanobot agent -m "Hello!"
 
@@ -674,6 +991,7 @@ nanobot agent -c ~/.nanobot-telegram/config.json -w /tmp/nanobot-telegram-test -
 
 </details>
 
+
 <details>
 <summary><b>GitHub Copilot (OAuth)</b></summary>
 
@@ -681,13 +999,11 @@ GitHub Copilot uses OAuth instead of API keys. Requires a [GitHub account with a
 No `providers.githubCopilot` block is needed in `config.json`; `nanobot provider login` stores the OAuth session outside config.
 
 **1. Login:**
-
 ```bash
 nanobot provider login github-copilot
 ```
 
 **2. Set model** (merge into `~/.nanobot/config.json`):
-
 ```json
 {
   "agents": {
@@ -699,7 +1015,6 @@ nanobot provider login github-copilot
 ```
 
 **3. Chat:**
-
 ```bash
 nanobot agent -m "Hello!"
 
@@ -745,13 +1060,11 @@ Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, To
 Run a local model with Ollama, then add to config:
 
 **1. Start Ollama** (example):
-
 ```bash
 ollama run llama3.2
 ```
 
 **2. Add to config** (partial — merge into `~/.nanobot/config.json`):
-
 ```json
 {
   "providers": {
@@ -853,7 +1166,6 @@ docker run -d \
 Run your own model with vLLM or any OpenAI-compatible server, then add to config:
 
 **1. Start the server** (example):
-
 ```bash
 vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 ```
@@ -861,7 +1173,6 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 **2. Add to config** (partial — merge into `~/.nanobot/config.json`):
 
 *Provider (key can be any non-empty string for local):*
-
 ```json
 {
   "providers": {
@@ -874,7 +1185,6 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 ```
 
 *Model:*
-
 ```json
 {
   "agents": {
@@ -977,7 +1287,6 @@ When a channel `send()` raises, nanobot retries at the channel-manager layer. By
 
 > [!TIP]
 > Use `proxy` in `tools.web` to route all web requests (search + fetch) through a proxy:
->
 > ```json
 > { "tools": { "web": { "proxy": "http://127.0.0.1:7890" } } }
 > ```
@@ -1003,11 +1312,11 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 | `brave` | `apiKey` | `BRAVE_API_KEY` | No |
 | `tavily` | `apiKey` | `TAVILY_API_KEY` | No |
 | `jina` | `apiKey` | `JINA_API_KEY` | Free tier (10M tokens) |
+| `kagi` | `apiKey` | `KAGI_API_KEY` | No |
 | `searxng` | `baseUrl` | `SEARXNG_BASE_URL` | Yes (self-hosted) |
 | `duckduckgo` (default) | — | — | Yes |
 
 **Disable all built-in web tools:**
-
 ```json
 {
   "tools": {
@@ -1019,7 +1328,6 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 ```
 
 **Brave:**
-
 ```json
 {
   "tools": {
@@ -1034,7 +1342,6 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 ```
 
 **Tavily:**
-
 ```json
 {
   "tools": {
@@ -1049,7 +1356,6 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 ```
 
 **Jina** (free tier with 10M tokens):
-
 ```json
 {
   "tools": {
@@ -1063,8 +1369,21 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 }
 ```
 
-**SearXNG** (self-hosted, no API key needed):
+**Kagi:**
+```json
+{
+  "tools": {
+    "web": {
+      "search": {
+        "provider": "kagi",
+        "apiKey": "your-kagi-api-key"
+      }
+    }
+  }
+}
+```
 
+**SearXNG** (self-hosted, no API key needed):
 ```json
 {
   "tools": {
@@ -1079,7 +1398,6 @@ If you need to allow trusted private ranges such as Tailscale / CGNAT addresses,
 ```
 
 **DuckDuckGo** (zero config):
-
 ```json
 {
   "tools": {
@@ -1180,6 +1498,9 @@ Use `enabledTools` to register only a subset of tools from an MCP server:
 
 MCP tools are automatically discovered and registered on startup. The LLM can use them alongside built-in tools — no extra configuration needed.
 
+
+
+
 ### Security
 
 > [!TIP]
@@ -1195,6 +1516,36 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 | `channels.*.allowFrom` | `[]` (deny all) | Whitelist of user IDs. Empty denies all; use `["*"]` to allow everyone. |
 
 **Docker security**: The official Docker image runs as a non-root user (`nanobot`, UID 1000) with bubblewrap pre-installed. When using `docker-compose.yml`, the container drops all Linux capabilities except `SYS_ADMIN` (required for bwrap's namespace isolation).
+
+
+### Auto Compact
+
+When a user is idle for longer than a configured threshold, nanobot **proactively** compresses the older part of the session context into a summary while keeping a recent legal suffix of live messages. This reduces token cost and first-token latency when the user returns — instead of re-processing a long stale context with an expired KV cache, the model receives a compact summary, the most recent live context, and fresh input.
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "idleCompactAfterMinutes": 15
+    }
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `agents.defaults.idleCompactAfterMinutes` | `0` (disabled) | Minutes of idle time before auto-compaction starts. Set to `0` to disable. Recommended: `15` — close to a typical LLM KV cache expiry window, so stale sessions get compacted before the user returns. |
+
+`sessionTtlMinutes` remains accepted as a legacy alias for backward compatibility, but `idleCompactAfterMinutes` is the preferred config key going forward.
+
+How it works:
+1. **Idle detection**: On each idle tick (~1 s), checks all sessions for expiration.
+2. **Background compaction**: Idle sessions summarize the older live prefix via LLM and keep the most recent legal suffix (currently 8 messages).
+3. **Summary injection**: When the user returns, the summary is injected as runtime context (one-shot, not persisted) alongside the retained recent suffix.
+4. **Restart-safe resume**: The summary is also mirrored into session metadata so it can still be recovered after a process restart.
+
+> [!TIP]
+> Think of auto compact as "summarize older context, keep the freshest live turns." It is not a hard session reset.
 
 ### Timezone
 
@@ -1218,6 +1569,32 @@ Common examples: `UTC`, `America/New_York`, `America/Los_Angeles`, `Europe/Londo
 
 > Need another timezone? Browse the full [IANA Time Zone Database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
 
+### Unified Session
+
+By default, each channel × chat ID combination gets its own session. If you use nanobot across multiple channels (e.g. Telegram + Discord + CLI) and want them to share the same conversation, enable `unifiedSession`:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "unifiedSession": true
+    }
+  }
+}
+```
+
+When enabled, all incoming messages — regardless of which channel they arrive on — are routed into a single shared session. Switching from Telegram to Discord (or any other channel) continues the same conversation seamlessly.
+
+| Behavior | `false` (default) | `true` |
+|----------|-------------------|--------|
+| Session key | `channel:chat_id` | `unified:default` |
+| Cross-channel continuity | No | Yes |
+| `/new` clears | Current channel session | Shared session |
+| `/stop` finds tasks | By channel session | By shared session |
+| Existing `session_key_override` (e.g. Telegram thread) | Respected | Still respected — not overwritten |
+
+> This is designed for single-user, multi-device setups. It is **off by default** — existing users see zero behavior change.
+
 ## 🧩 Multiple Instances
 
 Run multiple nanobot instances simultaneously with separate configs and runtime data. Use `--config` as the main entrypoint. Optionally pass `--workspace` during `onboard` when you want to initialize or update the saved workspace for a specific instance.
@@ -1231,13 +1608,13 @@ If you want each instance to have its own dedicated workspace from the start, pa
 ```bash
 # Create separate instance configs and workspaces
 nanobot onboard --config ~/.nanobot-telegram/config.json --workspace ~/.nanobot-telegram/workspace
-nanobot onboard --config ~/.nanobot-slack/config.json --workspace ~/.nanobot-slack/workspace
+nanobot onboard --config ~/.nanobot-discord/config.json --workspace ~/.nanobot-discord/workspace
 nanobot onboard --config ~/.nanobot-feishu/config.json --workspace ~/.nanobot-feishu/workspace
 ```
 
 **Configure each instance:**
 
-Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-slack/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
+Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-discord/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
 
 **Run instances:**
 
@@ -1245,8 +1622,8 @@ Edit `~/.nanobot-telegram/config.json`, `~/.nanobot-slack/config.json`, etc. wit
 # Instance A - Telegram bot
 nanobot gateway --config ~/.nanobot-telegram/config.json
 
-# Instance B - Slack bot
-nanobot gateway --config ~/.nanobot-slack/config.json
+# Instance B - Discord bot  
+nanobot gateway --config ~/.nanobot-discord/config.json
 
 # Instance C - Feishu bot with custom port
 nanobot gateway --config ~/.nanobot-feishu/config.json --port 18792
@@ -1260,7 +1637,7 @@ To open a CLI session against one of these instances locally:
 
 ```bash
 nanobot agent -c ~/.nanobot-telegram/config.json -m "Hello from Telegram instance"
-nanobot agent -c ~/.nanobot-slack/config.json -m "Hello from Slack instance"
+nanobot agent -c ~/.nanobot-discord/config.json -m "Hello from Discord instance"
 
 # Optional one-off workspace override
 nanobot agent -c ~/.nanobot-telegram/config.json -w /tmp/nanobot-telegram-test
@@ -1313,7 +1690,7 @@ Start separate instances:
 
 ```bash
 nanobot gateway --config ~/.nanobot-telegram/config.json
-nanobot gateway --config ~/.nanobot-slack/config.json
+nanobot gateway --config ~/.nanobot-discord/config.json
 ```
 
 Override workspace for one-off runs when needed:
@@ -1324,7 +1701,7 @@ nanobot gateway --config ~/.nanobot-telegram/config.json --workspace /tmp/nanobo
 
 ### Common Use Cases
 
-- Run separate bots for Telegram, Slack, Feishu, and other platforms
+- Run separate bots for Telegram, Discord, Feishu, and other platforms
 - Keep testing and production instances isolated
 - Use different models or providers for different teams
 - Serve multiple tenants with separate configs and runtime data
@@ -1543,7 +1920,7 @@ docker run -v ~/.nanobot:/home/nanobot/.nanobot --rm nanobot onboard
 # Edit config on host to add API keys
 vim ~/.nanobot/config.json
 
-# Run gateway (connects to enabled channels, e.g. Telegram/Slack/Mochat)
+# Run gateway (connects to enabled channels, e.g. Telegram/Discord/Mochat)
 docker run -v ~/.nanobot:/home/nanobot/.nanobot -p 18790:18790 nanobot gateway
 
 # Or run a single command
@@ -1653,6 +2030,7 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
   <img src="https://contrib.rocks/image?repo=HKUDS/nanobot&max=100&columns=12&updated=20260210" alt="Contributors" />
 </a>
 
+
 ## ⭐ Star History
 
 <div align="center">
@@ -1669,6 +2047,7 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
   <em> Thanks for visiting ✨ nanobot!</em><br><br>
   <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.nanobot&style=for-the-badge&color=00d4ff" alt="Views">
 </p>
+
 
 <p align="center">
   <sub>nanobot is for educational, research, and technical exchange purposes only</sub>

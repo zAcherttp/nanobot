@@ -8,12 +8,10 @@ from nanobot.security.network import validate_url_target
 
 def _fake_resolve(host: str, results: list[str]):
     """Return a getaddrinfo mock that maps the given host to fake IP results."""
-
     def _resolver(hostname, port, family=0, type_=0):
         if hostname == host:
             return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", (ip, 0)) for ip in results]
         raise socket.gaierror(f"cannot resolve {hostname}")
-
     return _resolver
 
 
@@ -84,13 +82,10 @@ def test_onboard_does_not_crash_with_legacy_memory_window(tmp_path, monkeypatch)
     )
 
     monkeypatch.setattr("nanobot.config.loader.get_config_path", lambda: config_path)
-    monkeypatch.setattr(
-        "nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace
-    )
+    monkeypatch.setattr("nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
 
     from typer.testing import CliRunner
     from nanobot.cli.commands import app
-
     runner = CliRunner()
     result = runner.invoke(app, ["onboard"], input="n\n")
 
@@ -119,9 +114,7 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
     )
 
     monkeypatch.setattr("nanobot.config.loader.get_config_path", lambda: config_path)
-    monkeypatch.setattr(
-        "nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace
-    )
+    monkeypatch.setattr("nanobot.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
     monkeypatch.setattr(
         "nanobot.channels.registry.discover_all",
         lambda: {
@@ -139,7 +132,6 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
 
     from typer.testing import CliRunner
     from nanobot.cli.commands import app
-
     runner = CliRunner()
     result = runner.invoke(app, ["onboard"], input="n\n")
 
@@ -158,15 +150,11 @@ def test_load_config_resets_ssrf_whitelist_when_next_config_is_empty(tmp_path) -
     defaulted.write_text(json.dumps({}), encoding="utf-8")
 
     load_config(whitelisted)
-    with patch(
-        "nanobot.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])
-    ):
+    with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])):
         ok, err = validate_url_target("http://ts.local/api")
         assert ok, err
 
     load_config(defaulted)
-    with patch(
-        "nanobot.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])
-    ):
+    with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])):
         ok, _ = validate_url_target("http://ts.local/api")
         assert not ok

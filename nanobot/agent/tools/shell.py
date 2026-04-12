@@ -3,9 +3,7 @@
 import asyncio
 import os
 import re
-import shlex
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -48,26 +46,26 @@ class ExecTool(Tool):
         restrict_to_workspace: bool = False,
         sandbox: str = "",
         path_append: str = "",
-        prompt_mode: str = "auto",
+        allowed_env_keys: list[str] | None = None,
     ):
         self.timeout = timeout
         self.working_dir = working_dir
         self.sandbox = sandbox
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",  # del /f, del /q
-            r"\brmdir\s+/s\b",  # rmdir /s
-            r"(?:^|[;&|]\s*)format\b",  # format (as standalone command only)
-            r"\b(mkfs|diskpart)\b",  # disk operations
-            r"\bdd\s+if=",  # dd
-            r">\s*/dev/sd",  # write to disk
+            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
+            r"\bdel\s+/[fq]\b",              # del /f, del /q
+            r"\brmdir\s+/s\b",               # rmdir /s
+            r"(?:^|[;&|]\s*)format\b",       # format (as standalone command only)
+            r"\b(mkfs|diskpart)\b",          # disk operations
+            r"\bdd\s+if=",                   # dd
+            r">\s*/dev/sd",                  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
-            r":\(\)\s*\{.*\};\s*:",  # fork bomb
+            r":\(\)\s*\{.*\};\s*:",          # fork bomb
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
-        self.prompt_mode = prompt_mode
+        self.allowed_env_keys = allowed_env_keys or []
 
     @property
     def name(self) -> str:
@@ -91,18 +89,10 @@ class ExecTool(Tool):
         return True
 
     async def execute(
-        self,
-        command: str,
-        working_dir: str | None = None,
-        timeout: int | None = None,
-        **kwargs: Any,
+        self, command: str, working_dir: str | None = None,
+        timeout: int | None = None, **kwargs: Any,
     ) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
-
-        command, prompt_error = self._apply_prompt_mode(command)
-        if prompt_error:
-            return prompt_error
-
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -127,22 +117,20 @@ class ExecTool(Tool):
             else:
                 command = f'export PATH="$PATH:{self.path_append}"; {command}'
 
-        if _IS_WINDOWS and not self._should_use_bash_on_windows(command):
-            # LLMs often emit JSON-escaped quotes (\") around Windows paths.
-            # cmd.exe treats backslash as a literal character, so "C:\path"
-            # becomes a malformed path for tools like ffmpeg.
-            command = command.replace("\\\"", "\"")
-
         try:
-            completed = await asyncio.to_thread(
-                self._run_subprocess,
-                command,
-                cwd,
-                env,
-                effective_timeout,
-            )
-            stdout = completed.stdout or b""
-            stderr = completed.stderr or b""
+            process = await self._spawn(command, cwd, env)
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=effective_timeout,
+                )
+            except asyncio.TimeoutError:
+                await self._kill_process(process)
+                return f"Error: Command timed out after {effective_timeout} seconds"
+            except asyncio.CancelledError:
+                await self._kill_process(process)
+                raise
 
             output_parts = []
 
@@ -154,7 +142,7 @@ class ExecTool(Tool):
                 if stderr_text.strip():
                     output_parts.append(f"STDERR:\n{stderr_text}")
 
-            output_parts.append(f"\nExit code: {completed.returncode}")
+            output_parts.append(f"\nExit code: {process.returncode}")
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
@@ -169,82 +157,8 @@ class ExecTool(Tool):
 
             return result
 
-        except subprocess.TimeoutExpired:
-            return f"Error: Command timed out after {effective_timeout} seconds"
         except Exception as e:
             return f"Error executing command: {str(e)}"
-
-    @staticmethod
-    def _run_subprocess(
-        command: str,
-        cwd: str,
-        env: dict[str, str],
-        timeout: int,
-    ) -> subprocess.CompletedProcess[bytes]:
-        """Run *command* in a blocking subprocess suitable for asyncio.to_thread()."""
-        return subprocess.run(
-            ExecTool._build_process_args(command, env),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=cwd,
-            env=env,
-            timeout=timeout,
-            shell=False,
-        )
-
-    @staticmethod
-    def _build_process_args(command: str, env: dict[str, str]) -> list[str]:
-        """Build platform-specific process args for subprocess.run()."""
-        if _IS_WINDOWS:
-            comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
-            translated = ExecTool._translate_windows_posix_command(command)
-            if translated is not None:
-                return [comspec, "/d", "/s", "/c", translated]
-            if ExecTool._should_use_bash_on_windows(command):
-                bash = shutil.which("bash")
-                if bash:
-                    return [bash, "-lc", command]
-            return [comspec, "/d", "/s", "/c", command]
-
-        bash = shutil.which("bash") or "/bin/bash"
-        return [bash, "-l", "-c", command]
-
-    def _apply_prompt_mode(self, command: str) -> tuple[str, str | None]:
-        """Normalize known interactive commands according to prompt policy.
-
-        Modes:
-        - auto: patch known commands to non-interactive variants when safe.
-        - strict: fail fast when known interactive flags are missing.
-        - off: do not patch or block.
-        """
-        mode = (self.prompt_mode or "auto").strip().lower()
-        if mode not in {"auto", "strict", "off"}:
-            mode = "auto"
-
-        head = re.match(r"^(\s*)(\"[^\"]+\"|'[^']+'|\S+)", command)
-        if not head:
-            return command, None
-
-        token = head.group(2).strip("\"'")
-        token_base = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
-
-        # ffmpeg prompts for overwrite confirmation unless -y or -n is present.
-        if token_base not in {"ffmpeg", "ffmpeg.exe"}:
-            return command, None
-        if re.search(r"(^|\s)-(?:y|n)(?=\s|$)", command):
-            return command, None
-        if mode == "off":
-            return command, None
-        if mode == "strict":
-            return (
-                command,
-                "Error: Command may block on an interactive ffmpeg overwrite prompt. "
-                "Add -y (overwrite) or -n (never overwrite) to run non-interactively.",
-            )
-
-        insert_at = head.end(2)
-        normalized = f"{command[:insert_at]} -y{command[insert_at:]}"
-        return normalized, None
 
     @staticmethod
     async def _spawn(
@@ -253,40 +167,8 @@ class ExecTool(Tool):
         """Launch *command* in a platform-appropriate shell."""
         if _IS_WINDOWS:
             comspec = env.get("COMSPEC", os.environ.get("COMSPEC", "cmd.exe"))
-
-            translated = ExecTool._translate_windows_posix_command(command)
-            if translated is not None:
-                command = translated
-
-            # Prefer bash for clearly POSIX-style commands when available on Windows.
-            # This keeps commands like `sleep 10` and `bash -c ...` functional.
-            if translated is None and ExecTool._should_use_bash_on_windows(command):
-                bash = shutil.which("bash")
-                if bash:
-                    try:
-                        return await asyncio.create_subprocess_exec(
-                            bash,
-                            "-lc",
-                            command,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                            cwd=cwd,
-                            env=env,
-                        )
-                    except (FileNotFoundError, PermissionError, OSError) as e:
-                        logger.debug("Falling back from bash on Windows: {}", e)
-                        translated = ExecTool._translate_windows_posix_command(command)
-                        if translated is not None:
-                            command = translated
-                        else:
-                            raise
-
             return await asyncio.create_subprocess_exec(
-                comspec,
-                "/d",
-                "/s",
-                "/c",
-                command,
+                comspec, "/c", command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
@@ -300,49 +182,6 @@ class ExecTool(Tool):
             cwd=cwd,
             env=env,
         )
-
-    @staticmethod
-    def _should_use_bash_on_windows(command: str) -> bool:
-        """Return True when command is clearly POSIX-oriented."""
-        stripped = command.strip()
-        lower = stripped.lower()
-        if lower.startswith("bash -c ") or lower.startswith("bash -lc "):
-            return True
-        if re.search(r"(^|\s)sleep\s+\d", lower):
-            return True
-        return False
-
-    @staticmethod
-    def _translate_windows_posix_command(command: str) -> str | None:
-        """Translate a small POSIX-oriented subset for Windows shell execution."""
-        stripped = command.strip()
-        lower = stripped.lower()
-
-        sleep_match = re.fullmatch(r"sleep\s+(\d+)", lower)
-        if sleep_match:
-            seconds = int(sleep_match.group(1))
-            return f"ping -n {seconds + 1} 127.0.0.1 >nul"
-
-        try:
-            parts = shlex.split(stripped, posix=True)
-        except ValueError:
-            return None
-
-        if len(parts) >= 3 and parts[0].lower() == "bash" and parts[1].lower() in {"-c", "-lc"}:
-            script = parts[2]
-            loop_match = re.fullmatch(
-                r"for\s+\w+\s+in\s+\{1\.\.(\d+)\};\s*do\s+echo\s+(['\"]?)(.*?)\2;\s*done",
-                script,
-                re.IGNORECASE,
-            )
-            if loop_match:
-                count = loop_match.group(1)
-                text = loop_match.group(3).replace('"', r"\"")
-                return f'for /L %i in (1,1,{count}) do @echo {text}'
-            if re.fullmatch(r"echo\s+.+", script, re.IGNORECASE):
-                return script
-
-        return None
 
     @staticmethod
     async def _kill_process(process: asyncio.subprocess.Process) -> None:
@@ -366,12 +205,12 @@ class ExecTool(Tool):
         user's profile which sets PATH and other essentials.
 
         On Windows, ``cmd.exe`` has no login-profile mechanism, so a curated
-        set of system variables (including PATH) is forwarded. API keys and
+        set of system variables (including PATH) is forwarded.  API keys and
         other secrets are still excluded.
         """
         if _IS_WINDOWS:
             sr = os.environ.get("SYSTEMROOT", r"C:\Windows")
-            return {
+            env = {
                 "SYSTEMROOT": sr,
                 "COMSPEC": os.environ.get("COMSPEC", f"{sr}\\system32\\cmd.exe"),
                 "USERPROFILE": os.environ.get("USERPROFILE", ""),
@@ -381,13 +220,28 @@ class ExecTool(Tool):
                 "TMP": os.environ.get("TMP", f"{sr}\\Temp"),
                 "PATHEXT": os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
                 "PATH": os.environ.get("PATH", f"{sr}\\system32;{sr}"),
+                "APPDATA": os.environ.get("APPDATA", ""),
+                "LOCALAPPDATA": os.environ.get("LOCALAPPDATA", ""),
+                "ProgramData": os.environ.get("ProgramData", ""),
+                "ProgramFiles": os.environ.get("ProgramFiles", ""),
+                "ProgramFiles(x86)": os.environ.get("ProgramFiles(x86)", ""),
+                "ProgramW6432": os.environ.get("ProgramW6432", ""),
             }
+            for key in self.allowed_env_keys:
+                val = os.environ.get(key)
+                if val is not None:
+                    env[key] = val
+            return env
         home = os.environ.get("HOME", "/tmp")
         env = {
             "HOME": home,
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "TERM": os.environ.get("TERM", "dumb"),
         }
+        for key in self.allowed_env_keys:
+            val = os.environ.get(key)
+            if val is not None:
+                env[key] = val
         return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:
@@ -404,7 +258,6 @@ class ExecTool(Tool):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
         from nanobot.security.network import contains_internal_url
-
         if contains_internal_url(cmd):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 
@@ -422,9 +275,8 @@ class ExecTool(Tool):
                     continue
 
                 media_path = get_media_dir().resolve()
-                if (
-                    p.is_absolute()
-                    and cwd_path not in p.parents
+                if (p.is_absolute() 
+                    and cwd_path not in p.parents 
                     and p != cwd_path
                     and media_path not in p.parents
                     and p != media_path
@@ -438,10 +290,6 @@ class ExecTool(Tool):
         # Windows: match drive-root paths like `C:\` as well as `C:\path\to\file`
         # NOTE: `*` is required so `C:\` (nothing after the slash) is still extracted.
         win_paths = re.findall(r"[A-Za-z]:\\[^\s\"'|><;]*", command)
-        posix_paths = re.findall(
-            r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command
-        )  # POSIX: /absolute only
-        home_paths = re.findall(
-            r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command
-        )  # POSIX/Windows home shortcut: ~
+        posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command) # POSIX: /absolute only
+        home_paths = re.findall(r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command) # POSIX/Windows home shortcut: ~
         return win_paths + posix_paths + home_paths

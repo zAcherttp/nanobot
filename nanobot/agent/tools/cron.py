@@ -5,12 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from nanobot.agent.tools.base import Tool, tool_parameters
-from nanobot.agent.tools.schema import (
-    BooleanSchema,
-    IntegerSchema,
-    StringSchema,
-    tool_parameters_schema,
-)
+from nanobot.agent.tools.schema import BooleanSchema, IntegerSchema, StringSchema, tool_parameters_schema
 from nanobot.cron.service import CronService
 from nanobot.cron.types import CronJob, CronJobState, CronSchedule
 
@@ -52,15 +47,12 @@ class CronTool(Tool):
         self._default_timezone = default_timezone
         self._channel = ""
         self._chat_id = ""
-        self._mode = "general"
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
 
-    def set_context(self, channel: str, chat_id: str, mode: str | None = None) -> None:
+    def set_context(self, channel: str, chat_id: str) -> None:
         """Set the current session context for delivery."""
         self._channel = channel
         self._chat_id = chat_id
-        if mode:
-            self._mode = mode
 
     def set_cron_context(self, active: bool):
         """Mark whether the tool is executing inside a cron job callback."""
@@ -178,7 +170,6 @@ class CronTool(Tool):
             deliver=deliver,
             channel=self._channel,
             to=self._chat_id,
-            mode=self._mode,
             delete_after_run=delete_after,
         )
         return f"Created job '{job.name}' (id: {job.id})"
@@ -252,5 +243,8 @@ class CronTool(Tool):
                     "This is a system-managed Dream memory consolidation job for long-term memory.\n"
                     "It remains visible so you can inspect it, but it cannot be removed."
                 )
-            return f"Cannot remove job `{job_id}`.\nThis is a protected system-managed cron job."
+            return (
+                f"Cannot remove job `{job_id}`.\n"
+                "This is a protected system-managed cron job."
+            )
         return f"Job {job_id} not found"

@@ -39,13 +39,11 @@ _EVALUATE_TOOL = [
     }
 ]
 
-
 async def evaluate_response(
     response: str,
     task_context: str,
     provider: LLMProvider,
     model: str,
-    mode: str = "general",
 ) -> bool:
     """Decide whether a background-task result should be delivered to the user.
 
@@ -56,17 +54,13 @@ async def evaluate_response(
     try:
         llm_response = await provider.chat_with_retry(
             messages=[
-                {"role": "system", "content": render_template(mode, "evaluator.md", part="system")},
-                {
-                    "role": "user",
-                    "content": render_template(
-                        mode,
-                        "evaluator.md",
-                        part="user",
-                        task_context=task_context,
-                        response=response,
-                    ),
-                },
+                {"role": "system", "content": render_template("agent/evaluator.md", part="system")},
+                {"role": "user", "content": render_template(
+                    "agent/evaluator.md",
+                    part="user",
+                    task_context=task_context,
+                    response=response,
+                )},
             ],
             tools=_EVALUATE_TOOL,
             model=model,

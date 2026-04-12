@@ -6,6 +6,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 import tomllib
 
+
 def _read_pyproject_version() -> str | None:
     """Read the source-tree version when package metadata is unavailable."""
     pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"

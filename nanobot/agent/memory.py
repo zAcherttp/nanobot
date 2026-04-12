@@ -13,21 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 from nanobot.utils.prompt_templates import render_template
-from nanobot.agent.scheduler_state import (
-    diff_insights_path,
-    load_sync_state,
-    observations_path,
-    read_jsonl,
-    replace_markdown_section,
-    save_sync_state,
-    utc_now_iso,
-)
-from nanobot.utils.helpers import (
-    ensure_dir,
-    estimate_message_tokens,
-    estimate_prompt_tokens_chain,
-    strip_think,
-)
+from nanobot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain, strip_think
 
 from nanobot.agent.runner import AgentRunSpec, AgentRunner
 from nanobot.agent.tools.registry import ToolRegistry
@@ -42,11 +28,15 @@ if TYPE_CHECKING:
 # MemoryStore — pure file I/O layer
 # ---------------------------------------------------------------------------
 
-
 class MemoryStore:
     """Pure file I/O for memory files: MEMORY.md, history.jsonl, SOUL.md, USER.md."""
 
     _DEFAULT_MAX_HISTORY = 1000
+    _LEGACY_ENTRY_START_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*")
+    _LEGACY_TIMESTAMP_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*")
+    _LEGACY_RAW_MESSAGE_RE = re.compile(
+        r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
+    )
 
     def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
         self.workspace = workspace
@@ -54,18 +44,15 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
+        self.legacy_history_file = self.memory_dir / "HISTORY.md"
         self.soul_file = workspace / "SOUL.md"
         self.user_file = workspace / "USER.md"
         self._cursor_file = self.memory_dir / ".cursor"
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
-        self._git = GitStore(
-            workspace,
-            tracked_files=[
-                "SOUL.md",
-                "USER.md",
-                "memory/MEMORY.md",
-            ],
-        )
+        self._git = GitStore(workspace, tracked_files=[
+            "SOUL.md", "USER.md", "memory/MEMORY.md",
+        ])
+        self._maybe_migrate_legacy_history()
 
     @property
     def git(self) -> GitStore:
@@ -79,6 +66,127 @@ class MemoryStore:
             return path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return ""
+
+    def _maybe_migrate_legacy_history(self) -> None:
+        """One-time upgrade from legacy HISTORY.md to history.jsonl.
+
+        The migration is best-effort and prioritizes preserving as much content
+        as possible over perfect parsing.
+        """
+        if not self.legacy_history_file.exists():
+            return
+        if self.history_file.exists() and self.history_file.stat().st_size > 0:
+            return
+
+        try:
+            legacy_text = self.legacy_history_file.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            logger.exception("Failed to read legacy HISTORY.md for migration")
+            return
+
+        entries = self._parse_legacy_history(legacy_text)
+        try:
+            if entries:
+                self._write_entries(entries)
+                last_cursor = entries[-1]["cursor"]
+                self._cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                # Default to "already processed" so upgrades do not replay the
+                # user's entire historical archive into Dream on first start.
+                self._dream_cursor_file.write_text(str(last_cursor), encoding="utf-8")
+
+            backup_path = self._next_legacy_backup_path()
+            self.legacy_history_file.replace(backup_path)
+            logger.info(
+                "Migrated legacy HISTORY.md to history.jsonl ({} entries)",
+                len(entries),
+            )
+        except Exception:
+            logger.exception("Failed to migrate legacy HISTORY.md")
+
+    def _parse_legacy_history(self, text: str) -> list[dict[str, Any]]:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            return []
+
+        fallback_timestamp = self._legacy_fallback_timestamp()
+        entries: list[dict[str, Any]] = []
+        chunks = self._split_legacy_history_chunks(normalized)
+
+        for cursor, chunk in enumerate(chunks, start=1):
+            timestamp = fallback_timestamp
+            content = chunk
+            match = self._LEGACY_TIMESTAMP_RE.match(chunk)
+            if match:
+                timestamp = match.group(1)
+                remainder = chunk[match.end():].lstrip()
+                if remainder:
+                    content = remainder
+
+            entries.append({
+                "cursor": cursor,
+                "timestamp": timestamp,
+                "content": content,
+            })
+        return entries
+
+    def _split_legacy_history_chunks(self, text: str) -> list[str]:
+        lines = text.split("\n")
+        chunks: list[str] = []
+        current: list[str] = []
+        saw_blank_separator = False
+
+        for line in lines:
+            if saw_blank_separator and line.strip() and current:
+                chunks.append("\n".join(current).strip())
+                current = [line]
+                saw_blank_separator = False
+                continue
+            if self._should_start_new_legacy_chunk(line, current):
+                chunks.append("\n".join(current).strip())
+                current = [line]
+                saw_blank_separator = False
+                continue
+            current.append(line)
+            saw_blank_separator = not line.strip()
+
+        if current:
+            chunks.append("\n".join(current).strip())
+        return [chunk for chunk in chunks if chunk]
+
+    def _should_start_new_legacy_chunk(self, line: str, current: list[str]) -> bool:
+        if not current:
+            return False
+        if not self._LEGACY_ENTRY_START_RE.match(line):
+            return False
+        if self._is_raw_legacy_chunk(current) and self._LEGACY_RAW_MESSAGE_RE.match(line):
+            return False
+        return True
+
+    def _is_raw_legacy_chunk(self, lines: list[str]) -> bool:
+        first_nonempty = next((line for line in lines if line.strip()), "")
+        match = self._LEGACY_TIMESTAMP_RE.match(first_nonempty)
+        if not match:
+            return False
+        return first_nonempty[match.end():].lstrip().startswith("[RAW]")
+
+    def _legacy_fallback_timestamp(self) -> str:
+        try:
+            return datetime.fromtimestamp(
+                self.legacy_history_file.stat().st_mtime,
+            ).strftime("%Y-%m-%d %H:%M")
+        except OSError:
+            return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _next_legacy_backup_path(self) -> Path:
+        candidate = self.memory_dir / "HISTORY.md.bak"
+        suffix = 2
+        while candidate.exists():
+            candidate = self.memory_dir / f"HISTORY.md.bak.{suffix}"
+            suffix += 1
+        return candidate
 
     # -- MEMORY.md (long-term facts) -----------------------------------------
 
@@ -116,11 +224,7 @@ class MemoryStore:
         """Append *entry* to history.jsonl and return its auto-incrementing cursor."""
         cursor = self._next_cursor()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        record = {
-            "cursor": cursor,
-            "timestamp": ts,
-            "content": strip_think(entry.rstrip()) or entry.rstrip(),
-        }
+        record = {"cursor": cursor, "timestamp": ts, "content": strip_think(entry.rstrip()) or entry.rstrip()}
         with open(self.history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._cursor_file.write_text(str(cursor), encoding="utf-8")
@@ -150,7 +254,7 @@ class MemoryStore:
         entries = self._read_entries()
         if len(entries) <= self.max_history_entries:
             return
-        kept = entries[-self.max_history_entries :]
+        kept = entries[-self.max_history_entries:]
         self._write_entries(kept)
 
     # -- JSONL helpers -------------------------------------------------------
@@ -186,7 +290,7 @@ class MemoryStore:
                 if not lines:
                     return None
                 return json.loads(lines[-1])
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     def _write_entries(self, entries: list[dict[str, Any]]) -> None:
@@ -216,9 +320,7 @@ class MemoryStore:
         for message in messages:
             if not message.get("content"):
                 continue
-            tools = (
-                f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
-            )
+            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
             lines.append(
                 f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
             )
@@ -226,8 +328,14 @@ class MemoryStore:
 
     def raw_archive(self, messages: list[dict]) -> None:
         """Fallback: dump raw messages to history.jsonl without LLM summarization."""
-        self.append_history(f"[RAW] {len(messages)} messages\n{self._format_messages(messages)}")
-        logger.warning("Memory consolidation degraded: raw-archived {} messages", len(messages))
+        self.append_history(
+            f"[RAW] {len(messages)} messages\n"
+            f"{self._format_messages(messages)}"
+        )
+        logger.warning(
+            "Memory consolidation degraded: raw-archived {} messages", len(messages)
+        )
+
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +347,7 @@ class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
 
     _MAX_CONSOLIDATION_ROUNDS = 5
+    _MAX_CHUNK_MESSAGES = 60  # hard cap per consolidation round
 
     _SAFETY_BUFFER = 1024  # extra headroom for tokenizer estimation drift
 
@@ -252,18 +361,18 @@ class Consolidator:
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
-        mode: str = "general",
     ):
         self.store = store
         self.provider = provider
         self.model = model
-        self.mode = mode
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -291,10 +400,26 @@ class Consolidator:
 
         return last_boundary
 
+    def _cap_consolidation_boundary(
+        self,
+        session: Session,
+        end_idx: int,
+    ) -> int | None:
+        """Clamp the chunk size without breaking the user-turn boundary."""
+        start = session.last_consolidated
+        if end_idx - start <= self._MAX_CHUNK_MESSAGES:
+            return end_idx
+
+        capped_end = start + self._MAX_CHUNK_MESSAGES
+        for idx in range(capped_end, start, -1):
+            if session.messages[idx].get("role") == "user":
+                return idx
+        return None
+
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
-        channel, chat_id = session.key.split(":", 1) if ":" in session.key else (None, None)
+        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -308,13 +433,13 @@ class Consolidator:
             self._get_tool_definitions(),
         )
 
-    async def archive(self, messages: list[dict]) -> bool:
+    async def archive(self, messages: list[dict]) -> str | None:
         """Summarize messages via LLM and append to history.jsonl.
 
-        Returns True on success (or degraded success), False if nothing to do.
+        Returns the summary text on success, None if nothing to archive.
         """
         if not messages:
-            return False
+            return None
         try:
             formatted = MemoryStore._format_messages(messages)
             response = await self.provider.chat_with_retry(
@@ -323,8 +448,7 @@ class Consolidator:
                     {
                         "role": "system",
                         "content": render_template(
-                            self.mode,
-                            "consolidator_archive.md",
+                            "agent/consolidator_archive.md",
                             strip=True,
                         ),
                     },
@@ -335,11 +459,11 @@ class Consolidator:
             )
             summary = response.content or "[no summary]"
             self.store.append_history(summary)
-            return True
+            return summary
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")
             self.store.raw_archive(messages)
-            return True
+            return None
 
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
         """Loop: archive old messages until prompt fits within safe budget.
@@ -354,16 +478,22 @@ class Consolidator:
         async with lock:
             budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
             target = budget // 2
-            estimated, source = self.estimate_session_prompt_tokens(session)
+            try:
+                estimated, source = self.estimate_session_prompt_tokens(session)
+            except Exception:
+                logger.exception("Token estimation failed for {}", session.key)
+                estimated, source = 0, "error"
             if estimated <= 0:
                 return
             if estimated < budget:
+                unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
-                    "Token consolidation idle {}: {}/{} via {}",
+                    "Token consolidation idle {}: {}/{} via {}, msgs={}",
                     session.key,
                     estimated,
                     self.context_window_tokens,
                     source,
+                    unconsolidated_count,
                 )
                 return
 
@@ -381,7 +511,16 @@ class Consolidator:
                     return
 
                 end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated : end_idx]
+                end_idx = self._cap_consolidation_boundary(session, end_idx)
+                if end_idx is None:
+                    logger.debug(
+                        "Token consolidation: no capped boundary for {} (round {})",
+                        session.key,
+                        round_num,
+                    )
+                    return
+
+                chunk = session.messages[session.last_consolidated:end_idx]
                 if not chunk:
                     return
 
@@ -399,7 +538,11 @@ class Consolidator:
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
 
-                estimated, source = self.estimate_session_prompt_tokens(session)
+                try:
+                    estimated, source = self.estimate_session_prompt_tokens(session)
+                except Exception:
+                    logger.exception("Token estimation failed for {}", session.key)
+                    estimated, source = 0, "error"
                 if estimated <= 0:
                     return
 
@@ -425,12 +568,10 @@ class Dream:
         max_batch_size: int = 20,
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
-        mode: str = "general",
     ):
         self.store = store
         self.provider = provider
         self.model = model
-        self.mode = mode
         self.max_batch_size = max_batch_size
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
@@ -449,164 +590,42 @@ class Dream:
         tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace))
         return tools
 
-    @staticmethod
-    def _normalize_observation_summary(entry: dict[str, Any]) -> str:
-        summary = str(entry.get("summary") or "").strip()
-        summary = re.sub(r"\s+", " ", summary)
-        return summary.lower()
-
-    def _run_scheduler_audit(self) -> list[str]:
-        """Promote repeated scheduler observations and recent diff insights into durable files."""
-        if self.mode != "scheduler":
-            return []
-
-        workspace = self.store.workspace
-        state = load_sync_state(workspace)
-        dream_state = state.setdefault("dream", {})
-
-        all_observations = read_jsonl(observations_path(workspace))
-        all_diffs = read_jsonl(diff_insights_path(workspace))
-        last_observation_cursor = int(dream_state.get("last_observation_cursor") or 0)
-        last_diff_cursor = int(dream_state.get("last_diff_cursor") or 0)
-
-        new_observations = [
-            item
-            for item in all_observations
-            if int(item.get("cursor") or 0) > last_observation_cursor
-        ]
-        new_diffs = [
-            item
-            for item in all_diffs
-            if int(item.get("cursor") or 0) > last_diff_cursor
-        ]
-        if not new_observations and not new_diffs:
-            return []
-
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for entry in all_observations:
-            key = self._normalize_observation_summary(entry)
-            if not key:
-                continue
-            grouped.setdefault(key, []).append(entry)
-
-        learned_hypotheses: list[str] = []
-        for key, entries in grouped.items():
-            if len(entries) < 2:
-                continue
-            latest = max(entries, key=lambda item: int(item.get("cursor") or 0))
-            summary = str(latest.get("summary") or key).strip()
-            learned_hypotheses.append(
-                f"- Low confidence: {summary} (seen {len(entries)} times; last source: {latest.get('source') or 'unknown'})"
-            )
-        learned_hypotheses.sort()
-        learned_body = "\n".join(learned_hypotheses) if learned_hypotheses else "(none yet)"
-
-        user_before = self.store.read_user()
-        user_after = replace_markdown_section(user_before, "Learned Hypotheses", learned_body)
-
-        recent_changes = all_diffs[-5:]
-        recent_change_lines = [
-            f"- {str(item.get('summary') or '').strip()}"
-            for item in recent_changes
-            if str(item.get("summary") or "").strip()
-        ]
-        goals_body = "\n".join(recent_change_lines) if recent_change_lines else "(none yet)"
-        goals_path = workspace / "GOALS.md"
-        try:
-            goals_before = goals_path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            goals_before = "# Active Goals\n\n## Recent External Changes\n\n(none yet)\n"
-        goals_after = replace_markdown_section(
-            goals_before,
-            "Recent External Changes",
-            goals_body,
-        )
-
-        changes: list[str] = []
-        if user_after != user_before:
-            self.store.write_user(user_after)
-            changes.append("scheduler_audit: USER.md")
-        if goals_after != goals_before:
-            goals_path.write_text(goals_after, encoding="utf-8")
-            changes.append("scheduler_audit: GOALS.md")
-
-        if all_observations:
-            dream_state["last_observation_cursor"] = int(all_observations[-1].get("cursor") or 0)
-        if all_diffs:
-            dream_state["last_diff_cursor"] = int(all_diffs[-1].get("cursor") or 0)
-        dream_state["last_audited_at"] = utc_now_iso()
-        save_sync_state(workspace, state)
-
-        return changes
-
     # -- main entry ----------------------------------------------------------
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
-        scheduler_audit_changes = self._run_scheduler_audit()
         if not entries:
-            if scheduler_audit_changes:
-                if self.store.git.is_initialized():
-                    sha = self.store.git.auto_commit(
-                        f"dream: scheduler audit, {len(scheduler_audit_changes)} change(s)"
-                    )
-                    if sha:
-                        logger.info("Dream commit: {}", sha)
-                return True
             return False
 
         batch = entries[: self.max_batch_size]
         logger.info(
             "Dream: processing {} entries (cursor {}→{}), batch={}",
-            len(entries),
-            last_cursor,
-            batch[-1]["cursor"],
-            len(batch),
+            len(entries), last_cursor, batch[-1]["cursor"], len(batch),
         )
 
         # Build history text for LLM
-        history_text = "\n".join(f"[{e['timestamp']}] {e['content']}" for e in batch)
+        history_text = "\n".join(
+            f"[{e['timestamp']}] {e['content']}" for e in batch
+        )
 
         # Current file contents
         current_date = datetime.now().strftime("%Y-%m-%d")
         current_memory = self.store.read_memory() or "(empty)"
         current_soul = self.store.read_soul() or "(empty)"
         current_user = self.store.read_user() or "(empty)"
-        file_context = [
-            f"## Current Date\n{current_date}",
-            f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}",
-            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}",
-            f"## Current USER.md ({len(current_user)} chars)\n{current_user}",
-        ]
-        if self.mode == "scheduler":
-            goals_path = self.store.workspace / "GOALS.md"
-            try:
-                current_goals = goals_path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                current_goals = "(empty)"
-            recent_observations = read_jsonl(observations_path(self.store.workspace))[-8:]
-            recent_diffs = read_jsonl(diff_insights_path(self.store.workspace))[-8:]
-            file_context.extend(
-                [
-                    f"## Current GOALS.md ({len(current_goals)} chars)\n{current_goals}",
-                    "## Recent observations\n"
-                    + ("\n".join(
-                        f"- {item.get('summary') or item.get('kind') or 'observation'}"
-                        for item in recent_observations
-                    ) or "(none)"),
-                    "## Recent diff insights\n"
-                    + ("\n".join(
-                        f"- {item.get('summary') or item.get('kind') or 'change'}"
-                        for item in recent_diffs
-                    ) or "(none)"),
-                ]
-            )
-        file_context_text = "\n\n".join(file_context)
+        file_context = (
+            f"## Current Date\n{current_date}\n\n"
+            f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
+            f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
+            f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
+        )
 
         # Phase 1: Analyze
-        phase1_prompt = f"## Conversation History\n{history_text}\n\n{file_context_text}"
+        phase1_prompt = (
+            f"## Conversation History\n{history_text}\n\n{file_context}"
+        )
 
         try:
             phase1_response = await self.provider.chat_with_retry(
@@ -614,7 +633,7 @@ class Dream:
                 messages=[
                     {
                         "role": "system",
-                        "content": render_template(self.mode, "dream_phase1.md", strip=True),
+                        "content": render_template("agent/dream_phase1.md", strip=True),
                     },
                     {"role": "user", "content": phase1_prompt},
                 ],
@@ -628,32 +647,29 @@ class Dream:
             return False
 
         # Phase 2: Delegate to AgentRunner with read_file / edit_file
-        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{file_context_text}"
+        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{file_context}"
 
         tools = self._tools
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": render_template(self.mode, "dream_phase2.md", strip=True),
+                "content": render_template("agent/dream_phase2.md", strip=True),
             },
             {"role": "user", "content": phase2_prompt},
         ]
 
         try:
-            result = await self._runner.run(
-                AgentRunSpec(
-                    initial_messages=messages,
-                    tools=tools,
-                    model=self.model,
-                    max_iterations=self.max_iterations,
-                    max_tool_result_chars=self.max_tool_result_chars,
-                    fail_on_tool_error=False,
-                )
-            )
+            result = await self._runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                fail_on_tool_error=False,
+            ))
             logger.debug(
                 "Dream Phase 2 complete: stop_reason={}, tool_events={}",
-                result.stop_reason,
-                len(result.tool_events),
+                result.stop_reason, len(result.tool_events),
             )
             for ev in (result.tool_events or []):
                 logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
@@ -662,7 +678,7 @@ class Dream:
             result = None
 
         # Build changelog from tool events
-        changelog: list[str] = list(scheduler_audit_changes)
+        changelog: list[str] = []
         if result and result.tool_events:
             for event in result.tool_events:
                 if event["status"] == "ok":
@@ -676,15 +692,13 @@ class Dream:
         if result and result.stop_reason == "completed":
             logger.info(
                 "Dream done: {} change(s), cursor advanced to {}",
-                len(changelog),
-                new_cursor,
+                len(changelog), new_cursor,
             )
         else:
             reason = result.stop_reason if result else "exception"
             logger.warning(
                 "Dream incomplete ({}): cursor advanced to {}",
-                reason,
-                new_cursor,
+                reason, new_cursor,
             )
 
         # Git auto-commit (only when there are actual changes)

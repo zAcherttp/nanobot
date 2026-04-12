@@ -9,7 +9,7 @@ from typing import Any
 class InboundMessage:
     """Message received from a chat channel."""
 
-    channel: str  # e.g. telegram or an installed plugin channel
+    channel: str  # telegram, discord, slack, whatsapp
     sender_id: str  # User identifier
     chat_id: str  # Chat/channel identifier
     content: str  # Message text
@@ -34,3 +34,5 @@ class OutboundMessage:
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+

@@ -58,19 +58,13 @@ class Nanobot:
 
         config: Config = resolve_config_env_vars(load_config(resolved))
         if workspace is not None:
-            config.agents.defaults.workspace = str(Path(workspace).expanduser().resolve())
+            config.agents.defaults.workspace = str(
+                Path(workspace).expanduser().resolve()
+            )
 
         provider = _make_provider(config)
         bus = MessageBus()
         defaults = config.agents.defaults
-        from nanobot.cron.service import CronService
-        from nanobot.modes import ModeRegistry
-
-        mode_registry = ModeRegistry()
-        cron_services = {
-            mode: CronService(mode_registry.workspace_path(config.workspace_path, mode) / "cron" / "jobs.json")
-            for mode in mode_registry.names()
-        }
 
         loop = AgentLoop(
             bus=bus,
@@ -84,13 +78,11 @@ class Nanobot:
             provider_retry_mode=defaults.provider_retry_mode,
             web_config=config.tools.web,
             exec_config=config.tools.exec,
-            calendar_config=config.tools.calendar,
-            tasks_config=config.tools.tasks,
-            tool_permissions_config=config.tools.permissions,
             restrict_to_workspace=config.tools.restrict_to_workspace,
             mcp_servers=config.tools.mcp_servers,
             timezone=defaults.timezone,
-            cron_services=cron_services,
+            unified_session=defaults.unified_session,
+            session_ttl_minutes=defaults.session_ttl_minutes,
         )
         return cls(loop)
 
@@ -114,8 +106,7 @@ class Nanobot:
             self._loop._extra_hooks = list(hooks)
         try:
             response = await self._loop.process_direct(
-                message,
-                session_key=session_key,
+                message, session_key=session_key,
             )
         finally:
             self._loop._extra_hooks = prev
@@ -155,7 +146,9 @@ def _make_provider(config: Any) -> Any:
     elif backend == "azure_openai":
         from nanobot.providers.azure_openai_provider import AzureOpenAIProvider
 
-        provider = AzureOpenAIProvider(api_key=p.api_key, api_base=p.api_base, default_model=model)
+        provider = AzureOpenAIProvider(
+            api_key=p.api_key, api_base=p.api_base, default_model=model
+        )
     elif backend == "anthropic":
         from nanobot.providers.anthropic_provider import AnthropicProvider
 

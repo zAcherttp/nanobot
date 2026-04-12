@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 if TYPE_CHECKING:
     from nanobot.bus.events import InboundMessage, OutboundMessage
     from nanobot.session.manager import Session
-    from nanobot.mode_runtime import ModeRuntime
 
 Handler = Callable[["CommandContext"], Awaitable["OutboundMessage | None"]]
 
@@ -23,8 +22,6 @@ class CommandContext:
     raw: str
     args: str = ""
     loop: Any = None
-    mode: str = "general"
-    runtime: "ModeRuntime | None" = None
 
 
 class CommandRouter:
@@ -40,17 +37,12 @@ class CommandRouter:
 
     def __init__(self) -> None:
         self._priority: dict[str, Handler] = {}
-        self._priority_prefix: list[tuple[str, Handler]] = []
         self._exact: dict[str, Handler] = {}
         self._prefix: list[tuple[str, Handler]] = []
         self._interceptors: list[Handler] = []
 
     def priority(self, cmd: str, handler: Handler) -> None:
         self._priority[cmd] = handler
-
-    def priority_prefix(self, pfx: str, handler: Handler) -> None:
-        self._priority_prefix.append((pfx, handler))
-        self._priority_prefix.sort(key=lambda p: len(p[0]), reverse=True)
 
     def exact(self, cmd: str, handler: Handler) -> None:
         self._exact[cmd] = handler
@@ -63,20 +55,13 @@ class CommandRouter:
         self._interceptors.append(handler)
 
     def is_priority(self, text: str) -> bool:
-        cmd = text.strip().lower()
-        if cmd in self._priority:
-            return True
-        return any(cmd.startswith(pfx) for pfx, _ in self._priority_prefix)
+        return text.strip().lower() in self._priority
 
     async def dispatch_priority(self, ctx: CommandContext) -> OutboundMessage | None:
         """Dispatch a priority command. Called from run() without the lock."""
         handler = self._priority.get(ctx.raw.lower())
         if handler:
             return await handler(ctx)
-        for pfx, handler in self._priority_prefix:
-            if ctx.raw.lower().startswith(pfx):
-                ctx.args = ctx.raw[len(pfx) :]
-                return await handler(ctx)
         return None
 
     async def dispatch(self, ctx: CommandContext) -> OutboundMessage | None:
@@ -88,7 +73,7 @@ class CommandRouter:
 
         for pfx, handler in self._prefix:
             if cmd.startswith(pfx):
-                ctx.args = ctx.raw[len(pfx) :]
+                ctx.args = ctx.raw[len(pfx):]
                 return await handler(ctx)
 
         for interceptor in self._interceptors:

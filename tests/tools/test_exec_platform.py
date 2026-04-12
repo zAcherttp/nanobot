@@ -5,12 +5,17 @@ strategy, and sandbox behaviour per platform — without actually running
 platform-specific binaries (all subprocess calls are mocked).
 """
 
-from subprocess import CompletedProcess
-from unittest.mock import AsyncMock, MagicMock, patch
+import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from nanobot.agent.tools.shell import ExecTool
+
+_WINDOWS_ENV_KEYS = {
+    "APPDATA", "LOCALAPPDATA", "ProgramData",
+    "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +27,10 @@ class TestBuildEnvUnix:
     def test_expected_keys(self):
         with patch("nanobot.agent.tools.shell._IS_WINDOWS", False):
             env = ExecTool()._build_env()
-        assert set(env) == {"HOME", "LANG", "TERM"}
+        expected = {"HOME", "LANG", "TERM"}
+        assert expected <= set(env)
+        if sys.platform != "win32":
+            assert set(env) == expected
 
     def test_home_from_environ(self, monkeypatch):
         monkeypatch.setenv("HOME", "/Users/dev")
@@ -46,6 +54,7 @@ class TestBuildEnvWindows:
     _EXPECTED_KEYS = {
         "SYSTEMROOT", "COMSPEC", "USERPROFILE", "HOMEDRIVE",
         "HOMEPATH", "TEMP", "TMP", "PATHEXT", "PATH",
+        *_WINDOWS_ENV_KEYS,
     }
 
     def test_expected_keys(self):
@@ -113,9 +122,9 @@ class TestSpawnWindows:
             await ExecTool._spawn("dir", r"C:\Users", env)
 
         args = mock_exec.call_args[0]
-        assert args[0].lower().endswith("cmd.exe")
-        assert args[1:4] == ("/d", "/s", "/c")
-        assert args[4] == "dir"
+        assert "cmd.exe" in args[0]
+        assert "/c" in args
+        assert "dir" in args
 
     @pytest.mark.asyncio
     async def test_falls_back_to_default_comspec(self):
@@ -141,32 +150,38 @@ class TestPathAppendPlatform:
     @pytest.mark.asyncio
     async def test_unix_injects_export(self):
         """On Unix, path_append is an export statement prepended to command."""
-        mock_run = MagicMock(return_value=CompletedProcess(args=[], returncode=0, stdout=b"ok", stderr=b""))
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"ok", b"")
+        mock_proc.returncode = 0
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", False),
-            patch.object(ExecTool, "_run_subprocess", mock_run),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc) as mock_spawn,
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool(path_append="/opt/bin")
             await tool.execute(command="ls")
 
-        spawned_cmd = mock_run.call_args[0][0]
+        spawned_cmd = mock_spawn.call_args[0][0]
         assert 'export PATH="$PATH:/opt/bin"' in spawned_cmd
         assert spawned_cmd.endswith("ls")
 
     @pytest.mark.asyncio
     async def test_windows_modifies_env(self):
         """On Windows, path_append is appended to PATH in the env dict."""
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"ok", b"")
+        mock_proc.returncode = 0
+
         captured_env = {}
 
-        def capture_run(cmd, cwd, env, timeout):
+        async def capture_spawn(cmd, cwd, env):
             captured_env.update(env)
-            return CompletedProcess(args=[], returncode=0, stdout=b"ok", stderr=b"")
+            return mock_proc
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch.object(ExecTool, "_run_subprocess", side_effect=capture_run),
+            patch.object(ExecTool, "_spawn", side_effect=capture_spawn),
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool(path_append=r"C:\tools\bin")
@@ -184,40 +199,40 @@ class TestSandboxPlatform:
     @pytest.mark.asyncio
     async def test_bwrap_skipped_on_windows(self):
         """bwrap must be silently skipped on Windows, not crash."""
-        mock_run = MagicMock(
-            return_value=CompletedProcess(args=[], returncode=0, stdout=b"ok", stderr=b"")
-        )
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"ok", b"")
+        mock_proc.returncode = 0
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch.object(ExecTool, "_run_subprocess", mock_run),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc) as mock_spawn,
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool(sandbox="bwrap")
             result = await tool.execute(command="dir")
 
         assert "ok" in result
-        spawned_cmd = mock_run.call_args[0][0]
+        spawned_cmd = mock_spawn.call_args[0][0]
         assert "bwrap" not in spawned_cmd
 
     @pytest.mark.asyncio
     async def test_bwrap_applied_on_unix(self):
         """On Unix, sandbox wrapping should still happen normally."""
-        mock_run = MagicMock(
-            return_value=CompletedProcess(args=[], returncode=0, stdout=b"sandboxed", stderr=b"")
-        )
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"sandboxed", b"")
+        mock_proc.returncode = 0
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", False),
             patch("nanobot.agent.tools.shell.wrap_command", return_value="bwrap -- sh -c ls") as mock_wrap,
-            patch.object(ExecTool, "_run_subprocess", mock_run),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc) as mock_spawn,
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool(sandbox="bwrap", working_dir="/workspace")
             await tool.execute(command="ls")
 
         mock_wrap.assert_called_once()
-        spawned_cmd = mock_run.call_args[0][0]
+        spawned_cmd = mock_spawn.call_args[0][0]
         assert "bwrap" in spawned_cmd
 
 
@@ -230,13 +245,13 @@ class TestExecuteEndToEnd:
     @pytest.mark.asyncio
     async def test_windows_full_path(self):
         """Full execute() flow on Windows: env, spawn, output formatting."""
-        mock_run = MagicMock(
-            return_value=CompletedProcess(args=[], returncode=0, stdout=b"hello world\r\n", stderr=b"")
-        )
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"hello world\r\n", b"")
+        mock_proc.returncode = 0
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch.object(ExecTool, "_run_subprocess", mock_run),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc),
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool()
@@ -246,37 +261,15 @@ class TestExecuteEndToEnd:
         assert "Exit code: 0" in result
 
     @pytest.mark.asyncio
-    async def test_windows_normalizes_backslash_escaped_quotes(self):
-        """Windows cmd path should normalize \"...\" into "..." before spawn."""
-        mock_run = MagicMock(
-            return_value=CompletedProcess(args=[], returncode=0, stdout=b"ok\r\n", stderr=b"")
-        )
-
-        with (
-            patch("nanobot.agent.tools.shell._IS_WINDOWS", True),
-            patch.object(ExecTool, "_run_subprocess", mock_run),
-            patch.object(ExecTool, "_guard_command", return_value=None),
-        ):
-            tool = ExecTool()
-            await tool.execute(
-                command='ffmpeg -i \\"C:\\tmp\\in.ogg\\" -ac 1 \\"C:\\tmp\\out.wav\\"'
-            )
-
-        spawned_cmd = mock_run.call_args[0][0]
-        assert '\\"' not in spawned_cmd
-        assert '"C:\\tmp\\in.ogg"' in spawned_cmd
-        assert '"C:\\tmp\\out.wav"' in spawned_cmd
-
-    @pytest.mark.asyncio
     async def test_unix_full_path(self):
         """Full execute() flow on Unix: env, spawn, output formatting."""
-        mock_run = MagicMock(
-            return_value=CompletedProcess(args=[], returncode=0, stdout=b"hello world\n", stderr=b"")
-        )
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"hello world\n", b"")
+        mock_proc.returncode = 0
 
         with (
             patch("nanobot.agent.tools.shell._IS_WINDOWS", False),
-            patch.object(ExecTool, "_run_subprocess", mock_run),
+            patch.object(ExecTool, "_spawn", return_value=mock_proc),
             patch.object(ExecTool, "_guard_command", return_value=None),
         ):
             tool = ExecTool()

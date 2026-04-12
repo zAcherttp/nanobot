@@ -9,9 +9,7 @@ import pytest
 try:
     import telegram  # noqa: F401
 except ImportError:
-    pytest.skip(
-        "Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True
-    )
+    pytest.skip("Telegram dependencies not installed (python-telegram-bot)", allow_module_level=True)
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -45,8 +43,6 @@ class _FakeBot:
     def __init__(self) -> None:
         self.sent_messages: list[dict] = []
         self.sent_media: list[dict] = []
-        self.edited_messages: list[dict] = []
-        self.raw_posts: list[dict] = []
         self.get_me_calls = 0
 
     async def get_me(self):
@@ -59,14 +55,6 @@ class _FakeBot:
     async def send_message(self, **kwargs):
         self.sent_messages.append(kwargs)
         return SimpleNamespace(message_id=len(self.sent_messages))
-
-    async def edit_message_text(self, **kwargs):
-        self.edited_messages.append(kwargs)
-        return SimpleNamespace(message_id=kwargs.get("message_id", 0))
-
-    async def _post(self, endpoint: str, data=None, **kwargs):
-        self.raw_posts.append({"endpoint": endpoint, "data": data or {}, **kwargs})
-        return True
 
     async def send_photo(self, **kwargs) -> None:
         self.sent_media.append({"kind": "photo", **kwargs})
@@ -85,10 +73,8 @@ class _FakeBot:
 
     async def get_file(self, file_id: str):
         """Return a fake file that 'downloads' to a path (for reply-to-media tests)."""
-
         async def _fake_download(path) -> None:
             pass
-
         return SimpleNamespace(download_to_drive=_fake_download)
 
 
@@ -172,28 +158,6 @@ def _make_telegram_update(
     return SimpleNamespace(message=message, effective_user=user)
 
 
-def _make_callback_update(*, data: str, chat_id: int = -100123, message_id: int = 7):
-    user = SimpleNamespace(id=12345, username="alice", first_name="Alice")
-    answers: list[bool] = []
-
-    async def _answer():
-        answers.append(True)
-
-    message = SimpleNamespace(
-        chat=SimpleNamespace(type="group", is_forum=False),
-        chat_id=chat_id,
-        message_id=message_id,
-        message_thread_id=None,
-        reply_to_message=None,
-        text="approval prompt",
-        caption=None,
-    )
-    query = SimpleNamespace(data=data, message=message, answer=_answer)
-    update = SimpleNamespace(callback_query=query, effective_user=user)
-    update._answers = answers
-    return update
-
-
 @pytest.mark.asyncio
 async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     _FakeHTTPXRequest.clear()
@@ -226,7 +190,6 @@ async def test_start_creates_separate_pools_with_proxy(monkeypatch) -> None:
     assert builder.get_updates_request_value is poll_req
     assert callable(app.updater.start_polling_kwargs["error_callback"])
     assert any(cmd.command == "status" for cmd in app.bot.commands)
-    assert any(cmd.command == "mode" for cmd in app.bot.commands)
     assert any(cmd.command == "dream" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_log" for cmd in app.bot.commands)
     assert any(cmd.command == "dream_restore" for cmd in app.bot.commands)
@@ -286,7 +249,6 @@ async def test_send_text_retries_on_timeout() -> None:
     channel._app.bot.send_message = flaky_send
 
     import nanobot.channels.telegram as tg_mod
-
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -315,7 +277,6 @@ async def test_send_text_gives_up_after_max_retries() -> None:
     channel._app.bot.send_message = always_timeout
 
     import nanobot.channels.telegram as tg_mod
-
     orig_delay = tg_mod._SEND_RETRY_BASE_DELAY
     tg_mod._SEND_RETRY_BASE_DELAY = 0.01
     try:
@@ -400,7 +361,6 @@ async def test_send_delta_stream_end_raises_and_keeps_buffer_on_failure() -> Non
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
     channel._app.bot.edit_message_text = AsyncMock(side_effect=RuntimeError("boom"))
     channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0)
 
@@ -419,13 +379,8 @@ async def test_send_delta_stream_end_treats_not_modified_as_success() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
-    channel._app.bot.edit_message_text = AsyncMock(
-        side_effect=BadRequest("Message is not modified")
-    )
-    channel._stream_bufs["123"] = _StreamBuf(
-        text="hello", message_id=7, last_edit=0.0, stream_id="s:0"
-    )
+    channel._app.bot.edit_message_text = AsyncMock(side_effect=BadRequest("Message is not modified"))
+    channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0, stream_id="s:0")
 
     await channel.send_delta("123", "", {"_stream_end": True, "_stream_id": "s:0"})
 
@@ -442,7 +397,6 @@ async def test_send_delta_stream_end_splits_oversized_reply() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
     channel._app.bot.edit_message_text = AsyncMock()
     channel._app.bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=99))
 
@@ -466,7 +420,6 @@ async def test_send_delta_new_stream_id_replaces_stale_buffer() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
     channel._stream_bufs["123"] = _StreamBuf(
         text="hello",
         message_id=7,
@@ -491,13 +444,8 @@ async def test_send_delta_incremental_edit_treats_not_modified_as_success() -> N
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
-    channel._stream_bufs["123"] = _StreamBuf(
-        text="hello", message_id=7, last_edit=0.0, stream_id="s:0"
-    )
-    channel._app.bot.edit_message_text = AsyncMock(
-        side_effect=BadRequest("Message is not modified")
-    )
+    channel._stream_bufs["123"] = _StreamBuf(text="hello", message_id=7, last_edit=0.0, stream_id="s:0")
+    channel._app.bot.edit_message_text = AsyncMock(side_effect=BadRequest("Message is not modified"))
 
     await channel.send_delta("123", "", {"_stream_delta": True, "_stream_id": "s:0"})
 
@@ -511,7 +459,6 @@ async def test_send_delta_initial_send_keeps_message_in_thread() -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    channel._stream_draft_supported = False
 
     await channel.send_delta(
         "123",
@@ -520,69 +467,6 @@ async def test_send_delta_initial_send_keeps_message_in_thread() -> None:
     )
 
     assert channel._app.bot.sent_messages[0]["message_thread_id"] == 42
-
-
-@pytest.mark.asyncio
-async def test_send_delta_uses_send_message_draft_when_supported() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-
-    await channel.send_delta(
-        "123",
-        "hello",
-        {"_stream_delta": True, "_stream_id": "s:0", "message_thread_id": 42},
-    )
-
-    assert channel._stream_draft_supported is True
-    assert len(channel._app.bot.raw_posts) == 1
-    req = channel._app.bot.raw_posts[0]
-    assert req["endpoint"] == "sendMessageDraft"
-    assert req["data"]["chat_id"] == 123
-    assert req["data"]["text"] == "hello"
-    assert req["data"]["message_thread_id"] == 42
-    assert req["data"]["draft_id"] > 0
-
-
-@pytest.mark.asyncio
-async def test_send_delta_stream_end_sends_final_message_after_draft_updates() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-
-    await channel.send_delta("123", "hello ", {"_stream_delta": True, "_stream_id": "s:0"})
-    await channel.send_delta("123", "world", {"_stream_delta": True, "_stream_id": "s:0"})
-    await channel.send_delta("123", "", {"_stream_end": True, "_stream_id": "s:0"})
-
-    assert len(channel._app.bot.raw_posts) >= 1
-    assert channel._app.bot.sent_messages
-    assert channel._app.bot.sent_messages[-1]["chat_id"] == 123
-    assert "hello world" in channel._app.bot.sent_messages[-1]["text"]
-    assert channel._app.bot.sent_messages[-1]["parse_mode"] == "HTML"
-    assert "123" not in channel._stream_bufs
-
-
-@pytest.mark.asyncio
-async def test_send_delta_falls_back_to_message_edit_when_draft_unsupported() -> None:
-    from telegram.error import BadRequest
-
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-    channel._app.bot._post = AsyncMock(side_effect=BadRequest("Method sendMessageDraft not found"))
-
-    await channel.send_delta("123", "hello", {"_stream_delta": True, "_stream_id": "s:0"})
-
-    assert channel._stream_draft_supported is False
-    assert len(channel._app.bot.sent_messages) == 1
-    assert channel._app.bot.sent_messages[0]["chat_id"] == 123
-    assert channel._app.bot.sent_messages[0]["text"] == "hello"
 
 
 def test_derive_topic_session_key_uses_thread_id() -> None:
@@ -627,128 +511,8 @@ def test_telegram_group_policy_defaults_to_mention() -> None:
     assert TelegramConfig().group_policy == "mention"
 
 
-@pytest.mark.asyncio
-async def test_forward_command_routes_mode_with_bot_suffix() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-
-
-@pytest.mark.asyncio
-async def test_send_approval_actions_renders_inline_keyboard() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._app = _FakeApp(lambda: None)
-
-    await channel.send(
-        OutboundMessage(
-            channel="telegram",
-            chat_id="123",
-            content="Approval required",
-            metadata={
-                "actions": [
-                    {
-                        "kind": "approval",
-                        "action": "approve_once",
-                        "request_id": "req123",
-                        "label": "Approve once",
-                    },
-                    {
-                        "kind": "approval",
-                        "action": "deny",
-                        "request_id": "req123",
-                        "label": "Deny",
-                    },
-                ]
-            },
-        )
-    )
-
-    sent = channel._app.bot.sent_messages[0]
-    markup = sent["reply_markup"]
-    assert markup is not None
-    assert markup.inline_keyboard[0][0].callback_data == "approval:approve_once:req123"
-    assert markup.inline_keyboard[1][0].callback_data == "approval:deny:req123"
-    assert channel._approval_prompt_requests[("123", 1)] == "req123"
-
-
-@pytest.mark.asyncio
-async def test_on_callback_query_forwards_approval_metadata() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
-        MessageBus(),
-    )
-    channel._handle_message = AsyncMock()
-    update = _make_callback_update(data="approval:approve_once:req123")
-
-    await channel._on_callback_query(update, SimpleNamespace())
-
-    channel._handle_message.assert_awaited_once_with(
-        sender_id="12345|alice",
-        chat_id="-100123",
-        content="",
-        metadata={
-            "message_id": 7,
-            "user_id": 12345,
-            "username": "alice",
-            "first_name": "Alice",
-            "is_group": True,
-            "message_thread_id": None,
-            "is_forum": False,
-            "reply_to_message_id": None,
-            "approval_action": "approve_once",
-            "approval_request_id": "req123",
-        },
-        session_key=None,
-    )
-    assert update._answers == [True]
-
-
-@pytest.mark.asyncio
-async def test_reply_to_approval_prompt_tags_request_id() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
-        MessageBus(),
-    )
-    channel._handle_message = AsyncMock()
-    channel._approval_prompt_requests[("-100123", 88)] = "req123"
-    reply = SimpleNamespace(message_id=88, text="Approval required", caption=None, from_user=None)
-    update = _make_telegram_update(text="approve", reply_to_message=reply)
-
-    await channel._on_message(update, SimpleNamespace())
-
-    metadata = channel._handle_message.await_args.kwargs["metadata"]
-    assert metadata["approval_request_id"] == "req123"
-    channel._handle_message = AsyncMock()
-    update = _make_telegram_update(text="/mode@nanobot_test scheduler")
-
-    await channel._forward_command(update, SimpleNamespace())
-
-    channel._handle_message.assert_awaited_once_with(
-        sender_id="12345|alice",
-        chat_id="-100123",
-        content="/mode scheduler",
-        metadata={
-            "message_id": 1,
-            "user_id": 12345,
-            "username": "alice",
-            "first_name": "Alice",
-            "is_group": True,
-            "message_thread_id": None,
-            "is_forum": False,
-            "reply_to_message_id": None,
-        },
-        session_key=None,
-    )
-
-
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:
-    channel = TelegramChannel(
-        TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus()
-    )
+    channel = TelegramChannel(TelegramConfig(allow_from=["12345", "alice", "67890|bob"]), MessageBus())
 
     assert channel.is_allowed("12345|carol") is True
     assert channel.is_allowed("99999|alice") is True
@@ -898,12 +662,8 @@ async def test_group_policy_mention_accepts_text_mention_and_caches_bot_identity
     channel._start_typing = lambda _chat_id: None
 
     mention = SimpleNamespace(type="mention", offset=0, length=13)
-    await channel._on_message(
-        _make_telegram_update(text="@nanobot_test hi", entities=[mention]), None
-    )
-    await channel._on_message(
-        _make_telegram_update(text="@nanobot_test again", entities=[mention]), None
-    )
+    await channel._on_message(_make_telegram_update(text="@nanobot_test hi", entities=[mention]), None)
+    await channel._on_message(_make_telegram_update(text="@nanobot_test again", entities=[mention]), None)
 
     assert len(handled) == 2
     assert channel._app.bot.get_me_calls == 1
@@ -992,11 +752,7 @@ async def test_extract_reply_context_with_text() -> None:
     """When reply has text, return prefixed string."""
     channel = TelegramChannel(TelegramConfig(enabled=True, token="123:abc"), MessageBus())
     channel._app = _FakeApp(lambda: None)
-    reply = SimpleNamespace(
-        text="Hello world",
-        caption=None,
-        from_user=SimpleNamespace(id=2, username="testuser", first_name="Test"),
-    )
+    reply = SimpleNamespace(text="Hello world", caption=None, from_user=SimpleNamespace(id=2, username="testuser", first_name="Test"))
     message = SimpleNamespace(reply_to_message=reply)
     assert await channel._extract_reply_context(message) == "[Reply to @testuser: Hello world]"
 
@@ -1006,11 +762,7 @@ async def test_extract_reply_context_with_caption_only() -> None:
     """When reply has only caption (no text), caption is used."""
     channel = TelegramChannel(TelegramConfig(enabled=True, token="123:abc"), MessageBus())
     channel._app = _FakeApp(lambda: None)
-    reply = SimpleNamespace(
-        text=None,
-        caption="Photo caption",
-        from_user=SimpleNamespace(id=2, username=None, first_name="Test"),
-    )
+    reply = SimpleNamespace(text=None, caption="Photo caption", from_user=SimpleNamespace(id=2, username=None, first_name="Test"))
     message = SimpleNamespace(reply_to_message=reply)
     assert await channel._extract_reply_context(message) == "[Reply to Test: Photo caption]"
 
@@ -1021,11 +773,7 @@ async def test_extract_reply_context_truncation() -> None:
     channel = TelegramChannel(TelegramConfig(enabled=True, token="123:abc"), MessageBus())
     channel._app = _FakeApp(lambda: None)
     long_text = "x" * (TELEGRAM_REPLY_CONTEXT_MAX_LEN + 100)
-    reply = SimpleNamespace(
-        text=long_text,
-        caption=None,
-        from_user=SimpleNamespace(id=2, username=None, first_name=None),
-    )
+    reply = SimpleNamespace(text=long_text, caption=None, from_user=SimpleNamespace(id=2, username=None, first_name=None))
     message = SimpleNamespace(reply_to_message=reply)
     result = await channel._extract_reply_context(message)
     assert result is not None
@@ -1052,10 +800,8 @@ async def test_on_message_includes_reply_context() -> None:
     )
     channel._app = _FakeApp(lambda: None)
     handled = []
-
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
-
     channel._handle_message = capture_handle
     channel._start_typing = lambda _chat_id: None
 
@@ -1126,7 +872,9 @@ async def test_download_message_media_uses_file_unique_id_when_available(
         MessageBus(),
     )
     app = _FakeApp(lambda: None)
-    app.bot.get_file = AsyncMock(return_value=SimpleNamespace(download_to_drive=_download_to_drive))
+    app.bot.get_file = AsyncMock(
+        return_value=SimpleNamespace(download_to_drive=_download_to_drive)
+    )
     channel._app = app
 
     msg = SimpleNamespace(
@@ -1173,10 +921,8 @@ async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tm
     )
     channel._app = app
     handled = []
-
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
-
     channel._handle_message = capture_handle
     channel._start_typing = lambda _chat_id: None
 
@@ -1214,10 +960,8 @@ async def test_on_message_reply_to_media_fallback_when_download_fails() -> None:
     channel._app = _FakeApp(lambda: None)
     channel._app.bot.get_file = None
     handled = []
-
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
-
     channel._handle_message = capture_handle
     channel._start_typing = lambda _chat_id: None
 
@@ -1260,10 +1004,8 @@ async def test_on_message_reply_to_caption_and_media(monkeypatch, tmp_path) -> N
     )
     channel._app = app
     handled = []
-
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
-
     channel._handle_message = capture_handle
     channel._start_typing = lambda _chat_id: None
 
@@ -1300,10 +1042,8 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
     )
     channel._app = _FakeApp(lambda: None)
     handled = []
-
     async def capture_handle(**kwargs) -> None:
         handled.append(kwargs)
-
     channel._handle_message = capture_handle
 
     reply = SimpleNamespace(text="some old message", message_id=2, from_user=SimpleNamespace(id=1))
@@ -1348,9 +1088,7 @@ async def test_forward_command_normalizes_telegram_safe_dream_aliases() -> None:
         handled.append(kwargs)
 
     channel._handle_message = capture_handle
-    update = _make_telegram_update(
-        text="/dream_restore@nanobot_test deadbeef", reply_to_message=None
-    )
+    update = _make_telegram_update(text="/dream_restore@nanobot_test deadbeef", reply_to_message=None)
 
     await channel._forward_command(update, None)
 

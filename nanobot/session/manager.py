@@ -1,6 +1,7 @@
 """Session management for conversation history."""
 
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from nanobot.config.paths import get_legacy_sessions_dir
 from nanobot.utils.helpers import ensure_dir, find_legal_message_start, safe_filename
 
 
@@ -24,13 +26,18 @@ class Session:
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
-        msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
+        msg = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            **kwargs
+        }
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
-        unconsolidated = self.messages[self.last_consolidated :]
+        unconsolidated = self.messages[self.last_consolidated:]
         sliced = unconsolidated[-max_messages:]
 
         # Avoid starting mid-turn when possible.
@@ -96,12 +103,18 @@ class SessionManager:
     def __init__(self, workspace: Path):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
+        self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, Session] = {}
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
+
+    def _get_legacy_session_path(self, key: str) -> Path:
+        """Legacy global session path (~/.nanobot/sessions/)."""
+        safe_key = safe_filename(key.replace(":", "_"))
+        return self.legacy_sessions_dir / f"{safe_key}.jsonl"
 
     def get_or_create(self, key: str) -> Session:
         """
@@ -127,12 +140,22 @@ class SessionManager:
         """Load a session from disk."""
         path = self._get_session_path(key)
         if not path.exists():
+            legacy_path = self._get_legacy_session_path(key)
+            if legacy_path.exists():
+                try:
+                    shutil.move(str(legacy_path), str(path))
+                    logger.info("Migrated session {} from legacy path", key)
+                except Exception:
+                    logger.exception("Failed to migrate session {}", key)
+
+        if not path.exists():
             return None
 
         try:
             messages = []
             metadata = {}
             created_at = None
+            updated_at = None
             last_consolidated = 0
 
             with open(path, encoding="utf-8") as f:
@@ -145,11 +168,8 @@ class SessionManager:
 
                     if data.get("_type") == "metadata":
                         metadata = data.get("metadata", {})
-                        created_at = (
-                            datetime.fromisoformat(data["created_at"])
-                            if data.get("created_at")
-                            else None
-                        )
+                        created_at = datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None
+                        updated_at = datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None
                         last_consolidated = data.get("last_consolidated", 0)
                     else:
                         messages.append(data)
@@ -158,8 +178,9 @@ class SessionManager:
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
+                updated_at=updated_at or datetime.now(),
                 metadata=metadata,
-                last_consolidated=last_consolidated,
+                last_consolidated=last_consolidated
             )
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
@@ -176,7 +197,7 @@ class SessionManager:
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata,
-                "last_consolidated": session.last_consolidated,
+                "last_consolidated": session.last_consolidated
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in session.messages:
@@ -206,14 +227,12 @@ class SessionManager:
                         data = json.loads(first_line)
                         if data.get("_type") == "metadata":
                             key = data.get("key") or path.stem.replace("_", ":", 1)
-                            sessions.append(
-                                {
-                                    "key": key,
-                                    "created_at": data.get("created_at"),
-                                    "updated_at": data.get("updated_at"),
-                                    "path": str(path),
-                                }
-                            )
+                            sessions.append({
+                                "key": key,
+                                "created_at": data.get("created_at"),
+                                "updated_at": data.get("updated_at"),
+                                "path": str(path)
+                            })
             except Exception:
                 continue
 

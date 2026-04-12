@@ -62,20 +62,18 @@ async def test_decide_returns_skip_when_no_tool_call(tmp_path) -> None:
 async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] do thing", encoding="utf-8")
 
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "run", "tasks": "check open tasks"},
-                    )
-                ],
-            )
-        ]
-    )
+    provider = DummyProvider([
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments={"action": "run", "tasks": "check open tasks"},
+                )
+            ],
+        )
+    ])
 
     called_with: list[str] = []
 
@@ -99,20 +97,18 @@ async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
 async def test_trigger_now_returns_none_when_decision_is_skip(tmp_path) -> None:
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] do thing", encoding="utf-8")
 
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "skip"},
-                    )
-                ],
-            )
-        ]
-    )
+    provider = DummyProvider([
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments={"action": "skip"},
+                )
+            ],
+        )
+    ])
 
     async def _on_execute(tasks: str) -> str:
         return tasks
@@ -132,20 +128,18 @@ async def test_tick_notifies_when_evaluator_says_yes(tmp_path, monkeypatch) -> N
     """Phase 1 run -> Phase 2 execute -> Phase 3 evaluate=notify -> on_notify called."""
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] check deployments", encoding="utf-8")
 
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "run", "tasks": "check deployments"},
-                    )
-                ],
-            ),
-        ]
-    )
+    provider = DummyProvider([
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments={"action": "run", "tasks": "check deployments"},
+                )
+            ],
+        ),
+    ])
 
     executed: list[str] = []
     notified: list[str] = []
@@ -180,20 +174,18 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
     """Phase 1 run -> Phase 2 execute -> Phase 3 evaluate=silent -> on_notify NOT called."""
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] check status", encoding="utf-8")
 
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "run", "tasks": "check status"},
-                    )
-                ],
-            ),
-        ]
-    )
+    provider = DummyProvider([
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments={"action": "run", "tasks": "check status"},
+                )
+            ],
+        ),
+    ])
 
     executed: list[str] = []
     notified: list[str] = []
@@ -225,21 +217,19 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_decide_retries_transient_error_then_succeeds(tmp_path, monkeypatch) -> None:
-    provider = DummyProvider(
-        [
-            LLMResponse(content="429 rate limit", finish_reason="error"),
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "run", "tasks": "check open tasks"},
-                    )
-                ],
-            ),
-        ]
-    )
+    provider = DummyProvider([
+        LLMResponse(content="429 rate limit", finish_reason="error"),
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments={"action": "run", "tasks": "check open tasks"},
+                )
+            ],
+        ),
+    ])
 
     delays: list[int] = []
 
@@ -276,8 +266,7 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
                 content="",
                 tool_calls=[
                     ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
+                        id="hb_1", name="heartbeat",
                         arguments={"action": "skip"},
                     )
                 ],
@@ -298,134 +287,3 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
     assert user_msg["role"] == "user"
     assert "Current Time:" in user_msg["content"]
 
-
-@pytest.mark.asyncio
-async def test_scheduler_mode_uses_scheduler_decision_prompt(tmp_path) -> None:
-    captured_messages: list[dict] = []
-
-    class CapturingProvider(LLMProvider):
-        async def chat(self, *, messages=None, **kwargs) -> LLMResponse:
-            if messages:
-                captured_messages.extend(messages)
-            return LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "skip"},
-                    )
-                ],
-            )
-
-        def get_default_model(self) -> str:
-            return "test-model"
-
-    service = HeartbeatService(
-        workspace=tmp_path,
-        provider=CapturingProvider(),
-        model="test-model",
-        mode="scheduler",
-    )
-
-    await service._decide("- [ ] audit schedule drift")
-
-    system_msg = captured_messages[0]
-    assert system_msg["role"] == "system"
-    assert "scheduler heartbeat agent" in system_msg["content"]
-    assert "Never assume permission to apply external changes directly" in system_msg["content"]
-
-
-@pytest.mark.asyncio
-async def test_scheduler_tick_passes_scheduler_mode_to_evaluator(tmp_path, monkeypatch) -> None:
-    (tmp_path / "HEARTBEAT.md").write_text("- [ ] audit workload risk", encoding="utf-8")
-
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "run", "tasks": "audit workload risk"},
-                    )
-                ],
-            ),
-        ]
-    )
-    seen_modes: list[str] = []
-    notified: list[str] = []
-
-    async def _execute(tasks: str) -> str:
-        return "Need to reduce tomorrow's load."
-
-    async def _notify(response: str) -> None:
-        notified.append(response)
-
-    async def _eval(response, task_context, provider, model, mode="general"):
-        seen_modes.append(mode)
-        return True
-
-    monkeypatch.setattr("nanobot.utils.evaluator.evaluate_response", _eval)
-
-    service = HeartbeatService(
-        workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
-        on_execute=_execute,
-        on_notify=_notify,
-        mode="scheduler",
-    )
-
-    await service._tick()
-
-    assert seen_modes == ["scheduler"]
-    assert notified == ["Need to reduce tomorrow's load."]
-
-
-@pytest.mark.asyncio
-async def test_scheduler_tick_runs_sync_and_reflection_callbacks(tmp_path) -> None:
-    (tmp_path / "HEARTBEAT.md").write_text("- [ ] audit workload risk", encoding="utf-8")
-
-    provider = DummyProvider(
-        [
-            LLMResponse(
-                content="",
-                tool_calls=[
-                    ToolCallRequest(
-                        id="hb_1",
-                        name="heartbeat",
-                        arguments={"action": "skip"},
-                    )
-                ],
-            ),
-        ]
-    )
-    called: list[str] = []
-    notified: list[str] = []
-
-    async def _sync() -> None:
-        called.append("sync")
-
-    async def _reflection():
-        called.append("reflection")
-        return ["How did the day go?"]
-
-    async def _notify(message: str) -> None:
-        notified.append(message)
-
-    service = HeartbeatService(
-        workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
-        on_notify=_notify,
-        on_scheduler_sync=_sync,
-        on_scheduler_reflection=_reflection,
-        mode="scheduler",
-    )
-
-    await service._tick()
-
-    assert called == ["sync", "reflection"]
-    assert notified == ["How did the day go?"]

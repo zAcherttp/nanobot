@@ -15,9 +15,12 @@ from loguru import logger
 
 
 def strip_think(text: str) -> str:
-    """Remove <think>…</think> blocks and any unclosed trailing <think> tag."""
+    """Remove thinking blocks and any unclosed trailing tag."""
     text = re.sub(r"<think>[\s\S]*?</think>", "", text)
-    text = re.sub(r"<think>[\s\S]*$", "", text)
+    text = re.sub(r"^\s*<think>[\s\S]*$", "", text)
+    # Gemma 4 and similar models use <thought>...</thought> blocks
+    text = re.sub(r"<thought>[\s\S]*?</thought>", "", text)
+    text = re.sub(r"^\s*<thought>[\s\S]*$", "", text)
     return text.strip()
 
 
@@ -34,9 +37,7 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
-def build_image_content_blocks(
-    raw: bytes, mime: str, path: str, label: str
-) -> list[dict[str, Any]]:
+def build_image_content_blocks(raw: bytes, mime: str, path: str, label: str) -> list[dict[str, Any]]:
     """Build native image blocks plus a short text label."""
     b64 = base64.b64encode(raw).decode()
     return [
@@ -81,7 +82,6 @@ _TOOL_RESULT_PREVIEW_CHARS = 1200
 _TOOL_RESULTS_DIR = ".nanobot/tool-results"
 _TOOL_RESULT_RETENTION_SECS = 7 * 24 * 60 * 60
 _TOOL_RESULT_MAX_BUCKETS = 32
-
 
 def safe_filename(name: str) -> str:
     """Replace unsafe path characters with underscores."""
@@ -242,7 +242,7 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
 
     Args:
         content: The text content to split.
-        max_len: Maximum length per chunk (default 2000 for common chat compatibility).
+        max_len: Maximum length per chunk (default 2000 for Discord compatibility).
 
     Returns:
         List of message chunks, each within max_len.
@@ -258,9 +258,9 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
             break
         cut = content[:max_len]
         # Try to break at newline first, then space, then hard break
-        pos = cut.rfind("\n")
+        pos = cut.rfind('\n')
         if pos <= 0:
-            pos = cut.rfind(" ")
+            pos = cut.rfind(' ')
         if pos <= 0:
             pos = max_len
         chunks.append(content[:pos])
@@ -275,7 +275,7 @@ def build_assistant_message(
     thinking_blocks: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Build a provider-safe assistant message with optional reasoning fields."""
-    msg: dict[str, Any] = {"role": "assistant", "content": content}
+    msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
     if tool_calls:
         msg["tool_calls"] = tool_calls
     if reasoning_content is not None or thinking_blocks:
@@ -393,7 +393,6 @@ def estimate_prompt_tokens_chain(
 def build_status_content(
     *,
     version: str,
-    mode: str = "general",
     model: str,
     start_time: float,
     last_usage: dict[str, int],
@@ -403,7 +402,7 @@ def build_status_content(
     search_usage_text: str | None = None,
 ) -> str:
     """Build a human-readable runtime status snapshot.
-
+    
     Args:
         search_usage_text: Optional pre-formatted web search usage string
                            (produced by SearchUsageInfo.format()). When provided
@@ -427,7 +426,6 @@ def build_status_content(
         token_line += f" ({cached * 100 // last_in}% cached)"
     lines = [
         f"\U0001f408 nanobot v{version}",
-        f"\U0001f9ed Mode: {mode}",
         f"\U0001f9e0 Model: {model}",
         token_line,
         f"\U0001f4da Context: {ctx_used_str}/{ctx_total_str} ({ctx_pct}%)",
@@ -436,17 +434,14 @@ def build_status_content(
     ]
     if search_usage_text:
         lines.append(search_usage_text)
-    return "\n".join(lines)
+    return "\n".join(lines)    
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
-    """Sync bundled templates for all built-in modes into the root workspace."""
+    """Sync bundled templates to workspace. Only creates missing files."""
     from importlib.resources import files as pkg_files
-    from nanobot.modes import BUILTIN_MODES
-
     try:
         tpl = pkg_files("nanobot") / "templates"
-        skills_pkg = pkg_files("nanobot") / "skills"
     except Exception:
         return []
     if not tpl.is_dir():
@@ -461,58 +456,26 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
         dest.write_text(src.read_text(encoding="utf-8") if src else "", encoding="utf-8")
         added.append(str(dest.relative_to(workspace)))
 
-    def _copy_skill_tree(src_dir, dest_dir: Path):
-        if dest_dir.exists():
-            return
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        for item in src_dir.iterdir():
-            target = dest_dir / item.name
-            if item.is_dir():
-                _copy_skill_tree(item, target)
-                continue
-            target.write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
-            added.append(str(target.relative_to(workspace)))
-
-    for mode in BUILTIN_MODES:
-        mode_root = workspace / mode.name
-        mode_tpl = tpl / mode.template_namespace
-        if not mode_tpl.is_dir():
-            continue
-        for item in mode_tpl.iterdir():
-            if item.name.endswith(".md") and not item.name.startswith("."):
-                _write(item, mode_root / item.name)
-        _write(mode_tpl / "memory" / "MEMORY.md", mode_root / "memory" / "MEMORY.md")
-        _write(None, mode_root / "memory" / "history.jsonl")
-        skills_root = mode_root / "skills"
-        skills_root.mkdir(parents=True, exist_ok=True)
-        if skills_pkg.is_dir():
-            for skill_name in mode.default_skills:
-                skill_src = skills_pkg / skill_name
-                if skill_src.is_dir():
-                    _copy_skill_tree(skill_src, skills_root / skill_name)
+    for item in tpl.iterdir():
+        if item.name.endswith(".md") and not item.name.startswith("."):
+            _write(item, workspace / item.name)
+    _write(tpl / "memory" / "MEMORY.md", workspace / "memory" / "MEMORY.md")
+    _write(None, workspace / "memory" / "history.jsonl")
+    (workspace / "skills").mkdir(exist_ok=True)
 
     if added and not silent:
         from rich.console import Console
-
         for name in added:
             Console().print(f"  [dim]Created {name}[/dim]")
 
     # Initialize git for memory version control
-    from nanobot.utils.gitstore import GitStore
-
-    for mode in BUILTIN_MODES:
-        mode_root = workspace / mode.name
-        try:
-            gs = GitStore(
-                mode_root,
-                tracked_files=[
-                    "SOUL.md",
-                    "USER.md",
-                    "memory/MEMORY.md",
-                ],
-            )
-            gs.init()
-        except Exception:
-            logger.warning("Failed to initialize git store for {}", mode_root)
+    try:
+        from nanobot.utils.gitstore import GitStore
+        gs = GitStore(workspace, tracked_files=[
+            "SOUL.md", "USER.md", "memory/MEMORY.md",
+        ])
+        gs.init()
+    except Exception:
+        logger.warning("Failed to initialize git store for {}", workspace)
 
     return added

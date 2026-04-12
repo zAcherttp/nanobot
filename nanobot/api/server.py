@@ -20,19 +20,9 @@ API_SESSION_KEY = "api:default"
 API_CHAT_ID = "default"
 
 
-def _seed_session_mode(agent_loop: Any, session_key: str, mode: str | None) -> None:
-    """Persist the selected fixed mode for an API session when available."""
-    if not mode:
-        return
-    store = getattr(agent_loop, "mode_store", None)
-    if store is not None and hasattr(store, "set"):
-        store.set(session_key, mode)
-
-
 # ---------------------------------------------------------------------------
 # Response helpers
 # ---------------------------------------------------------------------------
-
 
 def _error_json(status: int, message: str, err_type: str = "invalid_request_error") -> web.Response:
     return web.json_response(
@@ -71,7 +61,6 @@ def _response_text(value: Any) -> str:
 # Route handlers
 # ---------------------------------------------------------------------------
 
-
 async def handle_chat_completions(request: web.Request) -> web.Response:
     """POST /v1/chat/completions"""
 
@@ -102,14 +91,12 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     agent_loop = request.app["agent_loop"]
     timeout_s: float = request.app.get("request_timeout", 120.0)
     model_name: str = request.app.get("model_name", "nanobot")
-    mode: str | None = request.app.get("mode")
     if (requested_model := body.get("model")) and requested_model != model_name:
         return _error_json(400, f"Only configured model '{model_name}' is available")
 
     session_key = f"api:{body['session_id']}" if body.get("session_id") else API_SESSION_KEY
     session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
-    _seed_session_mode(agent_loop, session_key, mode)
 
     logger.info("API request session_key={} content={}", session_key, user_content[:80])
 
@@ -118,16 +105,13 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     try:
         async with session_lock:
             try:
-                process_kwargs = {
-                    "content": user_content,
-                    "session_key": session_key,
-                    "channel": "api",
-                    "chat_id": API_CHAT_ID,
-                }
-                if mode is not None:
-                    process_kwargs["mode"] = mode
                 response = await asyncio.wait_for(
-                    agent_loop.process_direct(**process_kwargs),
+                    agent_loop.process_direct(
+                        content=user_content,
+                        session_key=session_key,
+                        channel="api",
+                        chat_id=API_CHAT_ID,
+                    ),
                     timeout=timeout_s,
                 )
                 response_text = _response_text(response)
@@ -138,7 +122,12 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
                         session_key,
                     )
                     retry_response = await asyncio.wait_for(
-                        agent_loop.process_direct(**process_kwargs),
+                        agent_loop.process_direct(
+                            content=user_content,
+                            session_key=session_key,
+                            channel="api",
+                            chat_id=API_CHAT_ID,
+                        ),
                         timeout=timeout_s,
                     )
                     response_text = _response_text(retry_response)
@@ -164,19 +153,17 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
 async def handle_models(request: web.Request) -> web.Response:
     """GET /v1/models"""
     model_name = request.app.get("model_name", "nanobot")
-    return web.json_response(
-        {
-            "object": "list",
-            "data": [
-                {
-                    "id": model_name,
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "nanobot",
-                }
-            ],
-        }
-    )
+    return web.json_response({
+        "object": "list",
+        "data": [
+            {
+                "id": model_name,
+                "object": "model",
+                "created": 0,
+                "owned_by": "nanobot",
+            }
+        ],
+    })
 
 
 async def handle_health(request: web.Request) -> web.Response:
@@ -188,10 +175,7 @@ async def handle_health(request: web.Request) -> web.Response:
 # App factory
 # ---------------------------------------------------------------------------
 
-
-def create_app(
-    agent_loop, model_name: str = "nanobot", request_timeout: float = 120.0, mode: str | None = None
-) -> web.Application:
+def create_app(agent_loop, model_name: str = "nanobot", request_timeout: float = 120.0) -> web.Application:
     """Create the aiohttp application.
 
     Args:
@@ -203,7 +187,6 @@ def create_app(
     app["agent_loop"] = agent_loop
     app["model_name"] = model_name
     app["request_timeout"] = request_timeout
-    app["mode"] = mode
     app["session_locks"] = {}  # per-user locks, keyed by session_key
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
