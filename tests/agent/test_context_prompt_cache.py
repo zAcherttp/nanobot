@@ -205,6 +205,32 @@ def test_build_messages_passes_channel_to_system_prompt(tmp_path) -> None:
     assert "messaging app" in system
 
 
+def test_user_bootstrap_only_includes_confirmed_behavioral_heuristics(tmp_path) -> None:
+    workspace = _make_workspace(tmp_path)
+    (workspace / "USER.md").write_text(
+        "\n".join([
+            "# User Profile",
+            "",
+            "## Stable facts",
+            "- Prefers concise answers",
+            "",
+            "## Behavioral observations",
+            "- Works late before deadlines · confidence: medium · seen: 4x",
+            "",
+            "## Confirmed behavioral heuristics",
+            "- Deep work preferred in mornings · confidence: high · seen: 12x",
+        ]),
+        encoding="utf-8",
+    )
+
+    builder = ContextBuilder(workspace)
+    prompt = builder.build_system_prompt()
+
+    assert "Deep work preferred in mornings" in prompt
+    assert "Works late before deadlines" not in prompt
+    assert "Prefers concise answers" not in prompt
+
+
 def test_subagent_result_does_not_create_consecutive_assistant_messages(tmp_path) -> None:
     workspace = _make_workspace(tmp_path)
     builder = ContextBuilder(workspace)

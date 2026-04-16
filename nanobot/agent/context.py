@@ -110,9 +110,36 @@ class ContextBuilder:
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
+                if filename == "USER.md":
+                    content = self._confirmed_heuristics_only(content)
+                    if not content:
+                        continue
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
+
+    @staticmethod
+    def _confirmed_heuristics_only(user_content: str) -> str:
+        """Return only confirmed heuristics from USER.md for prompt injection."""
+        lines = user_content.splitlines()
+        in_section = False
+        bullets: list[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                in_section = stripped == "## Confirmed behavioral heuristics"
+                continue
+            if not in_section:
+                continue
+            if stripped.startswith("<!--") or stripped.endswith("-->"):
+                continue
+            if stripped.startswith("- "):
+                bullets.append(line)
+
+        if not bullets:
+            return ""
+        return "## Confirmed behavioral heuristics\n\n" + "\n".join(bullets)
 
     def build_messages(
         self,

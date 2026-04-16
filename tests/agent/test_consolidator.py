@@ -1,4 +1,4 @@
-"""Tests for the lightweight Consolidator — append-only to HISTORY.md."""
+"""Tests for the lightweight Consolidator — append-only to history.jsonl."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -37,7 +37,7 @@ def consolidator(store, mock_provider):
 
 class TestConsolidatorSummarize:
     async def test_summarize_appends_to_history(self, consolidator, mock_provider, store):
-        """Consolidator should call LLM to summarize, then append to HISTORY.md."""
+        """Consolidator should call LLM to summarize, then append to history.jsonl."""
         mock_provider.chat_with_retry.return_value = MagicMock(
             content="User fixed a bug in the auth module."
         )
@@ -49,9 +49,22 @@ class TestConsolidatorSummarize:
         assert result == "User fixed a bug in the auth module."
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
+        assert entries[0]["signals"] == {}
+
+    async def test_summarize_parses_json_content_and_signals(self, consolidator, mock_provider, store):
+        mock_provider.chat_with_retry.return_value = MagicMock(
+            content='{"content":"- User fixed auth bug","signals":{"affect":"energized","energy":"high"}}'
+        )
+        messages = [{"role": "user", "content": "fixed it"}]
+
+        result = await consolidator.archive(messages)
+
+        assert result == "- User fixed auth bug"
+        entries = store.read_unprocessed_history(since_cursor=0)
+        assert entries[0]["signals"] == {"affect": "energized", "energy": "high"}
 
     async def test_summarize_raw_dumps_on_llm_failure(self, consolidator, mock_provider, store):
-        """On LLM failure, raw-dump messages to HISTORY.md."""
+        """On LLM failure, raw-dump messages to history.jsonl."""
         mock_provider.chat_with_retry.side_effect = Exception("API error")
         messages = [{"role": "user", "content": "hello"}]
         result = await consolidator.archive(messages)
@@ -59,6 +72,7 @@ class TestConsolidatorSummarize:
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
         assert "[RAW]" in entries[0]["content"]
+        assert entries[0]["signals"] == {}
 
     async def test_summarize_skips_empty_messages(self, consolidator):
         result = await consolidator.archive([])

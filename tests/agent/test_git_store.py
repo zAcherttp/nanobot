@@ -5,7 +5,7 @@ import pytest
 
 from nanobot.utils.gitstore import CommitInfo, GitStore
 
-TRACKED = ["SOUL.md", "USER.md", "memory/MEMORY.md"]
+TRACKED = ["SOUL.md", "USER.md", "GOALS.md", "memory/MEMORY.md"]
 
 
 @pytest.fixture

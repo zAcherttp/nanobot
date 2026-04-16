@@ -35,6 +35,13 @@ class TestMemoryStoreBasicIO:
         store.write_user("user content")
         assert store.read_user() == "user content"
 
+    def test_read_goals_returns_empty_when_missing(self, store):
+        assert store.read_goals() == ""
+
+    def test_write_and_read_goals(self, store):
+        store.write_goals("goal content")
+        assert store.read_goals() == "goal content"
+
     def test_get_memory_context_returns_empty_when_missing(self, store):
         assert store.get_memory_context() == ""
 
@@ -57,6 +64,13 @@ class TestHistoryWithCursor:
         content = store.read_file(store.history_file)
         data = json.loads(content)
         assert data["cursor"] == 1
+        assert data["signals"] == {}
+
+    def test_append_history_persists_signals(self, store):
+        store.append_history("event 1", signals={"affect": "frustrated", "energy": "low"})
+        content = store.read_file(store.history_file)
+        data = json.loads(content)
+        assert data["signals"] == {"affect": "frustrated", "energy": "low"}
 
     def test_cursor_persists_across_appends(self, store):
         store.append_history("event 1")

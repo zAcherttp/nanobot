@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 class MemoryStore:
-    """Pure file I/O for memory files: MEMORY.md, history.jsonl, SOUL.md, USER.md."""
+    """Pure file I/O for memory files: MEMORY.md, history.jsonl, SOUL.md, USER.md, GOALS.md."""
 
     _DEFAULT_MAX_HISTORY = 1000
     _LEGACY_ENTRY_START_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*")
@@ -51,10 +51,11 @@ class MemoryStore:
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
         self.soul_file = workspace / "SOUL.md"
         self.user_file = workspace / "USER.md"
+        self.goals_file = workspace / "GOALS.md"
         self._cursor_file = self.memory_dir / ".cursor"
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
         self._git = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md",
+            "SOUL.md", "USER.md", "GOALS.md", "memory/MEMORY.md",
         ])
         self._maybe_migrate_legacy_history()
 
@@ -216,6 +217,14 @@ class MemoryStore:
     def write_user(self, content: str) -> None:
         self.user_file.write_text(content, encoding="utf-8")
 
+    # -- GOALS.md ------------------------------------------------------------
+
+    def read_goals(self) -> str:
+        return self.read_file(self.goals_file)
+
+    def write_goals(self, content: str) -> None:
+        self.goals_file.write_text(content, encoding="utf-8")
+
     # -- context injection (used by context.py) ------------------------------
 
     def get_memory_context(self) -> str:
@@ -224,11 +233,16 @@ class MemoryStore:
 
     # -- history.jsonl — append-only, JSONL format ---------------------------
 
-    def append_history(self, entry: str) -> int:
+    def append_history(self, entry: str, signals: dict[str, Any] | None = None) -> int:
         """Append *entry* to history.jsonl and return its auto-incrementing cursor."""
         cursor = self._next_cursor()
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        record = {"cursor": cursor, "timestamp": ts, "content": strip_think(entry.rstrip()) or entry.rstrip()}
+        record = {
+            "cursor": cursor,
+            "timestamp": ts,
+            "content": strip_think(entry.rstrip()) or entry.rstrip(),
+            "signals": signals if isinstance(signals, dict) else {},
+        }
         with open(self.history_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._cursor_file.write_text(str(cursor), encoding="utf-8")
@@ -334,7 +348,8 @@ class MemoryStore:
         """Fallback: dump raw messages to history.jsonl without LLM summarization."""
         self.append_history(
             f"[RAW] {len(messages)} messages\n"
-            f"{self._format_messages(messages)}"
+            f"{self._format_messages(messages)}",
+            signals={},
         )
         logger.warning(
             "Memory consolidation degraded: raw-archived {} messages", len(messages)
@@ -381,6 +396,34 @@ class Consolidator:
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
+
+    @staticmethod
+    def _parse_archive_response(raw: str) -> tuple[str, dict[str, Any]]:
+        """Parse consolidator output, accepting legacy plain text as fallback."""
+        text = (raw or "").strip()
+        if not text:
+            return "[no summary]", {}
+
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if len(lines) >= 3 and lines[0].startswith("```") and lines[-1].startswith("```"):
+                text = "\n".join(lines[1:-1]).strip()
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return text, {}
+
+        if not isinstance(payload, dict):
+            return text, {}
+
+        content = payload.get("content")
+        signals = payload.get("signals")
+        if not isinstance(content, str) or not content.strip():
+            content = text
+        if not isinstance(signals, dict):
+            signals = {}
+        return content.strip(), signals
 
     def pick_consolidation_boundary(
         self,
@@ -461,8 +504,8 @@ class Consolidator:
                 tools=None,
                 tool_choice=None,
             )
-            summary = response.content or "[no summary]"
-            self.store.append_history(summary)
+            summary, signals = self._parse_archive_response(response.content or "")
+            self.store.append_history(summary, signals=signals)
             return summary
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")
@@ -619,11 +662,13 @@ class Dream:
         current_memory = self.store.read_memory() or "(empty)"
         current_soul = self.store.read_soul() or "(empty)"
         current_user = self.store.read_user() or "(empty)"
+        current_goals = self.store.read_goals() or "(empty)"
         file_context = (
             f"## Current Date\n{current_date}\n\n"
             f"## Current MEMORY.md ({len(current_memory)} chars)\n{current_memory}\n\n"
             f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}\n\n"
-            f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
+            f"## Current USER.md ({len(current_user)} chars)\n{current_user}\n\n"
+            f"## Current GOALS.md ({len(current_goals)} chars)\n{current_goals}"
         )
 
         # Phase 1: Analyze

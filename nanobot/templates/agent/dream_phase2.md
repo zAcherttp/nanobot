@@ -5,6 +5,7 @@ Update memory files based on the analysis below.
 ## File paths (relative to workspace root)
 - SOUL.md
 - USER.md
+- GOALS.md
 - memory/MEMORY.md
 
 Do NOT guess paths.
@@ -22,3 +23,5 @@ Do NOT guess paths.
 - Concise bullets under clear headers
 - When reducing (not deleting): keep essential facts, drop verbose details
 - If uncertain whether to delete, keep but add "(verify currency)"
+- In USER.md, do not edit content above `## Behavioral observations`
+- Only add lines to `## Confirmed behavioral heuristics`; never delete from that section

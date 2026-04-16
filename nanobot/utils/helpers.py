@@ -472,7 +472,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     try:
         from nanobot.utils.gitstore import GitStore
         gs = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md",
+            "SOUL.md", "USER.md", "GOALS.md", "memory/MEMORY.md",
         ])
         gs.init()
     except Exception:

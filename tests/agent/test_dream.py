@@ -13,6 +13,7 @@ def store(tmp_path):
     s = MemoryStore(tmp_path)
     s.write_soul("# Soul\n- Helpful")
     s.write_user("# User\n- Developer")
+    s.write_goals("# Goals\n- Ship v1")
     s.write_memory("# Memory\n- Project X active")
     return s
 
@@ -73,6 +74,8 @@ class TestDreamRun:
         spec = mock_runner.run.call_args[0][0]
         assert spec.max_iterations == 10
         assert spec.fail_on_tool_error is False
+        phase1_messages = mock_provider.chat_with_retry.call_args.kwargs["messages"]
+        assert "Current GOALS.md" in phase1_messages[1]["content"]
 
     async def test_advances_dream_cursor(self, dream, mock_provider, mock_runner, store):
         """Dream should advance the cursor after processing."""
