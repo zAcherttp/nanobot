@@ -1,100 +1,125 @@
-import type { Bot } from "grammy";
-
-import { AgentLoop } from "../agent/loop.js";
 import type { AppConfig } from "../config/schema.js";
 import type { Logger } from "../utils/logging.js";
-import { createTelegramBot } from "./telegram.js";
+import { BaseChannel } from "./base.js";
+import { InMemoryMessageBus, type MessageBus } from "./bus.js";
+import { createTelegramChannelFactory } from "./telegram.js";
+import type { ChannelSnapshot, OutboundChannelMessage } from "./types.js";
 
-export type BotStatus = "idle" | "starting" | "running" | "stopping" | "error";
-
-export interface BotSnapshot {
-	status: BotStatus;
-	sessionCount: number;
-	errorMessage?: string;
+export interface ChannelFactory {
+	name: string;
+	displayName: string;
+	isEnabled(config: AppConfig): boolean;
+	createChannel(
+		config: AppConfig,
+		bus: MessageBus,
+		logger: Logger,
+	): BaseChannel<unknown>;
 }
 
-export class TelegramBotController {
-	private bot: Bot | null = null;
-	private startPromise: Promise<void> | null = null;
-	private snapshot: BotSnapshot = {
-		status: "idle",
-		sessionCount: 0,
-	};
-	private readonly listeners = new Set<() => void>();
-	readonly agent = new AgentLoop();
+export interface ChannelManagerOptions {
+	bus?: MessageBus;
+	channelFactories?: ChannelFactory[];
+}
 
-	subscribe(listener: () => void): () => void {
-		this.listeners.add(listener);
-		return () => {
-			this.listeners.delete(listener);
-		};
-	}
+const DEFAULT_CHANNEL_FACTORIES: ChannelFactory[] = [
+	createTelegramChannelFactory(),
+];
 
-	getSnapshot(): BotSnapshot {
-		return {
-			...this.snapshot,
-			sessionCount: this.agent.getSessionCount(),
-		};
-	}
+export class ChannelManager {
+	private readonly bus: MessageBus;
+	private readonly channels = new Map<string, BaseChannel<unknown>>();
+	private readonly factories: ChannelFactory[];
+	private readonly factoryByName: Map<string, ChannelFactory>;
 
-	async start(config: AppConfig, logger: Logger): Promise<void> {
-		if (
-			this.snapshot.status === "starting" ||
-			this.snapshot.status === "running"
-		) {
-			return;
-		}
-
-		this.setSnapshot({ status: "starting" });
-		logger.info("Starting Telegram bot");
-
-		const bot = createTelegramBot(config.channels.telegram, {
-			onError: (error) => logger.error("Telegram bot error", error),
-		});
-		this.bot = bot;
-		this.setSnapshot({ status: "running" });
-
-		this.startPromise = bot.start().then(
-			() => {
-				if (this.snapshot.status !== "stopping") {
-					this.setSnapshot({ status: "idle" });
-					logger.info("Telegram bot stopped");
-				}
-			},
-			(error) => {
-				this.setSnapshot({
-					status: "error",
-					errorMessage: error instanceof Error ? error.message : String(error),
-				});
-				logger.error("Telegram bot failed", error);
-			},
+	constructor(
+		private readonly config: AppConfig,
+		private readonly logger: Logger,
+		options: ChannelManagerOptions = {},
+	) {
+		this.bus = options.bus ?? new InMemoryMessageBus();
+		this.factories = options.channelFactories ?? DEFAULT_CHANNEL_FACTORIES;
+		this.factoryByName = new Map(
+			this.factories.map((factory) => [factory.name, factory]),
 		);
-	}
 
-	async stop(logger: Logger): Promise<void> {
-		if (!this.bot) {
-			return;
-		}
-		this.setSnapshot({ status: "stopping" });
-		logger.info("Stopping Telegram bot");
-		this.bot.stop();
-		try {
-			await this.startPromise;
-		} finally {
-			this.bot = null;
-			this.startPromise = null;
-			this.setSnapshot({ status: "idle" });
+		for (const factory of this.factories) {
+			if (!factory.isEnabled(this.config)) {
+				continue;
+			}
+			this.channels.set(
+				factory.name,
+				factory.createChannel(this.config, this.bus, this.logger),
+			);
 		}
 	}
 
-	private setSnapshot(next: Partial<BotSnapshot>): void {
-		this.snapshot = {
-			...this.snapshot,
-			...next,
-			sessionCount: this.agent.getSessionCount(),
-		};
-		for (const listener of this.listeners) {
-			listener();
+	getBus(): MessageBus {
+		return this.bus;
+	}
+
+	hasEnabledChannels(): boolean {
+		return this.channels.size > 0;
+	}
+
+	getSnapshots(): ChannelSnapshot[] {
+		return this.factories.map((factory) => {
+			const channel = this.channels.get(factory.name);
+			if (!channel) {
+				return {
+					name: factory.name,
+					displayName: factory.displayName,
+					enabled: false,
+					status: "idle",
+				} satisfies ChannelSnapshot;
+			}
+
+			return channel.getSnapshot(true);
+		});
+	}
+
+	async start(): Promise<void> {
+		for (const channel of this.channels.values()) {
+			await channel.start();
 		}
+	}
+
+	async stop(): Promise<void> {
+		const activeChannels = Array.from(this.channels.values()).reverse();
+		for (const channel of activeChannels) {
+			await channel.stop();
+		}
+	}
+
+	async send(message: OutboundChannelMessage): Promise<number> {
+		const factory = this.factoryByName.get(message.channel);
+		if (!factory) {
+			throw new Error(`Unknown channel: ${message.channel}.`);
+		}
+
+		const channel = this.channels.get(message.channel);
+		if (!channel) {
+			throw new Error(`Channel ${message.channel} is disabled.`);
+		}
+
+		await this.bus.publishOutbound(message);
+		return channel.send(message);
+	}
+
+	async broadcast(
+		message: Omit<OutboundChannelMessage, "channel">,
+	): Promise<number> {
+		if (!this.hasEnabledChannels()) {
+			throw new Error("No channels are enabled.");
+		}
+
+		let delivered = 0;
+		for (const [channelName] of this.channels) {
+			delivered += await this.send({
+				...message,
+				channel: channelName,
+			});
+		}
+
+		return delivered;
 	}
 }

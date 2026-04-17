@@ -7,8 +7,7 @@ import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 
 import { AgentLoop } from "../agent/loop.js";
-import { TelegramBotController } from "../channels/manager.js";
-import { SYSTEM_ROLE, sendSystemMessage } from "../channels/telegram.js";
+import { ChannelManager } from "../channels/manager.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
 import { resolveConfigPath, resolveWorkspacePath } from "../config/paths.js";
 import type { AppConfig, LogLevel } from "../config/schema.js";
@@ -45,11 +44,6 @@ interface AgentOptions extends CommonOptions {
 	session?: string;
 	markdown?: boolean;
 	logs?: boolean;
-}
-
-interface ChannelsLoginOptions {
-	config?: string;
-	force?: boolean;
 }
 
 export function createCli(programName = "nanobot-ts"): Command {
@@ -117,18 +111,6 @@ export function createCli(programName = "nanobot-ts"): Command {
 		.option("-c, --config <config>", "Path to config file")
 		.action(async (options: { config?: string }) => {
 			await runChannelsStatus(options.config);
-		});
-
-	channels
-		.command("login")
-		.description(
-			"Authenticate with a channel via QR code or other interactive login.",
-		)
-		.argument("<channel_name>", "Channel name (e.g. weixin, whatsapp)")
-		.option("-f, --force", "Force re-authentication even if already logged in")
-		.option("-c, --config <config>", "Path to config file")
-		.action(async (channelName: string, options: ChannelsLoginOptions) => {
-			await runChannelsLogin(channelName, options);
 		});
 
 	channels
@@ -249,29 +231,29 @@ async function runGateway(
 	const { config } = await loadRuntimeConfig(programName, options);
 	const port = options.port ?? config.gateway.port;
 
-	if (!config.channels.telegram.enabled) {
-		throw new Error(
-			"No channels are enabled. Set channels.telegram.enabled=true in the config before starting the gateway.",
-		);
-	}
-
 	await ensureWorkspace(config.workspace.path);
 
 	const level: LogLevel = options.verbose ? "debug" : config.logging.level;
 	const logger = createLogger(level);
-	const controller = new TelegramBotController();
+	const manager = new ChannelManager(config, logger);
+
+	if (!manager.hasEnabledChannels()) {
+		throw new Error(
+			"No channels are enabled. Set channels.telegram.enabled=true in the config before starting the gateway.",
+		);
+	}
 
 	printSection(
 		`Starting ${programName} gateway version ${CLI_VERSION} on port ${port}...`,
 	);
 	printKeyValue("Workspace", accentPath(config.workspace.path));
 
-	await controller.start(config, logger);
-	printInfo("Telegram gateway is running. Press Ctrl+C to stop.");
+	await manager.start();
+	printInfo("Gateway is running. Press Ctrl+C to stop.");
 
 	await waitForShutdown(async (signal) => {
 		printNote(`Received ${signal}, stopping gateway...`);
-		await controller.stop(logger);
+		await manager.stop();
 		printInfo("Gateway stopped.");
 	});
 }
@@ -289,7 +271,9 @@ async function runAgent(options: AgentOptions): Promise<void> {
 
 	if (options.message) {
 		const reply = await agent.reply(sessionId, options.message);
-		printAgentReply(reply);
+		if (reply.trim()) {
+			printAgentReply(reply);
+		}
 		return;
 	}
 
@@ -317,7 +301,9 @@ async function runAgent(options: AgentOptions): Promise<void> {
 			}
 
 			const reply = await agent.reply(sessionId, input);
-			printAgentReply(reply);
+			if (reply.trim()) {
+				printAgentReply(reply);
+			}
 		}
 	} finally {
 		readline.close();
@@ -343,34 +329,17 @@ async function runStatus(): Promise<void> {
 
 async function runChannelsStatus(configPath?: string): Promise<void> {
 	const loaded = await loadRequiredConfig(configPath);
-	const telegram = loaded.config.channels.telegram;
+	const manager = new ChannelManager(loaded.config, createLogger("fatal"));
 
 	printSection("Channel Status");
 	console.log("");
-	console.log(
-		`${accent("Telegram")}\t${accent(telegram.enabled ? "enabled" : "disabled")}`,
-	);
-}
-
-async function runChannelsLogin(
-	channelName: string,
-	options: ChannelsLoginOptions,
-): Promise<void> {
-	if (options.config) {
-		await loadRequiredConfig(options.config);
+	for (const channel of manager.getSnapshots()) {
+		console.log(
+			`${accent(channel.displayName)}\t${accent(
+				channel.enabled ? channel.status : "disabled",
+			)}`,
+		);
 	}
-
-	if (channelName !== "telegram") {
-		throw new Error(`Unknown channel: ${channelName}. Available: telegram`);
-	}
-
-	if (options.force) {
-		printNote("Telegram login does not have a persisted session to reset.");
-	}
-
-	printInfo(
-		"Telegram does not require `channels login` in nanobot-ts. Set channels.telegram.token in the config and run `gateway`.",
-	);
 }
 
 async function runChannelsMessage(
@@ -383,20 +352,11 @@ async function runChannelsMessage(
 		throw new Error("Message content cannot be empty.");
 	}
 
-	let delivered = 0;
-	let enabledChannels = 0;
-
-	if (loaded.config.channels.telegram.enabled) {
-		enabledChannels += 1;
-		delivered += await sendSystemMessage(loaded.config.channels.telegram, {
-			role: SYSTEM_ROLE,
-			content: text,
-		});
-	}
-
-	if (enabledChannels === 0) {
-		throw new Error("No channels are enabled.");
-	}
+	const manager = new ChannelManager(loaded.config, createLogger("fatal"));
+	const delivered = await manager.broadcast({
+		content: text,
+		role: "system",
+	});
 
 	printInfo(
 		`Delivered system message to ${accent(String(delivered))} chat(s).`,

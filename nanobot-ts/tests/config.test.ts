@@ -37,7 +37,7 @@ describe("config", () => {
 		const loaded = await loadConfig({ cliConfigPath: configPath });
 
 		expect(loaded.path).toBe(configPath);
-		expect(loaded.config.channels.telegram.allowFrom).toEqual(["*"]);
+		expect(loaded.config.channels.telegram.allowFrom).toEqual([]);
 		expect(loaded.config.channels.telegram.chatIds).toEqual([]);
 		expect(loaded.config.channels.telegram.enabled).toBe(false);
 		expect(loaded.config.agent.model).toBe(DEFAULT_AGENT_MODEL);

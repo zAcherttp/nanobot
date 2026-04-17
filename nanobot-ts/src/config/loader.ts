@@ -42,13 +42,13 @@ const appConfigSchema = z.object({
 				.object({
 					enabled: z.boolean().default(false),
 					token: z.string().default(""),
-					allowFrom: z.array(z.string()).min(1).default(["*"]),
+					allowFrom: z.array(z.string()).default([]),
 					chatIds: z.array(z.string()).default([]),
 				})
 				.default({
 					enabled: false,
 					token: "",
-					allowFrom: ["*"],
+					allowFrom: [],
 					chatIds: [],
 				}),
 		})
@@ -56,7 +56,7 @@ const appConfigSchema = z.object({
 			telegram: {
 				enabled: false,
 				token: "",
-				allowFrom: ["*"],
+				allowFrom: [],
 				chatIds: [],
 			},
 		}),
@@ -96,7 +96,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 		telegram: {
 			enabled: false,
 			token: "",
-			allowFrom: ["*"],
+			allowFrom: [],
 			chatIds: [],
 		},
 	},

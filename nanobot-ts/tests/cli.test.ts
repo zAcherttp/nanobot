@@ -33,7 +33,6 @@ describe("cli", () => {
 
 		expect(channels?.commands.map((command) => command.name())).toEqual([
 			"status",
-			"login",
 			"message",
 		]);
 		expect(provider?.commands.map((command) => command.name())).toEqual([
