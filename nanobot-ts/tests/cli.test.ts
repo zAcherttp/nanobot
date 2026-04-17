@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createCli } from "../src/cli/commands.js";
+import { createCli, formatCliError } from "../src/cli/commands.js";
 
 describe("cli", () => {
 	it("matches the python-style top-level command surface", () => {
@@ -57,5 +57,13 @@ describe("cli", () => {
 				"--logs",
 			]),
 		);
+	});
+
+	it("formats top-level CLI errors with blue and cyan accents", () => {
+		const formatted = formatCliError("boom");
+
+		expect(formatted).toContain("\u001B[94m");
+		expect(formatted).toContain("\u001B[36m");
+		expect(formatted).toContain("boom");
 	});
 });

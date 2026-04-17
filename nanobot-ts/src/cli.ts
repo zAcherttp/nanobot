@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { main } from "./cli/commands.js";
+import { formatCliError, main } from "./cli/commands.js";
 
 const isMainModule =
 	process.argv[1] !== undefined &&
@@ -9,7 +9,7 @@ const isMainModule =
 if (isMainModule) {
 	main().catch((error: unknown) => {
 		const message = error instanceof Error ? error.message : String(error);
-		console.error(message);
+		console.error(formatCliError(message));
 		process.exitCode = 1;
 	});
 }

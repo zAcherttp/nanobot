@@ -20,6 +20,13 @@ const { version: CLI_VERSION } = require("../../package.json") as {
 
 const EXIT_COMMANDS = new Set(["exit", "quit", "/exit", "/quit", ":q"]);
 const SUPPORTED_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+const ANSI = {
+	reset: "\u001B[0m",
+	brightBlue: "\u001B[94m",
+	cyan: "\u001B[36m",
+	brightCyan: "\u001B[96m",
+	dimCyan: "\u001B[36;2m",
+} as const;
 
 interface CommonOptions {
 	config?: string;
@@ -51,6 +58,11 @@ export function createCli(programName = "nanobot-ts"): Command {
 		.description("nanobot - Personal AI Assistant")
 		.showHelpAfterError()
 		.version(`${programName} v${CLI_VERSION}`, "-v, --version", "Show version");
+
+	program.configureOutput({
+		writeOut: (text) => process.stdout.write(styleHelp(text)),
+		writeErr: (text) => process.stderr.write(styleHelp(text)),
+	});
 
 	program
 		.command("onboard")
@@ -165,9 +177,9 @@ async function runOnboard(
 	if (await pathExists(configPath)) {
 		const loaded = await loadConfig({ cliConfigPath: configPath });
 		config = loaded.config;
-		console.log(`Config already exists at ${configPath}`);
+		printInfo(`Config already exists at ${accentPath(configPath)}`);
 	} else {
-		console.log(`Creating config at ${configPath}`);
+		printInfo(`Creating config at ${accentPath(configPath)}`);
 	}
 
 	if (options.workspace) {
@@ -175,7 +187,7 @@ async function runOnboard(
 	}
 
 	if (options.wizard) {
-		console.log(
+		printNote(
 			"Interactive wizard is not implemented in nanobot-ts yet. Writing the stub config instead.",
 		);
 	}
@@ -183,12 +195,12 @@ async function runOnboard(
 	const writtenPath = await saveConfig(config, configPath);
 	await ensureWorkspace(config.workspace.path);
 
-	console.log(`Config saved at ${writtenPath}`);
-	console.log(`Workspace ready at ${config.workspace.path}`);
+	printInfo(`Config saved at ${accentPath(writtenPath)}`);
+	printInfo(`Workspace ready at ${accentPath(config.workspace.path)}`);
 	console.log("");
-	console.log("Next steps:");
-	console.log(`  1. Chat: ${programName} agent -m "Hello!"`);
-	console.log(`  2. Start gateway: ${programName} gateway`);
+	printSection("Next steps");
+	console.log(`  1. ${accentCommand(`${programName} agent -m "Hello!"`)}`);
+	console.log(`  2. ${accentCommand(`${programName} gateway`)}`);
 }
 
 async function runGateway(
@@ -210,18 +222,18 @@ async function runGateway(
 	const logger = createLogger(level);
 	const controller = new TelegramBotController();
 
-	console.log(
+	printSection(
 		`Starting ${programName} gateway version ${CLI_VERSION} on port ${port}...`,
 	);
-	console.log(`Workspace: ${config.workspace.path}`);
+	printKeyValue("Workspace", accentPath(config.workspace.path));
 
 	await controller.start(config, logger);
-	console.log("Telegram gateway is running. Press Ctrl+C to stop.");
+	printInfo("Telegram gateway is running. Press Ctrl+C to stop.");
 
 	await waitForShutdown(async (signal) => {
-		console.log(`Received ${signal}, stopping gateway...`);
+		printNote(`Received ${signal}, stopping gateway...`);
 		await controller.stop(logger);
-		console.log("Gateway stopped.");
+		printInfo("Gateway stopped.");
 	});
 }
 
@@ -230,7 +242,7 @@ async function runAgent(options: AgentOptions): Promise<void> {
 	await ensureWorkspace(config.workspace.path);
 
 	if (options.logs) {
-		console.log("Runtime log streaming is not implemented in nanobot-ts yet.");
+		printNote("Runtime log streaming is not implemented in nanobot-ts yet.");
 	}
 
 	const agent = new AgentLoop();
@@ -238,11 +250,11 @@ async function runAgent(options: AgentOptions): Promise<void> {
 
 	if (options.message) {
 		const reply = await agent.reply(sessionId, options.message);
-		console.log(reply);
+		printAgentReply(reply);
 		return;
 	}
 
-	console.log(
+	printSection(
 		"Interactive mode (type exit, quit, /exit, /quit, :q, or Ctrl+C to quit)",
 	);
 
@@ -253,18 +265,18 @@ async function runAgent(options: AgentOptions): Promise<void> {
 
 	try {
 		while (true) {
-			const input = (await readline.question("You: ")).trim();
+			const input = (await readline.question(userPrompt())).trim();
 			if (!input) {
 				continue;
 			}
 
 			if (EXIT_COMMANDS.has(input.toLowerCase())) {
-				console.log("Goodbye!");
+				printInfo("Goodbye!");
 				break;
 			}
 
 			const reply = await agent.reply(sessionId, input);
-			console.log(`nanobot: ${reply}`);
+			printAgentReply(reply);
 		}
 	} finally {
 		readline.close();
@@ -275,25 +287,28 @@ async function runStatus(): Promise<void> {
 	const configPath = resolveConfigPath();
 	const { config } = await loadRuntimeConfig("nanobot-ts", {});
 
-	console.log("nanobot Status");
+	printSection("nanobot Status");
 	console.log("");
-	console.log(`Config: ${configPath}`);
-	console.log(`Workspace: ${config.workspace.path}`);
-	console.log(`Model: ${config.agent.model}`);
-	console.log(
-		`Telegram: ${config.channels.telegram.enabled ? "enabled" : "disabled"}`,
+	printKeyValue("Config", accentPath(configPath));
+	printKeyValue("Workspace", accentPath(config.workspace.path));
+	printKeyValue("Model", accent(config.agent.model));
+	printKeyValue(
+		"Telegram",
+		accent(config.channels.telegram.enabled ? "enabled" : "disabled"),
 	);
-	console.log(`Gateway port: ${config.gateway.port}`);
-	console.log(`Log level: ${config.logging.level}`);
+	printKeyValue("Gateway port", accent(String(config.gateway.port)));
+	printKeyValue("Log level", accent(config.logging.level));
 }
 
 async function runChannelsStatus(configPath?: string): Promise<void> {
 	const loaded = await loadRequiredConfig(configPath);
 	const telegram = loaded.config.channels.telegram;
 
-	console.log("Channel Status");
+	printSection("Channel Status");
 	console.log("");
-	console.log(`Telegram\t${telegram.enabled ? "enabled" : "disabled"}`);
+	console.log(
+		`${accent("Telegram")}\t${accent(telegram.enabled ? "enabled" : "disabled")}`,
+	);
 }
 
 async function runChannelsLogin(
@@ -309,10 +324,10 @@ async function runChannelsLogin(
 	}
 
 	if (options.force) {
-		console.log("Telegram login does not have a persisted session to reset.");
+		printNote("Telegram login does not have a persisted session to reset.");
 	}
 
-	console.log(
+	printInfo(
 		"Telegram does not require `channels login` in nanobot-ts. Set channels.telegram.token in the config and run `gateway`.",
 	);
 }
@@ -321,9 +336,11 @@ async function runPluginsList(): Promise<void> {
 	const config = await loadConfigIfPresent();
 	const telegramEnabled = config?.channels.telegram.enabled ?? false;
 
-	console.log("Channel Plugins");
+	printSection("Channel Plugins");
 	console.log("");
-	console.log(`Telegram\tbuiltin\t${telegramEnabled ? "yes" : "no"}`);
+	console.log(
+		`${accent("Telegram")}\t${accent("builtin")}\t${accent(telegramEnabled ? "yes" : "no")}`,
+	);
 }
 
 async function runProviderLogin(providerName: string): Promise<void> {
@@ -442,4 +459,51 @@ function resolveProgramName(argv: string[]): string {
 	}
 
 	return basename;
+}
+
+export function formatCliError(message: string): string {
+	return `${ANSI.brightBlue}nanobot${ANSI.reset} ${ANSI.cyan}${message}${ANSI.reset}`;
+}
+
+function styleHelp(text: string): string {
+	return text
+		.replace(/^Usage:/gm, `${ANSI.brightBlue}Usage:${ANSI.reset}`)
+		.replace(/^Commands:/gm, `${ANSI.brightBlue}Commands:${ANSI.reset}`)
+		.replace(/^Options:/gm, `${ANSI.brightBlue}Options:${ANSI.reset}`);
+}
+
+function printSection(text: string): void {
+	console.log(`${ANSI.brightBlue}${text}${ANSI.reset}`);
+}
+
+function printInfo(text: string): void {
+	console.log(`${ANSI.brightCyan}${text}${ANSI.reset}`);
+}
+
+function printNote(text: string): void {
+	console.log(`${ANSI.dimCyan}${text}${ANSI.reset}`);
+}
+
+function printKeyValue(label: string, value: string): void {
+	console.log(`${ANSI.cyan}${label}:${ANSI.reset} ${value}`);
+}
+
+function printAgentReply(reply: string): void {
+	console.log(`${ANSI.brightBlue}nanobot:${ANSI.reset} ${ANSI.brightCyan}${reply}${ANSI.reset}`);
+}
+
+function userPrompt(): string {
+	return `${ANSI.cyan}You:${ANSI.reset} `;
+}
+
+function accent(text: string): string {
+	return `${ANSI.brightCyan}${text}${ANSI.reset}`;
+}
+
+function accentPath(text: string): string {
+	return `${ANSI.cyan}${text}${ANSI.reset}`;
+}
+
+function accentCommand(text: string): string {
+	return `${ANSI.brightBlue}${text}${ANSI.reset}`;
 }
