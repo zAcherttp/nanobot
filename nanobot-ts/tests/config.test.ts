@@ -38,6 +38,7 @@ describe("config", () => {
 
 		expect(loaded.path).toBe(configPath);
 		expect(loaded.config.channels.telegram.allowFrom).toEqual(["*"]);
+		expect(loaded.config.channels.telegram.chatIds).toEqual([]);
 		expect(loaded.config.channels.telegram.enabled).toBe(false);
 		expect(loaded.config.agent.model).toBe(DEFAULT_AGENT_MODEL);
 		expect(loaded.config.gateway.port).toBe(DEFAULT_GATEWAY_PORT);
@@ -97,9 +98,7 @@ describe("config", () => {
 		process.env.NANOBOT_TS_ENV = "development";
 
 		expect(detectRuntimeMode()).toBe("development");
-		expect(getDefaultDataDir()).toBe(
-			path.resolve(process.cwd(), ".nanobot"),
-		);
+		expect(getDefaultDataDir()).toBe(path.resolve(process.cwd(), ".nanobot"));
 		expect(resolveConfigPath()).toBe(
 			path.resolve(process.cwd(), ".nanobot", "config.json"),
 		);
@@ -145,6 +144,7 @@ describe("config", () => {
 					enabled: true,
 					token: "real-token",
 					allowFrom: ["123", "456"],
+					chatIds: ["123", "456"],
 				},
 			},
 			logging: {

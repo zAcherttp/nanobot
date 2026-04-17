@@ -49,7 +49,6 @@ export class TelegramBotController {
 		logger.info("Starting Telegram bot");
 
 		const bot = createTelegramBot(config.channels.telegram, {
-			agent: this.agent,
 			onError: (error) => logger.error("Telegram bot error", error),
 		});
 		this.bot = bot;

@@ -8,6 +8,7 @@ export interface TelegramConfig {
 	enabled: boolean;
 	token: string;
 	allowFrom: string[];
+	chatIds: string[];
 }
 
 export interface AgentConfig {

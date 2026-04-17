@@ -1,6 +1,12 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { createCli, formatCliError } from "../src/cli/commands.js";
+import {
+	createCli,
+	formatCliError,
+	resolveEffectiveWorkspacePath,
+} from "../src/cli/commands.js";
+import { DEFAULT_CONFIG } from "../src/config/loader.js";
 
 describe("cli", () => {
 	it("matches the python-style top-level command surface", () => {
@@ -28,6 +34,7 @@ describe("cli", () => {
 		expect(channels?.commands.map((command) => command.name())).toEqual([
 			"status",
 			"login",
+			"message",
 		]);
 		expect(provider?.commands.map((command) => command.name())).toEqual([
 			"login",
@@ -58,5 +65,13 @@ describe("cli", () => {
 		expect(formatted).toContain("\u001B[94m");
 		expect(formatted).toContain("\u001B[36m");
 		expect(formatted).toContain("boom");
+	});
+
+	it("resolves onboard workspace relative to the config directory", () => {
+		const configPath = path.join("E:\\tmp", ".nanobot", "config.json");
+
+		expect(resolveEffectiveWorkspacePath(DEFAULT_CONFIG, configPath)).toBe(
+			path.join("E:\\tmp", ".nanobot", "workspace"),
+		);
 	});
 });

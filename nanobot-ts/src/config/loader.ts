@@ -43,11 +43,13 @@ const appConfigSchema = z.object({
 					enabled: z.boolean().default(false),
 					token: z.string().default(""),
 					allowFrom: z.array(z.string()).min(1).default(["*"]),
+					chatIds: z.array(z.string()).default([]),
 				})
 				.default({
 					enabled: false,
 					token: "",
 					allowFrom: ["*"],
+					chatIds: [],
 				}),
 		})
 		.default({
@@ -55,6 +57,7 @@ const appConfigSchema = z.object({
 				enabled: false,
 				token: "",
 				allowFrom: ["*"],
+				chatIds: [],
 			},
 		}),
 	agent: z
@@ -94,6 +97,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 			enabled: false,
 			token: "",
 			allowFrom: ["*"],
+			chatIds: [],
 		},
 	},
 	agent: {

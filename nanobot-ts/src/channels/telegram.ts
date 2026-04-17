@@ -1,15 +1,18 @@
 import { Bot, type Context } from "grammy";
 
-import type { AgentLoop } from "../agent/loop.js";
 import { isSenderAllowed } from "../config/loader.js";
 import type { TelegramConfig } from "../config/schema.js";
 
-export const START_MESSAGE =
-	"nanobot-ts is running.\nSend a text message and I will echo it back.";
+export const START_MESSAGE = "nanobot-ts is running.";
 export const UNSUPPORTED_MESSAGE = "Text only for now.";
+export const SYSTEM_ROLE = "system";
+
+export interface ChannelOutboundMessage {
+	role: typeof SYSTEM_ROLE;
+	content: string;
+}
 
 export interface TelegramBotDeps {
-	agent: AgentLoop;
 	onError?: (error: unknown) => void;
 }
 
@@ -31,7 +34,7 @@ export function createTelegramBot(
 	});
 
 	bot.on("message:text", async (ctx) => {
-		await handleTextMessage(ctx, config, deps.agent);
+		await handleTextMessage(ctx, config);
 	});
 
 	bot.on("message", async (ctx) => {
@@ -56,7 +59,6 @@ export async function handleStart(
 export async function handleTextMessage(
 	ctx: TelegramReplyContext,
 	config: TelegramConfig,
-	agent: AgentLoop,
 ): Promise<void> {
 	if (!isPrivateChat(ctx)) {
 		return;
@@ -71,9 +73,6 @@ export async function handleTextMessage(
 	if (!text) {
 		return;
 	}
-
-	const reply = await agent.reply(String(ctx.chat?.id), text);
-	await ctx.reply(reply);
 }
 
 export async function handleUnsupportedMessage(
@@ -96,6 +95,38 @@ export async function handleUnsupportedMessage(
 	await ctx.reply(UNSUPPORTED_MESSAGE);
 }
 
+export async function sendSystemMessage(
+	config: TelegramConfig,
+	message: ChannelOutboundMessage,
+	deps: {
+		sendMessage?: (chatId: string, text: string) => Promise<unknown>;
+	} = {},
+): Promise<number> {
+	const text = message.content.trim();
+	if (!text) {
+		throw new Error("System message content cannot be empty.");
+	}
+
+	if (config.chatIds.length === 0) {
+		throw new Error(
+			"Telegram channel has no configured chatIds for system delivery.",
+		);
+	}
+
+	const sendMessage =
+		deps.sendMessage ??
+		((chatId: string, outboundText: string) => {
+			const bot = new Bot(config.token);
+			return bot.api.sendMessage(chatId, outboundText);
+		});
+
+	for (const chatId of config.chatIds) {
+		await sendMessage(chatId, formatOutboundMessage(message));
+	}
+
+	return config.chatIds.length;
+}
+
 function getSenderId(
 	ctx: Pick<TelegramReplyContext, "from"> | Context,
 ): string | null {
@@ -106,4 +137,8 @@ function isPrivateChat(
 	ctx: Pick<TelegramReplyContext, "chat"> | Context,
 ): boolean {
 	return ctx.chat?.type === "private";
+}
+
+function formatOutboundMessage(message: ChannelOutboundMessage): string {
+	return `[${message.role}] ${message.content}`;
 }

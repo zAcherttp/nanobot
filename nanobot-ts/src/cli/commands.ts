@@ -8,6 +8,7 @@ import { Command } from "commander";
 
 import { AgentLoop } from "../agent/loop.js";
 import { TelegramBotController } from "../channels/manager.js";
+import { SYSTEM_ROLE, sendSystemMessage } from "../channels/telegram.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
 import { resolveConfigPath, resolveWorkspacePath } from "../config/paths.js";
 import type { AppConfig, LogLevel } from "../config/schema.js";
@@ -18,7 +19,8 @@ const { version: CLI_VERSION } = require("../../package.json") as {
 	version: string;
 };
 
-const EXIT_COMMANDS = new Set(["exit", "quit", "/exit", "/quit", ":q"]);
+const EXIT_COMMANDS = new Set(["/quit", "/q"]);
+const EXIT_COMMANDS_TEXT = Array.from(EXIT_COMMANDS).join(", ");
 const SUPPORTED_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 const ANSI = {
 	reset: "\u001B[0m",
@@ -129,6 +131,15 @@ export function createCli(programName = "nanobot-ts"): Command {
 			await runChannelsLogin(channelName, options);
 		});
 
+	channels
+		.command("message")
+		.description("Deliver a system message to configured channels.")
+		.argument("<message...>", "Message text to deliver")
+		.option("-c, --config <config>", "Path to config file")
+		.action(async (messageParts: string[], options: { config?: string }) => {
+			await runChannelsMessage(messageParts.join(" "), options.config);
+		});
+
 	const provider = program.command("provider").description("Manage providers");
 
 	provider
@@ -161,18 +172,47 @@ async function runOnboard(
 	options: CommonOptions & { wizard?: boolean },
 ): Promise<void> {
 	const configPath = resolveConfigPath(options.config);
+	const configDir = path.dirname(configPath);
 	let config = cloneConfig(DEFAULT_CONFIG);
 
 	if (await pathExists(configPath)) {
-		const loaded = await loadConfig({ cliConfigPath: configPath });
-		config = loaded.config;
-		printInfo(`Config already exists at ${accentPath(configPath)}`);
+		if (options.wizard) {
+			config = await loadOnboardConfig(
+				configPath,
+				options.workspace,
+				configDir,
+			);
+		} else {
+			printInfo(`Config already exists at ${accentPath(configPath)}`);
+			printNote("  y = overwrite with defaults (existing values will be lost)");
+			printNote(
+				"  N = refresh config, keeping existing values and adding new fields",
+			);
+
+			const overwrite = await promptForOverwrite();
+			if (overwrite) {
+				config = applyWorkspaceOverride(
+					cloneConfig(DEFAULT_CONFIG),
+					options.workspace,
+					configDir,
+				);
+				await saveConfig(config, configPath);
+				printInfo(`Config reset to defaults at ${accentPath(configPath)}`);
+			} else {
+				config = await loadOnboardConfig(
+					configPath,
+					options.workspace,
+					configDir,
+				);
+				await saveConfig(config, configPath);
+				printInfo(
+					`Config refreshed at ${accentPath(configPath)} (existing values preserved)`,
+				);
+			}
+		}
 	} else {
 		printInfo(`Creating config at ${accentPath(configPath)}`);
-	}
-
-	if (options.workspace) {
-		config.workspace.path = resolveWorkspacePath(options.workspace);
+		config = applyWorkspaceOverride(config, options.workspace, configDir);
 	}
 
 	if (options.wizard) {
@@ -182,14 +222,24 @@ async function runOnboard(
 	}
 
 	const writtenPath = await saveConfig(config, configPath);
-	await ensureWorkspace(config.workspace.path);
+	const workspacePath = resolveEffectiveWorkspacePath(config, writtenPath);
+	await ensureWorkspace(workspacePath);
 
 	printInfo(`Config saved at ${accentPath(writtenPath)}`);
-	printInfo(`Workspace ready at ${accentPath(config.workspace.path)}`);
+	printInfo(`Workspace ready at ${accentPath(workspacePath)}`);
 	console.log("");
 	printSection("Next steps");
 	console.log(`  1. ${accentCommand(`${programName} agent -m "Hello!"`)}`);
 	console.log(`  2. ${accentCommand(`${programName} gateway`)}`);
+}
+
+async function loadOnboardConfig(
+	configPath: string,
+	workspace?: string,
+	configDir?: string,
+): Promise<AppConfig> {
+	const loaded = await loadConfig({ cliConfigPath: configPath });
+	return applyWorkspaceOverride(loaded.config, workspace, configDir);
 }
 
 async function runGateway(
@@ -243,13 +293,15 @@ async function runAgent(options: AgentOptions): Promise<void> {
 		return;
 	}
 
-	printSection(
-		"Interactive mode (type exit, quit, /exit, /quit, :q, or Ctrl+C to quit)",
-	);
+	printSection(`Interactive mode (type ${EXIT_COMMANDS_TEXT} to quit)`);
 
 	const readline = createInterface({
 		input: process.stdin,
 		output: process.stdout,
+	});
+
+	readline.on("SIGINT", () => {
+		printNote(`Use ${EXIT_COMMANDS_TEXT} to quit interactive mode.`);
 	});
 
 	try {
@@ -321,6 +373,36 @@ async function runChannelsLogin(
 	);
 }
 
+async function runChannelsMessage(
+	message: string,
+	configPath?: string,
+): Promise<void> {
+	const loaded = await loadRequiredConfig(configPath);
+	const text = message.trim();
+	if (!text) {
+		throw new Error("Message content cannot be empty.");
+	}
+
+	let delivered = 0;
+	let enabledChannels = 0;
+
+	if (loaded.config.channels.telegram.enabled) {
+		enabledChannels += 1;
+		delivered += await sendSystemMessage(loaded.config.channels.telegram, {
+			role: SYSTEM_ROLE,
+			content: text,
+		});
+	}
+
+	if (enabledChannels === 0) {
+		throw new Error("No channels are enabled.");
+	}
+
+	printInfo(
+		`Delivered system message to ${accent(String(delivered))} chat(s).`,
+	);
+}
+
 async function runProviderLogin(providerName: string): Promise<void> {
 	if (!SUPPORTED_PROVIDERS.has(providerName)) {
 		throw new Error(
@@ -342,7 +424,10 @@ async function loadRuntimeConfig(
 	const loaded = await loadRequiredConfig(options.config, programName);
 
 	if (options.workspace) {
-		loaded.config.workspace.path = resolveWorkspacePath(options.workspace);
+		loaded.config.workspace.path = resolveWorkspacePath(
+			options.workspace,
+			path.dirname(loaded.path),
+		);
 	}
 
 	return loaded;
@@ -361,16 +446,6 @@ async function loadRequiredConfig(
 	}
 
 	return loadConfig({ cliConfigPath: resolvedPath });
-}
-
-async function loadConfigIfPresent(): Promise<AppConfig | null> {
-	const configPath = resolveConfigPath();
-	if (!(await pathExists(configPath))) {
-		return null;
-	}
-
-	const loaded = await loadConfig({ cliConfigPath: configPath });
-	return loaded.config;
 }
 
 async function pathExists(targetPath: string): Promise<boolean> {
@@ -417,6 +492,26 @@ function cloneConfig(config: AppConfig): AppConfig {
 	return structuredClone(config);
 }
 
+function applyWorkspaceOverride(
+	config: AppConfig,
+	workspace?: string,
+	baseDir?: string,
+): AppConfig {
+	if (!workspace) {
+		return config;
+	}
+
+	config.workspace.path = resolveWorkspacePath(workspace, baseDir);
+	return config;
+}
+
+export function resolveEffectiveWorkspacePath(
+	config: AppConfig,
+	configPath: string,
+): string {
+	return resolveWorkspacePath(config.workspace.path, path.dirname(configPath));
+}
+
 function parseInteger(value: string): number {
 	const parsed = Number.parseInt(value, 10);
 	if (!Number.isFinite(parsed)) {
@@ -437,6 +532,30 @@ function resolveProgramName(argv: string[]): string {
 	}
 
 	return basename;
+}
+
+async function promptForOverwrite(): Promise<boolean> {
+	if (!process.stdin.isTTY || !process.stdout.isTTY) {
+		printNote("Non-interactive terminal detected. Defaulting to refresh.");
+		return false;
+	}
+
+	const readline = createInterface({
+		input: process.stdin,
+		output: process.stdout,
+	});
+
+	try {
+		const answer = (
+			await readline.question(`${ANSI.cyan}Overwrite? [y/N]${ANSI.reset} `)
+		)
+			.trim()
+			.toLowerCase();
+
+		return answer === "y" || answer === "yes";
+	} finally {
+		readline.close();
+	}
 }
 
 export function formatCliError(message: string): string {
@@ -467,7 +586,9 @@ function printKeyValue(label: string, value: string): void {
 }
 
 function printAgentReply(reply: string): void {
-	console.log(`${ANSI.brightBlue}nanobot:${ANSI.reset} ${ANSI.brightCyan}${reply}${ANSI.reset}`);
+	console.log(
+		`${ANSI.brightBlue}nanobot:${ANSI.reset} ${ANSI.brightCyan}${reply}${ANSI.reset}`,
+	);
 }
 
 function userPrompt(): string {
