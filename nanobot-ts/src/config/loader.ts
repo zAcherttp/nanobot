@@ -11,7 +11,7 @@ import {
 } from "./paths.js";
 import type { AppConfig, LogLevel } from "./schema.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 export const DEFAULT_GATEWAY_PORT = 18790;
 export const DEFAULT_AGENT_MODEL = "nanobot-ts-stub";

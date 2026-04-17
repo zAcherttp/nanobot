@@ -12,7 +12,6 @@ describe("cli", () => {
 			"agent",
 			"status",
 			"channels",
-			"plugins",
 			"provider",
 		]);
 	});
@@ -22,9 +21,6 @@ describe("cli", () => {
 		const channels = program.commands.find(
 			(command) => command.name() === "channels",
 		);
-		const plugins = program.commands.find(
-			(command) => command.name() === "plugins",
-		);
 		const provider = program.commands.find(
 			(command) => command.name() === "provider",
 		);
@@ -32,9 +28,6 @@ describe("cli", () => {
 		expect(channels?.commands.map((command) => command.name())).toEqual([
 			"status",
 			"login",
-		]);
-		expect(plugins?.commands.map((command) => command.name())).toEqual([
-			"list",
 		]);
 		expect(provider?.commands.map((command) => command.name())).toEqual([
 			"login",

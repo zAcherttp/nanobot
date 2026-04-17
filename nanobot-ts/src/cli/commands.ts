@@ -129,17 +129,6 @@ export function createCli(programName = "nanobot-ts"): Command {
 			await runChannelsLogin(channelName, options);
 		});
 
-	const plugins = program
-		.command("plugins")
-		.description("Manage channel plugins");
-
-	plugins
-		.command("list")
-		.description("List all discovered channels (built-in and plugins).")
-		.action(async () => {
-			await runPluginsList();
-		});
-
 	const provider = program.command("provider").description("Manage providers");
 
 	provider
@@ -329,17 +318,6 @@ async function runChannelsLogin(
 
 	printInfo(
 		"Telegram does not require `channels login` in nanobot-ts. Set channels.telegram.token in the config and run `gateway`.",
-	);
-}
-
-async function runPluginsList(): Promise<void> {
-	const config = await loadConfigIfPresent();
-	const telegramEnabled = config?.channels.telegram.enabled ?? false;
-
-	printSection("Channel Plugins");
-	console.log("");
-	console.log(
-		`${accent("Telegram")}\t${accent("builtin")}\t${accent(telegramEnabled ? "yes" : "no")}`,
 	);
 }
 
