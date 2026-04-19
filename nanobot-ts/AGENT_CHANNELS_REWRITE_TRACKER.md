@@ -10,8 +10,11 @@ Last updated: 2026-04-19
   - per-session processing is serialized
   - outbound replies route back to the originating channel
   - runtime failures become generic user-visible error replies
+- Additional gateway policy now landed:
+  - slash commands are routed ahead of normal prompting
+  - `/stop` can cancel active per-session work
+  - `/help`, `/status`, and `/new` return channel-bound text replies without touching the model
 - Explicitly deferred in this slice:
-  - slash commands
   - inbound `system` messages
   - mid-turn message injection
   - streaming/progress delivery
@@ -35,10 +38,11 @@ Last updated: 2026-04-19
 | Per-session serialization | Done for this slice | Same-session messages queue; different sessions can run in parallel |
 | Outbound delivery | Done for this slice | Runtime publishes outbound replies; manager dispatches them while running |
 | CLI gateway adoption | Done for this slice | `gateway` now starts both the runtime bridge and the channel manager |
-| Deferred Python policies | Deferred | commands, system messages, injections, streaming, cron/heartbeat |
+| Core command policy | Done for this slice | `/help`, `/status`, `/new`, `/stop` now live in the gateway runtime |
+| Deferred Python policies | Deferred | system messages, injections, streaming, cron/heartbeat |
 
 ## Next Targets
 
-1. Decide whether the next gateway policy slice should add slash commands or inbound `system` messages first.
-2. Add progress/streaming delivery once the non-streaming contract is stable.
+1. Add progress/streaming delivery once the non-streaming contract is stable.
+2. Decide whether inbound `system` messages are still needed after the command slice.
 3. Revisit heartbeat/cron integration after the gateway bridge settles.

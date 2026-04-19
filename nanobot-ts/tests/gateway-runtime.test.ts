@@ -17,6 +17,7 @@ import {
 	resolveAgentRuntimeConfig,
 } from "../src/agent/loop.js";
 import { InMemoryMessageBus } from "../src/channels/bus.js";
+import { buildHelpText } from "../src/command/index.js";
 import {
 	GATEWAY_RUNTIME_ERROR_MESSAGE,
 	GatewayRuntime,
@@ -39,6 +40,11 @@ function createRuntimeConfig(sessionStorePath: string) {
 		...DEFAULT_CONFIG,
 		workspace: {
 			path: path.dirname(sessionStorePath),
+		},
+		providers: {
+			anthropic: {
+				apiKey: "test-provider-key",
+			},
 		},
 		agent: {
 			...DEFAULT_CONFIG.agent,
@@ -71,6 +77,39 @@ function createMemorySessionStore() {
 		save: async () => undefined,
 		list: async () => [],
 		delete: async () => undefined,
+	};
+}
+
+function createMapSessionStore(initial: Array<{ key: string; messages?: Message[] }> = []) {
+	const records = new Map(
+		initial.map((entry) => [
+			entry.key,
+			{
+				key: entry.key,
+				createdAt: "2026-04-19T08:00:00.000Z",
+				updatedAt: "2026-04-19T08:00:00.000Z",
+				metadata: {},
+				messages: entry.messages ?? [],
+			},
+		]),
+	);
+
+	return {
+		load: async (key: string) => records.get(key) ?? null,
+		save: async (session: {
+			key: string;
+			createdAt: string;
+			updatedAt: string;
+			metadata: Record<string, unknown>;
+			messages: Message[];
+		}) => {
+			records.set(session.key, session);
+		},
+		list: async () => [],
+		delete: async (key: string) => {
+			records.delete(key);
+		},
+		records,
 	};
 }
 
@@ -118,6 +157,10 @@ describe("gateway runtime", () => {
 			createAgent: async () => ({
 				state: {
 					messages: agentMessages,
+				},
+				abort: () => undefined,
+				reset: () => {
+					agentMessages.length = 0;
 				},
 				prompt: async (input: string) => {
 					prompts.push(input);
@@ -204,6 +247,10 @@ describe("gateway runtime", () => {
 				state: {
 					messages,
 				},
+				abort: () => undefined,
+				reset: () => {
+					messages.length = 0;
+				},
 				prompt: async (input: string) => {
 					started.push(input);
 					if (input === "first") {
@@ -287,6 +334,8 @@ describe("gateway runtime", () => {
 				state: {
 					messages: [],
 				},
+				abort: () => undefined,
+				reset: () => undefined,
 				prompt: async () => {
 					started.push(sessionKey);
 					if (sessionKey === "telegram:1") {
@@ -408,6 +457,8 @@ describe("gateway runtime", () => {
 				state: {
 					messages: [],
 				},
+				abort: () => undefined,
+				reset: () => undefined,
 				prompt: async () => undefined,
 			}),
 		});
@@ -441,6 +492,8 @@ describe("gateway runtime", () => {
 				state: {
 					messages: [],
 				},
+				abort: () => undefined,
+				reset: () => undefined,
 				prompt: async () => {
 					throw new Error("boom");
 				},
@@ -462,6 +515,317 @@ describe("gateway runtime", () => {
 
 		await waitUntil(() => {
 			expect(published).toEqual([GATEWAY_RUNTIME_ERROR_MESSAGE]);
+		});
+		await runtime.stop();
+	});
+
+	it("handles /help without invoking the agent", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: string[] = [];
+		let created = false;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => {
+				created = true;
+				return {
+					state: {
+						messages: [],
+					},
+					abort: () => undefined,
+					reset: () => undefined,
+					prompt: async () => undefined,
+				};
+			},
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message.content);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/help",
+			timestamp: new Date(),
+		});
+
+		await waitUntil(() => {
+			expect(published).toEqual([buildHelpText()]);
+		});
+		await runtime.stop();
+
+		expect(created).toBe(false);
+	});
+
+	it("returns TS runtime status for /status without invoking the agent", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: string[] = [];
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMapSessionStore([
+				{
+					key: "telegram:42",
+					messages: [
+						{
+							role: "user",
+							content: "earlier",
+							timestamp: 1,
+						},
+					],
+				},
+			]),
+			createAgent: async () => {
+				throw new Error("agent should not be created for /status");
+			},
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message.content);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/status",
+			timestamp: new Date(),
+		});
+
+		await waitUntil(() => {
+			expect(published).toHaveLength(1);
+		});
+		await runtime.stop();
+
+		expect(published[0]).toContain("Provider: anthropic");
+		expect(published[0]).toContain("Model: claude-opus-4-5");
+		expect(published[0]).toContain("Provider auth: config");
+		expect(published[0]).toContain("Session: telegram:42");
+		expect(published[0]).toContain("Messages: 1");
+		expect(published[0]).toContain("Channel: telegram");
+		expect(published[0]).toContain("Chat: 42");
+	});
+
+	it("clears the session on /new and starts future prompts from a fresh transcript", async () => {
+		const bus = new InMemoryMessageBus();
+		const store = createMapSessionStore([
+			{
+				key: "telegram:42",
+				messages: [
+					{
+						role: "user",
+						content: "earlier",
+						timestamp: 1,
+					},
+				],
+			},
+		]);
+		const published: string[] = [];
+		const initialMessageCounts: number[] = [];
+		let agentFactoryCalls = 0;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: store,
+			createAgent: async ({ sessionKey, sessionStore }) => {
+				agentFactoryCalls += 1;
+				const loaded = await sessionStore.load(sessionKey);
+				const messages = [...(loaded?.messages ?? [])];
+				return {
+					state: {
+						messages,
+					},
+					abort: () => undefined,
+					reset: () => {
+						messages.length = 0;
+					},
+					prompt: async (input: string) => {
+						initialMessageCounts.push(messages.length);
+						messages.push({
+							role: "user",
+							content: input,
+							timestamp: Date.now(),
+						});
+						messages.push({
+							role: "assistant",
+							content: [{ type: "text", text: `reply:${input}` }],
+							api: "test",
+							provider: "anthropic",
+							model: "claude-opus-4-5",
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									total: 0,
+								},
+							},
+							stopReason: "endTurn",
+							timestamp: Date.now(),
+						});
+						await sessionStore.save({
+							key: sessionKey,
+							createdAt: loaded?.createdAt ?? "2026-04-19T08:00:00.000Z",
+							updatedAt: new Date().toISOString(),
+							metadata: loaded?.metadata ?? {},
+							messages,
+						});
+					},
+				};
+			},
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message.content);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "hello",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toContain("reply:hello");
+		});
+
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/new",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toContain("New session started.");
+		});
+
+		expect((await store.load("telegram:42"))?.messages).toEqual([]);
+
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "again",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toContain("reply:again");
+		});
+		await runtime.stop();
+
+		expect(initialMessageCounts).toEqual([1, 0]);
+		expect(agentFactoryCalls).toBe(2);
+	});
+
+	it("cancels an active prompt for /stop without publishing a fallback error", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: string[] = [];
+		let rejectPrompt: ((reason?: unknown) => void) | undefined;
+		let started = false;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [],
+				},
+				abort: () => {
+					rejectPrompt?.(new DOMException("Aborted", "AbortError"));
+				},
+				reset: () => undefined,
+				prompt: async () =>
+					new Promise<void>((_resolve, reject) => {
+						started = true;
+						rejectPrompt = reject;
+					}),
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message.content);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "long task",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(started).toBe(true);
+		});
+
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/stop",
+			timestamp: new Date(),
+		});
+
+		await waitUntil(() => {
+			expect(published).toEqual(["Stopped 1 task(s)."]);
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		await runtime.stop();
+
+		expect(published).toEqual(["Stopped 1 task(s)."]);
+	});
+
+	it("returns an idle response for /stop when no prompt is active", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: string[] = [];
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [],
+				},
+				abort: () => undefined,
+				reset: () => undefined,
+				prompt: async () => undefined,
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message.content);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/stop",
+			timestamp: new Date(),
+		});
+
+		await waitUntil(() => {
+			expect(published).toEqual(["No active task to stop."]);
 		});
 		await runtime.stop();
 	});

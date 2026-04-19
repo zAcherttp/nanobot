@@ -9,7 +9,11 @@ import {
 	resolveConfigPath,
 	resolveWorkspacePath,
 } from "./paths.js";
-import type { AppConfig, LogLevel } from "./schema.js";
+import type {
+	AppConfig,
+	LogLevel,
+	ProviderOverrideConfig,
+} from "./schema.js";
 
 dotenv.config({ quiet: true });
 
@@ -81,6 +85,16 @@ const appConfigSchema = z.object({
 				chatIds: [],
 			},
 		}),
+	providers: z
+		.record(
+			z.string(),
+			z.object({
+				apiKey: z.string().optional(),
+				apiBase: z.string().optional(),
+				headers: z.record(z.string(), z.string()).optional(),
+			}),
+		)
+		.default({}),
 	agent: z
 		.object({
 			provider: z
@@ -164,6 +178,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 			chatIds: [],
 		},
 	},
+	providers: {},
 	agent: {
 		provider: DEFAULT_AGENT_PROVIDER,
 		modelId: DEFAULT_AGENT_MODEL_ID,
@@ -193,7 +208,8 @@ export async function loadConfig(
 ): Promise<{ config: AppConfig; path: string }> {
 	const resolvedPath = resolveConfigPath(options.cliConfigPath);
 	const raw = await fs.readFile(resolvedPath, "utf8");
-	const parsed = appConfigSchema.parse(JSON.parse(raw));
+	const parsedRaw = JSON.parse(raw) as Record<string, unknown>;
+	const parsed = appConfigSchema.parse(resolveConfigEnvVars(parsedRaw));
 
 	const envToken = process.env.NANOBOT_TS_TELEGRAM_TOKEN;
 	const envLogLevel = process.env.NANOBOT_TS_LOG_LEVEL as LogLevel | undefined;
@@ -226,9 +242,10 @@ export async function loadConfig(
 				token:
 					options.telegramTokenOverride ??
 					envToken ??
-					parsed.channels.telegram.token,
+				parsed.channels.telegram.token,
 			},
 		},
+		providers: normalizeProviderOverrides(parsed.providers),
 		logging: {
 			level: envLogLevel ?? parsed.logging.level,
 		},
@@ -277,4 +294,66 @@ export async function saveConfig(
 		"utf8",
 	);
 	return resolvedPath;
+}
+
+function resolveConfigEnvVars(value: Record<string, unknown>): Record<string, unknown> {
+	return resolveEnvVars(value) as Record<string, unknown>;
+}
+
+function resolveEnvVars(value: unknown): unknown {
+	if (typeof value === "string") {
+		return value.replace(
+			/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g,
+			(_match, name: string) => {
+				const resolved = process.env[name];
+				if (resolved === undefined) {
+					throw new Error(
+						`Environment variable '${name}' referenced in config is not set.`,
+					);
+				}
+				return resolved;
+			},
+		);
+	}
+
+	if (Array.isArray(value)) {
+		return value.map((entry) => resolveEnvVars(entry));
+	}
+
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, entry]) => [
+				key,
+				resolveEnvVars(entry),
+			]),
+		);
+	}
+
+	return value;
+}
+
+function normalizeProviderOverrides(
+	providers: Record<
+		string,
+		{
+			apiKey?: string | undefined;
+			apiBase?: string | undefined;
+			headers?: Record<string, string> | undefined;
+		}
+	>,
+): AppConfig["providers"] {
+	return Object.fromEntries(
+		Object.entries(providers).map(([provider, settings]) => [
+			provider,
+			{
+				...(settings.apiKey?.trim() ? { apiKey: settings.apiKey.trim() } : {}),
+				...(settings.apiBase?.trim()
+					? { apiBase: settings.apiBase.trim() }
+					: {}),
+				...(settings.headers && Object.keys(settings.headers).length > 0
+					? { headers: settings.headers }
+					: {}),
+			} satisfies ProviderOverrideConfig,
+		]),
+	);
 }

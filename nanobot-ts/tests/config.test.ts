@@ -34,6 +34,8 @@ describe("config", () => {
 		delete process.env.NANOBOT_TS_TELEGRAM_TOKEN;
 		delete process.env.NANOBOT_TS_LOG_LEVEL;
 		delete process.env.NANOBOT_TS_WORKSPACE;
+		delete process.env.ANTHROPIC_API_KEY;
+		delete process.env.NANOBOT_TEST_PROVIDER_KEY;
 	});
 
 	it("loads valid config from json", async () => {
@@ -48,6 +50,7 @@ describe("config", () => {
 		expect(loaded.config.channels.telegram.chatIds).toEqual([]);
 		expect(loaded.config.channels.telegram.enabled).toBe(false);
 		expect(loaded.config.agent.provider).toBe(DEFAULT_AGENT_PROVIDER);
+		expect(loaded.config.providers).toEqual({});
 		expect(loaded.config.agent.modelId).toBe(DEFAULT_AGENT_MODEL_ID);
 		expect(loaded.config.agent.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
 		expect(loaded.config.agent.temperature).toBe(DEFAULT_AGENT_TEMPERATURE);
@@ -70,6 +73,53 @@ describe("config", () => {
 
 		expect(loaded.config.channels.telegram.token).toBe("env-token");
 		expect(loaded.config.logging.level).toBe("debug");
+	});
+
+	it("resolves ${ENV_VAR} placeholders in config values", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-config-"));
+		const configPath = path.join(dir, DEFAULT_CONFIG_FILENAME);
+		process.env.NANOBOT_TEST_PROVIDER_KEY = "from-env";
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				...DEFAULT_CONFIG,
+				providers: {
+					anthropic: {
+						apiKey: "${NANOBOT_TEST_PROVIDER_KEY}",
+						apiBase: "https://example.test",
+					},
+				},
+			}),
+			"utf8",
+		);
+
+		const loaded = await loadConfig({ cliConfigPath: configPath });
+
+		expect(loaded.config.providers.anthropic).toEqual({
+			apiKey: "from-env",
+			apiBase: "https://example.test",
+		});
+	});
+
+	it("throws when an ${ENV_VAR} placeholder is unset", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-config-"));
+		const configPath = path.join(dir, DEFAULT_CONFIG_FILENAME);
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				...DEFAULT_CONFIG,
+				providers: {
+					anthropic: {
+						apiKey: "${MISSING_ENV_KEY}",
+					},
+				},
+			}),
+			"utf8",
+		);
+
+		await expect(loadConfig({ cliConfigPath: configPath })).rejects.toThrow(
+			"Environment variable 'MISSING_ENV_KEY'",
+		);
 	});
 
 	it("throws clear error when token is missing", async () => {
@@ -162,6 +212,15 @@ describe("config", () => {
 					token: "real-token",
 					allowFrom: ["123", "456"],
 					chatIds: ["123", "456"],
+				},
+			},
+			providers: {
+				anthropic: {
+					apiKey: "secret",
+					apiBase: "https://anthropic.example.test",
+					headers: {
+						"x-app": "nanobot-ts",
+					},
 				},
 			},
 			agent: {

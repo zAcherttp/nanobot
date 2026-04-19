@@ -8,14 +8,23 @@ import {
 	type SessionStore,
 } from "../agent/loop.js";
 import type { MessageBus } from "../channels/bus.js";
-import type { InboundChannelMessage } from "../channels/types.js";
+import type {
+	InboundChannelMessage,
+	OutboundChannelMessage,
+} from "../channels/types.js";
+import {
+	CommandRouter,
+	registerBuiltinCommands,
+	type CommandContext,
+	type CommandSessionSummary,
+} from "../command/index.js";
 import type { Logger } from "../utils/logging.js";
 
 export const GATEWAY_RUNTIME_ERROR_MESSAGE =
 	"Sorry, I encountered an error.";
 
 export interface GatewayRuntimeAgent
-	extends Pick<Agent, "prompt" | "state"> {}
+	extends Pick<Agent, "prompt" | "state" | "abort" | "reset"> {}
 
 export interface GatewayRuntimeAgentFactoryOptions {
 	config: ResolvedAgentRuntimeConfig;
@@ -35,6 +44,12 @@ export interface GatewayRuntimeOptions {
 	sessionStore: SessionStore;
 	tools?: AgentTool[];
 	createAgent?: GatewayRuntimeAgentFactory;
+	commandRouter?: CommandRouter;
+}
+
+interface ActivePromptTask {
+	agent: GatewayRuntimeAgent;
+	aborted: boolean;
 }
 
 export function resolveChannelSessionKey(
@@ -51,9 +66,11 @@ export function resolveChannelSessionKey(
 export class GatewayRuntime {
 	private readonly tools: AgentTool[];
 	private readonly createAgent: GatewayRuntimeAgentFactory;
+	private readonly commandRouter: CommandRouter;
 	private readonly agents = new Map<string, Promise<GatewayRuntimeAgent>>();
 	private readonly sessionChains = new Map<string, Promise<void>>();
 	private readonly activeTasks = new Set<Promise<void>>();
+	private readonly activePromptTasks = new Map<string, ActivePromptTask>();
 	private unsubscribeInbound: (() => void) | undefined;
 	private running = false;
 
@@ -68,6 +85,7 @@ export class GatewayRuntime {
 					sessionStore: agentOptions.sessionStore,
 					tools: agentOptions.tools,
 				}));
+		this.commandRouter = options.commandRouter ?? createDefaultCommandRouter();
 	}
 
 	isRunning(): boolean {
@@ -85,7 +103,9 @@ export class GatewayRuntime {
 				return;
 			}
 
-			const task = this.enqueue(message);
+			const task = this.commandRouter.isPriority(message.content)
+				? this.handlePriorityCommand(message)
+				: this.enqueue(message);
 			this.activeTasks.add(task);
 			void task.finally(() => {
 				this.activeTasks.delete(task);
@@ -104,6 +124,7 @@ export class GatewayRuntime {
 		await Promise.allSettled([...this.activeTasks]);
 		this.agents.clear();
 		this.sessionChains.clear();
+		this.activePromptTasks.clear();
 	}
 
 	private enqueue(message: InboundChannelMessage): Promise<void> {
@@ -134,10 +155,37 @@ export class GatewayRuntime {
 		sessionKey: string,
 	): Promise<void> {
 		try {
+			const commandReply = await this.dispatchCommand(message, sessionKey);
+			if (commandReply) {
+				await this.options.bus.publishOutbound(commandReply);
+				return;
+			}
+
 			const agent = await this.getAgent(sessionKey);
 			const previousAssistant = getLatestAssistantMessage(agent.state.messages);
+			const activePromptTask: ActivePromptTask = {
+				agent,
+				aborted: false,
+			};
+			this.activePromptTasks.set(sessionKey, activePromptTask);
 
-			await agent.prompt(message.content);
+			try {
+				await agent.prompt(message.content);
+			} catch (error) {
+				if (activePromptTask.aborted || isAbortError(error)) {
+					this.options.logger.info("Gateway runtime aborted active prompt", {
+						channel: message.channel,
+						chatId: message.chatId,
+						sessionKey,
+					});
+					return;
+				}
+				throw error;
+			} finally {
+				if (this.activePromptTasks.get(sessionKey) === activePromptTask) {
+					this.activePromptTasks.delete(sessionKey);
+				}
+			}
 
 			const latestAssistant = getLatestAssistantMessage(agent.state.messages);
 			if (!latestAssistant || latestAssistant === previousAssistant) {
@@ -180,6 +228,33 @@ export class GatewayRuntime {
 		}
 	}
 
+	private async handlePriorityCommand(
+		message: InboundChannelMessage,
+	): Promise<void> {
+		const sessionKey = resolveChannelSessionKey(message);
+		try {
+			const reply = await this.dispatchPriorityCommand(message, sessionKey);
+			if (!reply) {
+				return;
+			}
+
+			await this.options.bus.publishOutbound(reply);
+		} catch (error) {
+			this.options.logger.error("Gateway runtime failed to process priority command", {
+				error,
+				channel: message.channel,
+				chatId: message.chatId,
+				sessionKey,
+			});
+			await this.options.bus.publishOutbound({
+				channel: message.channel,
+				chatId: message.chatId,
+				content: GATEWAY_RUNTIME_ERROR_MESSAGE,
+				role: "assistant",
+			});
+		}
+	}
+
 	private getAgent(sessionKey: string): Promise<GatewayRuntimeAgent> {
 		const existing = this.agents.get(sessionKey);
 		if (existing) {
@@ -200,4 +275,121 @@ export class GatewayRuntime {
 		this.agents.set(sessionKey, created);
 		return created;
 	}
+
+	private async dispatchPriorityCommand(
+		message: InboundChannelMessage,
+		sessionKey: string,
+	): Promise<OutboundChannelMessage | null> {
+		return this.commandRouter.dispatchPriority(
+			await this.createCommandContext(message, sessionKey),
+		);
+	}
+
+	private async dispatchCommand(
+		message: InboundChannelMessage,
+		sessionKey: string,
+	): Promise<OutboundChannelMessage | null> {
+		return this.commandRouter.dispatch(
+			await this.createCommandContext(message, sessionKey),
+		);
+	}
+
+	private async createCommandContext(
+		message: InboundChannelMessage,
+		sessionKey: string,
+	): Promise<CommandContext> {
+		return {
+			msg: message,
+			key: sessionKey,
+			raw: message.content,
+			session: await this.getSessionSummary(sessionKey),
+			runtime: {
+				provider: this.options.config.provider,
+				modelId: this.options.config.modelId,
+				providerAuthSource: this.options.config.providerAuthSource,
+			},
+			stopActiveTask: async () => this.stopActiveTask(sessionKey),
+			clearSession: async () => this.clearSession(sessionKey),
+		};
+	}
+
+	private async getSessionSummary(
+		sessionKey: string,
+	): Promise<CommandSessionSummary | null> {
+		const agent = await this.getExistingAgent(sessionKey);
+		if (agent) {
+			return {
+				messageCount: agent.state.messages.length,
+			};
+		}
+
+		const session = await this.options.sessionStore.load(sessionKey);
+		if (!session) {
+			return null;
+		}
+
+		return {
+			messageCount: session.messages.length,
+		};
+	}
+
+	private async clearSession(sessionKey: string): Promise<void> {
+		const existingSession = await this.options.sessionStore.load(sessionKey);
+		const now = new Date().toISOString();
+		await this.options.sessionStore.save({
+			key: sessionKey,
+			createdAt: existingSession?.createdAt ?? now,
+			updatedAt: now,
+			metadata: existingSession?.metadata ?? {},
+			messages: [],
+		});
+
+		const existingAgent = await this.getExistingAgent(sessionKey);
+		if (existingAgent) {
+			existingAgent.abort();
+			existingAgent.reset();
+		}
+		this.agents.delete(sessionKey);
+		this.activePromptTasks.delete(sessionKey);
+	}
+
+	private async stopActiveTask(sessionKey: string): Promise<boolean> {
+		const activePromptTask = this.activePromptTasks.get(sessionKey);
+		if (!activePromptTask) {
+			return false;
+		}
+
+		activePromptTask.aborted = true;
+		activePromptTask.agent.abort();
+		return true;
+	}
+
+	private async getExistingAgent(
+		sessionKey: string,
+	): Promise<GatewayRuntimeAgent | null> {
+		const existing = this.agents.get(sessionKey);
+		if (!existing) {
+			return null;
+		}
+
+		try {
+			return await existing;
+		} catch {
+			return null;
+		}
+	}
+}
+
+function createDefaultCommandRouter(): CommandRouter {
+	const router = new CommandRouter();
+	registerBuiltinCommands(router);
+	return router;
+}
+
+function isAbortError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(error.name === "AbortError" ||
+			error.message.toLowerCase().includes("abort"))
+	);
 }

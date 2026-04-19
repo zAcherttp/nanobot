@@ -17,6 +17,14 @@ export interface TelegramConfig {
 	chatIds: string[];
 }
 
+export interface ProviderOverrideConfig {
+	apiKey?: string;
+	apiBase?: string;
+	headers?: Record<string, string>;
+}
+
+export type ProvidersConfig = Record<string, ProviderOverrideConfig>;
+
 export interface AgentConfig {
 	provider: KnownProvider;
 	modelId: string;
@@ -47,6 +55,7 @@ export interface AppConfig {
 	channels: {
 		telegram: TelegramConfig;
 	};
+	providers: ProvidersConfig;
 	agent: AgentConfig;
 	logging: LoggingConfig;
 }

@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	Type,
 } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
 	createSessionAgent,
@@ -29,6 +29,37 @@ describe("agent runtime", () => {
 		expect(resolved.modelId).toBe("claude-opus-4-5");
 		expect(resolved.model.provider).toBe("anthropic");
 		expect(resolved.model.id).toBe("claude-opus-4-5");
+	});
+
+	it("prefers config provider settings over env and applies model overrides", () => {
+		process.env.ANTHROPIC_API_KEY = "env-key";
+
+		const resolved = resolveAgentRuntimeConfig({
+			...DEFAULT_CONFIG,
+			providers: {
+				anthropic: {
+					apiKey: "config-key",
+					apiBase: "https://anthropic.example.test",
+					headers: {
+						"x-app": "nanobot-ts",
+					},
+				},
+			},
+		});
+
+		expect(resolved.apiKey).toBe("config-key");
+		expect(resolved.model.baseUrl).toBe("https://anthropic.example.test");
+		expect(resolved.model.headers).toMatchObject({
+			"x-app": "nanobot-ts",
+		});
+	});
+
+	it("falls back to the provider env variable when config omits apiKey", () => {
+		process.env.ANTHROPIC_API_KEY = "env-key";
+
+		const resolved = resolveAgentRuntimeConfig(DEFAULT_CONFIG);
+
+		expect(resolved.apiKey).toBe("env-key");
 	});
 
 	it("fails clearly when the modelId does not exist for the provider", () => {

@@ -18,25 +18,18 @@ describe("cli", () => {
 			"agent",
 			"status",
 			"channels",
-			"provider",
 		]);
 	});
 
-	it("exposes python-like channel and provider subcommands", () => {
+	it("exposes python-like channel subcommands", () => {
 		const program = createCli("nanobot-ts");
 		const channels = program.commands.find(
 			(command) => command.name() === "channels",
-		);
-		const provider = program.commands.find(
-			(command) => command.name() === "provider",
 		);
 
 		expect(channels?.commands.map((command) => command.name())).toEqual([
 			"status",
 			"message",
-		]);
-		expect(provider?.commands.map((command) => command.name())).toEqual([
-			"login",
 		]);
 	});
 

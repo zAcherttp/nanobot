@@ -10,9 +10,6 @@ import {
 } from "@mariozechner/pi-agent-core";
 import {
 	type Api,
-	getEnvApiKey,
-	getModel,
-	getModels,
 	type Message,
 	type Model,
 	streamSimple,
@@ -25,11 +22,17 @@ import {
 	type SessionRecord,
 	type SessionStore,
 } from "./session-store.js";
+import {
+	providerRequiresApiKey,
+	resolveProviderModel,
+} from "../providers/runtime.js";
 
 export interface ResolvedAgentRuntimeConfig {
 	provider: AppConfig["agent"]["provider"];
 	modelId: string;
 	model: Model<Api>;
+	apiKey?: string;
+	providerAuthSource: "config" | "env" | "none";
 	systemPrompt: string;
 	thinkingLevel: ThinkingLevel;
 	temperature: number;
@@ -60,11 +63,17 @@ export const DEFAULT_SESSION_KEY = "sdk:default";
 export function resolveAgentRuntimeConfig(
 	config: AppConfig,
 ): ResolvedAgentRuntimeConfig {
-	const model = resolveModel(config.agent.provider, config.agent.modelId);
+	const { model, providerConfig } = resolveProviderModel(
+		config,
+		config.agent.provider,
+		config.agent.modelId,
+	);
 	return {
 		provider: config.agent.provider,
 		modelId: config.agent.modelId,
 		model,
+		...(providerConfig.apiKey ? { apiKey: providerConfig.apiKey } : {}),
+		providerAuthSource: providerConfig.apiKeySource,
 		systemPrompt: config.agent.systemPrompt,
 		thinkingLevel: config.agent.thinkingLevel,
 		temperature: config.agent.temperature,
@@ -92,6 +101,15 @@ export async function createSessionAgent(
 		options.streamFn ?? streamSimple,
 		options.config,
 	);
+	if (
+		!options.getApiKey &&
+		!options.config.apiKey &&
+		providerRequiresApiKey(options.config.provider)
+	) {
+		throw new Error(
+			`Missing API key for provider '${options.config.provider}'. Configure providers.${options.config.provider}.apiKey or set the provider environment variable.`,
+		);
+	}
 
 	const agentOptions: AgentOptions = {
 		initialState: {
@@ -110,14 +128,11 @@ export async function createSessionAgent(
 		...(options.transformContext
 			? { transformContext: options.transformContext }
 			: {}),
-		...((options.getApiKey ??
-		((provider: string) =>
-			getEnvApiKey(provider as AppConfig["agent"]["provider"])))
+		...(options.getApiKey || options.config.apiKey
 			? {
 					getApiKey:
 						options.getApiKey ??
-						((provider: string) =>
-							getEnvApiKey(provider as AppConfig["agent"]["provider"])),
+						((_provider: string) => options.config.apiKey),
 				}
 			: {}),
 		...(options.onPayload ? { onPayload: options.onPayload } : {}),
@@ -207,19 +222,6 @@ export function createSessionRecord(
 		metadata: {},
 		messages: sanitizeMessagesForPersistence(messages),
 	};
-}
-
-function resolveModel(
-	provider: AppConfig["agent"]["provider"],
-	modelId: string,
-): Model<Api> {
-	const model = getModels(provider).find(
-		(candidate) => candidate.id === modelId,
-	);
-	if (!model) {
-		throw new Error(`Unknown modelId '${modelId}' for provider '${provider}'.`);
-	}
-	return getModel(provider, modelId as never) as Model<Api>;
 }
 
 function withRuntimeDefaults(

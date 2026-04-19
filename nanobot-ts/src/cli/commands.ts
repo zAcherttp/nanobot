@@ -18,6 +18,7 @@ import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
 import { resolveConfigPath, resolveWorkspacePath } from "../config/paths.js";
 import type { AppConfig, LogLevel } from "../config/schema.js";
 import { GatewayRuntime } from "../gateway/index.js";
+import { resolveProviderConfig } from "../providers/runtime.js";
 import { createLogger } from "../utils/logging.js";
 
 const require = createRequire(import.meta.url);
@@ -27,7 +28,6 @@ const { version: CLI_VERSION } = require("../../package.json") as {
 
 const EXIT_COMMANDS = new Set(["/quit", "/q"]);
 const EXIT_COMMANDS_TEXT = Array.from(EXIT_COMMANDS).join(", ");
-const SUPPORTED_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
 const ANSI = {
 	reset: "\u001B[0m",
 	brightBlue: "\u001B[94m",
@@ -127,19 +127,6 @@ export function createCli(programName = "nanobot-ts"): Command {
 		.option("-c, --config <config>", "Path to config file")
 		.action(async (messageParts: string[], options: { config?: string }) => {
 			await runChannelsMessage(messageParts.join(" "), options.config);
-		});
-
-	const provider = program.command("provider").description("Manage providers");
-
-	provider
-		.command("login")
-		.description("Authenticate with an OAuth provider.")
-		.argument(
-			"<provider>",
-			"OAuth provider (e.g. 'openai-codex', 'github-copilot')",
-		)
-		.action(async (providerName: string) => {
-			await runProviderLogin(providerName);
 		});
 
 	return program;
@@ -343,6 +330,11 @@ async function runStatus(): Promise<void> {
 		"Model",
 		accent(`${config.agent.provider}/${config.agent.modelId}`),
 	);
+	const providerConfig = resolveProviderConfig(config, config.agent.provider);
+	printKeyValue(
+		"Provider auth",
+		accent(providerConfig.apiKeySource),
+	);
 	printKeyValue(
 		"Telegram",
 		accent(config.channels.telegram.enabled ? "enabled" : "disabled"),
@@ -384,20 +376,6 @@ async function runChannelsMessage(
 
 	printInfo(
 		`Delivered system message to ${accent(String(delivered))} chat(s).`,
-	);
-}
-
-async function runProviderLogin(providerName: string): Promise<void> {
-	if (!SUPPORTED_PROVIDERS.has(providerName)) {
-		throw new Error(
-			`Unknown OAuth provider: ${providerName}. Supported: ${[
-				...SUPPORTED_PROVIDERS,
-			].join(", ")}`,
-		);
-	}
-
-	throw new Error(
-		`Provider login for ${providerName} is not implemented in nanobot-ts yet.`,
 	);
 }
 
