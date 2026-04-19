@@ -4,7 +4,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
-	DEFAULT_AGENT_MODEL,
+	DEFAULT_AGENT_MAX_RETRY_DELAY_MS,
+	DEFAULT_AGENT_MAX_TOKENS,
+	DEFAULT_AGENT_MODEL_ID,
+	DEFAULT_AGENT_PROVIDER,
+	DEFAULT_AGENT_SESSION_STORE_PATH,
+	DEFAULT_AGENT_SYSTEM_PROMPT,
+	DEFAULT_AGENT_TEMPERATURE,
 	DEFAULT_CONFIG,
 	DEFAULT_CONFIG_FILENAME,
 	DEFAULT_GATEWAY_PORT,
@@ -12,6 +18,7 @@ import {
 	isSenderAllowed,
 	loadConfig,
 	saveConfig,
+	validateRuntimeConfig,
 } from "../src/config/loader.js";
 import {
 	detectRuntimeMode,
@@ -40,7 +47,14 @@ describe("config", () => {
 		expect(loaded.config.channels.telegram.allowFrom).toEqual([]);
 		expect(loaded.config.channels.telegram.chatIds).toEqual([]);
 		expect(loaded.config.channels.telegram.enabled).toBe(false);
-		expect(loaded.config.agent.model).toBe(DEFAULT_AGENT_MODEL);
+		expect(loaded.config.agent.provider).toBe(DEFAULT_AGENT_PROVIDER);
+		expect(loaded.config.agent.modelId).toBe(DEFAULT_AGENT_MODEL_ID);
+		expect(loaded.config.agent.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
+		expect(loaded.config.agent.temperature).toBe(DEFAULT_AGENT_TEMPERATURE);
+		expect(loaded.config.agent.maxTokens).toBe(DEFAULT_AGENT_MAX_TOKENS);
+		expect(loaded.config.agent.maxRetryDelayMs).toBe(
+			DEFAULT_AGENT_MAX_RETRY_DELAY_MS,
+		);
 		expect(loaded.config.gateway.port).toBe(DEFAULT_GATEWAY_PORT);
 		expect(loaded.config.logging.level).toBe("info");
 	});
@@ -132,6 +146,9 @@ describe("config", () => {
 		expect(loaded.config.workspace.path).toBe(
 			path.join(configDir, "workspace"),
 		);
+		expect(loaded.config.agent.sessionStore.path).toBe(
+			path.join(configDir, "workspace", DEFAULT_AGENT_SESSION_STORE_PATH),
+		);
 	});
 
 	it("saveConfig writes a modified config payload", async () => {
@@ -147,6 +164,11 @@ describe("config", () => {
 					chatIds: ["123", "456"],
 				},
 			},
+			agent: {
+				...DEFAULT_CONFIG.agent,
+				provider: "anthropic",
+				modelId: "claude-sonnet-4-20250514",
+			},
 			logging: {
 				level: "debug" as const,
 			},
@@ -156,5 +178,19 @@ describe("config", () => {
 		const raw = await readFile(configPath, "utf8");
 
 		expect(JSON.parse(raw)).toEqual(nextConfig);
+	});
+
+	it("rejects unsupported agent providers", () => {
+		const invalidConfig = {
+			...DEFAULT_CONFIG,
+			agent: {
+				...DEFAULT_CONFIG.agent,
+				provider: "missing-provider",
+			},
+		};
+
+		expect(() =>
+			validateRuntimeConfig(invalidConfig as typeof DEFAULT_CONFIG),
+		).toThrow("Unsupported agent provider");
 	});
 });

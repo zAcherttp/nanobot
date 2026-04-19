@@ -6,11 +6,18 @@ import { createInterface } from "node:readline/promises";
 
 import { Command } from "commander";
 
-import { AgentLoop } from "../agent/loop.js";
+import {
+	createSessionAgent,
+	FileSessionStore,
+	getLatestAssistantText,
+	resolveAgentRuntimeConfig,
+	resolveSessionStorePath,
+} from "../agent/loop.js";
 import { ChannelManager } from "../channels/manager.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
 import { resolveConfigPath, resolveWorkspacePath } from "../config/paths.js";
 import type { AppConfig, LogLevel } from "../config/schema.js";
+import { GatewayRuntime } from "../gateway/index.js";
 import { createLogger } from "../utils/logging.js";
 
 const require = createRequire(import.meta.url);
@@ -236,6 +243,13 @@ async function runGateway(
 	const level: LogLevel = options.verbose ? "debug" : config.logging.level;
 	const logger = createLogger(level);
 	const manager = new ChannelManager(config, logger);
+	const agentConfig = resolveAgentRuntimeConfig(config);
+	const runtime = new GatewayRuntime({
+		bus: manager.getBus(),
+		logger,
+		config: agentConfig,
+		sessionStore: new FileSessionStore(agentConfig.sessionStorePath),
+	});
 
 	if (!manager.hasEnabledChannels()) {
 		throw new Error(
@@ -248,11 +262,13 @@ async function runGateway(
 	);
 	printKeyValue("Workspace", accentPath(config.workspace.path));
 
+	await runtime.start();
 	await manager.start();
 	printInfo("Gateway is running. Press Ctrl+C to stop.");
 
 	await waitForShutdown(async (signal) => {
 		printNote(`Received ${signal}, stopping gateway...`);
+		await runtime.stop();
 		await manager.stop();
 		printInfo("Gateway stopped.");
 	});
@@ -266,11 +282,15 @@ async function runAgent(options: AgentOptions): Promise<void> {
 		printNote("Runtime log streaming is not implemented in nanobot-ts yet.");
 	}
 
-	const agent = new AgentLoop();
 	const sessionId = options.session ?? "cli:direct";
+	const agent = await createSessionAgent({
+		config: resolveAgentRuntimeConfig(config),
+		sessionKey: sessionId,
+	});
 
 	if (options.message) {
-		const reply = await agent.reply(sessionId, options.message);
+		await agent.prompt(options.message);
+		const reply = getLatestAssistantText(agent.state.messages);
 		if (reply.trim()) {
 			printAgentReply(reply);
 		}
@@ -300,7 +320,8 @@ async function runAgent(options: AgentOptions): Promise<void> {
 				break;
 			}
 
-			const reply = await agent.reply(sessionId, input);
+			await agent.prompt(input);
+			const reply = getLatestAssistantText(agent.state.messages);
 			if (reply.trim()) {
 				printAgentReply(reply);
 			}
@@ -318,7 +339,10 @@ async function runStatus(): Promise<void> {
 	console.log("");
 	printKeyValue("Config", accentPath(configPath));
 	printKeyValue("Workspace", accentPath(config.workspace.path));
-	printKeyValue("Model", accent(config.agent.model));
+	printKeyValue(
+		"Model",
+		accent(`${config.agent.provider}/${config.agent.modelId}`),
+	);
 	printKeyValue(
 		"Telegram",
 		accent(config.channels.telegram.enabled ? "enabled" : "disabled"),
@@ -384,10 +408,21 @@ async function loadRuntimeConfig(
 	const loaded = await loadRequiredConfig(options.config, programName);
 
 	if (options.workspace) {
+		const previousWorkspace = loaded.config.workspace.path;
 		loaded.config.workspace.path = resolveWorkspacePath(
 			options.workspace,
 			path.dirname(loaded.path),
 		);
+		if (loaded.config.agent.sessionStore.type === "file") {
+			const relativeSessionStorePath = path.relative(
+				previousWorkspace,
+				loaded.config.agent.sessionStore.path,
+			);
+			loaded.config.agent.sessionStore.path = resolveSessionStorePath(
+				loaded.config.workspace.path,
+				relativeSessionStorePath,
+			);
+		}
 	}
 
 	return loaded;

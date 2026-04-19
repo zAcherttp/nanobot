@@ -1,3 +1,9 @@
+import type {
+	ThinkingLevel,
+	ToolExecutionMode,
+} from "@mariozechner/pi-agent-core";
+import type { KnownProvider, Transport } from "@mariozechner/pi-ai";
+
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 
 export interface WorkspaceConfig {
@@ -12,8 +18,19 @@ export interface TelegramConfig {
 }
 
 export interface AgentConfig {
-	mode: "stub";
-	model: string;
+	provider: KnownProvider;
+	modelId: string;
+	systemPrompt: string;
+	thinkingLevel: ThinkingLevel;
+	temperature: number;
+	maxTokens: number;
+	toolExecution: ToolExecutionMode;
+	transport: Transport;
+	maxRetryDelayMs: number;
+	sessionStore: {
+		type: "file";
+		path: string;
+	};
 }
 
 export interface GatewayConfig {

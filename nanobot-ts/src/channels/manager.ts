@@ -1,6 +1,6 @@
 import type { AppConfig } from "../config/schema.js";
 import type { Logger } from "../utils/logging.js";
-import { BaseChannel } from "./base.js";
+import type { BaseChannel } from "./base.js";
 import { InMemoryMessageBus, type MessageBus } from "./bus.js";
 import { createTelegramChannelFactory } from "./telegram.js";
 import type { ChannelSnapshot, OutboundChannelMessage } from "./types.js";
@@ -30,6 +30,8 @@ export class ChannelManager {
 	private readonly channels = new Map<string, BaseChannel<unknown>>();
 	private readonly factories: ChannelFactory[];
 	private readonly factoryByName: Map<string, ChannelFactory>;
+	private unsubscribeOutbound: (() => void) | undefined;
+	private started = false;
 
 	constructor(
 		private readonly config: AppConfig,
@@ -78,12 +80,29 @@ export class ChannelManager {
 	}
 
 	async start(): Promise<void> {
+		if (this.started) {
+			return;
+		}
+
+		this.started = true;
+		this.unsubscribeOutbound = this.bus.subscribeOutbound(async (message) => {
+			await this.dispatchOutbound(message);
+		});
+
 		for (const channel of this.channels.values()) {
 			await channel.start();
 		}
 	}
 
 	async stop(): Promise<void> {
+		if (!this.started) {
+			return;
+		}
+
+		this.started = false;
+		this.unsubscribeOutbound?.();
+		this.unsubscribeOutbound = undefined;
+
 		const activeChannels = Array.from(this.channels.values()).reverse();
 		for (const channel of activeChannels) {
 			await channel.stop();
@@ -91,18 +110,7 @@ export class ChannelManager {
 	}
 
 	async send(message: OutboundChannelMessage): Promise<number> {
-		const factory = this.factoryByName.get(message.channel);
-		if (!factory) {
-			throw new Error(`Unknown channel: ${message.channel}.`);
-		}
-
-		const channel = this.channels.get(message.channel);
-		if (!channel) {
-			throw new Error(`Channel ${message.channel} is disabled.`);
-		}
-
-		await this.bus.publishOutbound(message);
-		return channel.send(message);
+		return this.sendDirect(message);
 	}
 
 	async broadcast(
@@ -114,12 +122,40 @@ export class ChannelManager {
 
 		let delivered = 0;
 		for (const [channelName] of this.channels) {
-			delivered += await this.send({
+			delivered += await this.sendDirect({
 				...message,
 				channel: channelName,
 			});
 		}
 
 		return delivered;
+	}
+
+	private async dispatchOutbound(
+		message: OutboundChannelMessage,
+	): Promise<number> {
+		const channel = this.getChannelForMessage(message);
+		return channel.send(message);
+	}
+
+	private async sendDirect(message: OutboundChannelMessage): Promise<number> {
+		const channel = this.getChannelForMessage(message);
+		return channel.send(message);
+	}
+
+	private getChannelForMessage(
+		message: OutboundChannelMessage,
+	): BaseChannel<unknown> {
+		const factory = this.factoryByName.get(message.channel);
+		if (!factory) {
+			throw new Error(`Unknown channel: ${message.channel}.`);
+		}
+
+		const channel = this.channels.get(message.channel);
+		if (!channel) {
+			throw new Error(`Channel ${message.channel} is disabled.`);
+		}
+
+		return channel;
 	}
 }

@@ -1,8 +1,6 @@
 import type { InboundChannelMessage, OutboundChannelMessage } from "./types.js";
 
-type MessageListener<TMessage> = (
-	message: TMessage,
-) => void | Promise<void>;
+type MessageListener<TMessage> = (message: TMessage) => void | Promise<void>;
 
 export interface MessageBus {
 	publishInbound(message: InboundChannelMessage): Promise<void>;

@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { BaseChannel } from "../src/channels/base.js";
 import {
-	ChannelManager,
 	type ChannelFactory,
+	ChannelManager,
 } from "../src/channels/manager.js";
 import type { OutboundChannelMessage } from "../src/channels/types.js";
 import { DEFAULT_CONFIG } from "../src/config/loader.js";
@@ -176,11 +176,6 @@ describe("channel manager", () => {
 				},
 			],
 		});
-		const outbound: OutboundChannelMessage[] = [];
-
-		manager.getBus().subscribeOutbound(async (message) => {
-			outbound.push(message);
-		});
 
 		await expect(
 			manager.send({
@@ -195,7 +190,45 @@ describe("channel manager", () => {
 		).resolves.toBe(1);
 
 		expect(channel.sentMessages).toHaveLength(1);
-		expect(channel.sentMessages[0]).toEqual(outbound[0]);
+		expect(channel.sentMessages[0]).toEqual(
+			expect.objectContaining({
+				channel: "enabled",
+				chatId: "room-1",
+				content: "deploy finished",
+				role: "system",
+			}),
+		);
+	});
+
+	it("dispatches outbound bus messages while running", async () => {
+		const channel = new FakeChannel("enabled");
+		const manager = new ChannelManager(createConfig(), LOGGER, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "hello from bus",
+			role: "assistant",
+		});
+		await manager.stop();
+
+		expect(channel.sentMessages).toEqual([
+			expect.objectContaining({
+				channel: "enabled",
+				chatId: "room-1",
+				content: "hello from bus",
+			}),
+		]);
 	});
 
 	it("handles disabled and unknown channel targets", async () => {

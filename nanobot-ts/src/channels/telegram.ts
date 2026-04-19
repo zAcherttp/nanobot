@@ -139,9 +139,7 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		});
 	}
 
-	async receiveUnsupportedMessage(
-		ctx: TelegramReplyContext,
-	): Promise<void> {
+	async receiveUnsupportedMessage(ctx: TelegramReplyContext): Promise<void> {
 		if (!isPrivateChat(ctx)) {
 			return;
 		}

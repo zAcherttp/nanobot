@@ -1,6 +1,11 @@
 export type ChannelName = string;
 export type ChannelRole = "system" | "user" | "assistant";
-export type ChannelStatus = "idle" | "starting" | "running" | "stopping" | "error";
+export type ChannelStatus =
+	| "idle"
+	| "starting"
+	| "running"
+	| "stopping"
+	| "error";
 
 export interface ChannelMediaAttachment {
 	kind: string;
