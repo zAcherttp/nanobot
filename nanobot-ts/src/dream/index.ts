@@ -1,8 +1,8 @@
 export {
 	type DreamRunResult,
+	type DreamRuntimeConfig,
 	DreamService,
 	type DreamServiceOptions,
-	type DreamRuntimeConfig,
 } from "./service.js";
 export {
 	createDreamTools,

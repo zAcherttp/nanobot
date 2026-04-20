@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { Agent, AgentEvent, AgentTool } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
 import { Command } from "commander";
 
@@ -24,7 +24,11 @@ import {
 } from "../background/index.js";
 import { ChannelManager } from "../channels/manager.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
-import { resolveConfigPath, resolveWorkspacePath } from "../config/paths.js";
+import {
+	resolveConfigPath,
+	resolveLogsPath,
+	resolveWorkspacePath,
+} from "../config/paths.js";
 import type { AppConfig, LogLevel } from "../config/schema.js";
 import {
 	type CronSchedule,
@@ -44,7 +48,12 @@ import {
 } from "../providers/faux.js";
 import { resolveProviderConfig } from "../providers/runtime.js";
 import { syncWorkspaceTemplates } from "../templates/index.js";
-import { createLogger } from "../utils/logging.js";
+import {
+	createLogger,
+	createRuntimeLogStore,
+	type LogEntry,
+	type RuntimeLogStore,
+} from "../utils/logging.js";
 
 const require = createRequire(import.meta.url);
 const { version: CLI_VERSION } = require("../../package.json") as {
@@ -76,6 +85,14 @@ interface AgentOptions extends CommonOptions {
 	session?: string;
 	markdown?: boolean;
 	logs?: boolean;
+}
+
+interface LogsOptions extends CommonOptions {
+	limit?: number;
+	level?: LogLevel;
+	component?: string;
+	session?: string;
+	follow?: boolean;
 }
 
 interface CronAddOptions extends CommonOptions {
@@ -145,6 +162,41 @@ export function createCli(programName = "nanobot-ts"): Command {
 		.description("Show nanobot status.")
 		.action(async () => {
 			await runStatus();
+		});
+
+	const logs = program.command("logs").description("Inspect runtime logs");
+
+	logs
+		.command("show")
+		.description("Show recent runtime log entries.")
+		.option("-c, --config <config>", "Path to config file")
+		.option("-n, --limit <limit>", "Number of entries to show", parseInteger)
+		.option("--level <level>", "Minimum log level")
+		.option("--component <component>", "Filter by component")
+		.option("--session <session>", "Filter by session key")
+		.action(async (options: LogsOptions) => {
+			await runLogsShow(options);
+		});
+
+	logs
+		.command("tail")
+		.description("Tail recent runtime log entries.")
+		.option("-c, --config <config>", "Path to config file")
+		.option("-n, --limit <limit>", "Number of recent entries", parseInteger)
+		.option("--level <level>", "Minimum log level")
+		.option("--component <component>", "Filter by component")
+		.option("--session <session>", "Filter by session key")
+		.option("-f, --follow", "Continue polling for new entries", false)
+		.action(async (options: LogsOptions) => {
+			await runLogsTail(options);
+		});
+
+	logs
+		.command("clear")
+		.description("Clear persisted runtime logs.")
+		.option("-c, --config <config>", "Path to config file")
+		.action(async (options: { config?: string }) => {
+			await runLogsClear(options.config);
 		});
 
 	const channels = program.command("channels").description("Manage channels");
@@ -361,14 +413,27 @@ async function runGateway(
 	programName: string,
 	options: GatewayOptions,
 ): Promise<void> {
-	const { config } = await loadRuntimeConfig(programName, options);
+	const { config, path: configPath } = await loadRuntimeConfig(
+		programName,
+		options,
+	);
 	const port = options.port ?? config.gateway.port;
 
 	await ensureWorkspace(config.workspace.path);
 	await syncWorkspaceTemplates(config.workspace.path);
 
 	const level: LogLevel = options.verbose ? "debug" : config.logging.level;
-	const logger = createLogger(level);
+	const { logger } = createRuntimeLogger(config, configPath, {
+		level,
+		console: options.verbose || config.logging.console,
+		component: "gateway",
+	});
+	logger.info("Gateway starting", {
+		component: "gateway",
+		event: "start",
+		port,
+		workspacePath: config.workspace.path,
+	});
 	const manager = new ChannelManager(config, logger);
 	const agentConfig = resolveAgentRuntimeConfig(config);
 	const dreamService = createDreamService(config, logger, agentConfig);
@@ -443,26 +508,40 @@ async function runGateway(
 
 	await waitForShutdown(async (signal) => {
 		printNote(`Received ${signal}, stopping gateway...`);
+		logger.info("Gateway stopping", {
+			component: "gateway",
+			event: "stop",
+			signal,
+		});
 		await autoCompactor.stop();
 		await heartbeatService.stop();
 		await cronService.stop();
 		await runtime.stop();
 		await manager.stop();
+		logger.info("Gateway stopped", {
+			component: "gateway",
+			event: "stopped",
+		});
 		printInfo("Gateway stopped.");
 	});
 }
 
 async function runAgent(options: AgentOptions): Promise<void> {
-	const { config } = await loadRuntimeConfig("nanobot-ts", options);
+	const { config, path: configPath } = await loadRuntimeConfig(
+		"nanobot-ts",
+		options,
+	);
 	await ensureWorkspace(config.workspace.path);
 	await syncWorkspaceTemplates(config.workspace.path);
 
-	if (options.logs) {
-		printNote("Runtime log streaming is not implemented in nanobot-ts yet.");
-	}
+	const { logger } = createRuntimeLogger(config, configPath, {
+		level: options.logs ? "debug" : config.logging.level,
+		console: options.logs || config.logging.console,
+		component: "agent",
+	});
 
 	const sessionId = options.session ?? "cli:direct";
-	const cronService = createCronService(config, createLogger("fatal"), {
+	const cronService = createCronService(config, logger, {
 		agentConfig: resolveAgentRuntimeConfig(config),
 	});
 	const agent = await createSessionAgent({
@@ -473,9 +552,21 @@ async function runAgent(options: AgentOptions): Promise<void> {
 			cronService,
 		}),
 	});
+	subscribeAgentLogs(agent, logger, sessionId);
 
 	if (options.message) {
+		logger.info("Agent turn started", {
+			component: "agent",
+			event: "turn_start",
+			sessionKey: sessionId,
+			contentPreview: options.message,
+		});
 		await agent.prompt(options.message);
+		logger.info("Agent turn completed", {
+			component: "agent",
+			event: "turn_end",
+			sessionKey: sessionId,
+		});
 		const reply = getLatestAssistantText(agent.state.messages);
 		if (reply.trim()) {
 			printAgentReply(reply);
@@ -506,7 +597,18 @@ async function runAgent(options: AgentOptions): Promise<void> {
 				break;
 			}
 
+			logger.info("Agent turn started", {
+				component: "agent",
+				event: "turn_start",
+				sessionKey: sessionId,
+				contentPreview: input,
+			});
 			await agent.prompt(input);
+			logger.info("Agent turn completed", {
+				component: "agent",
+				event: "turn_end",
+				sessionKey: sessionId,
+			});
 			const reply = getLatestAssistantText(agent.state.messages);
 			if (reply.trim()) {
 				printAgentReply(reply);
@@ -862,6 +964,83 @@ async function runHeartbeatStatus(configPath?: string): Promise<void> {
 	);
 }
 
+async function runLogsShow(options: LogsOptions): Promise<void> {
+	const { store } = await openRuntimeLogStore(options.config);
+	const entries = store.readRecent({
+		limit: options.limit ?? 50,
+		...(options.level ? { level: parseLogLevel(options.level) } : {}),
+		...(options.component ? { component: options.component } : {}),
+		...(options.session ? { sessionKey: options.session } : {}),
+	});
+
+	printSection("Runtime Logs");
+	if (entries.length === 0) {
+		printNote("No runtime log entries.");
+		return;
+	}
+	for (const entry of entries) {
+		printLogEntry(entry);
+	}
+}
+
+async function runLogsTail(options: LogsOptions): Promise<void> {
+	const { store } = await openRuntimeLogStore(options.config);
+	const printed = new Set<number>();
+	const printCurrent = () => {
+		const entries = store.readRecent({
+			limit: options.limit ?? 20,
+			...(options.level ? { level: parseLogLevel(options.level) } : {}),
+			...(options.component ? { component: options.component } : {}),
+			...(options.session ? { sessionKey: options.session } : {}),
+		});
+		for (const entry of entries) {
+			if (printed.has(entry.id)) {
+				continue;
+			}
+			printed.add(entry.id);
+			printLogEntry(entry);
+		}
+	};
+
+	printCurrent();
+	if (!options.follow) {
+		return;
+	}
+
+	await new Promise<void>((resolve) => {
+		const timer = setInterval(printCurrent, 1_000);
+		const stop = () => {
+			clearInterval(timer);
+			process.off("SIGINT", stop);
+			process.off("SIGTERM", stop);
+			resolve();
+		};
+		process.on("SIGINT", stop);
+		process.on("SIGTERM", stop);
+	});
+}
+
+async function runLogsClear(configPath?: string): Promise<void> {
+	const { store } = await openRuntimeLogStore(configPath);
+	store.clear();
+	printInfo(`Cleared runtime logs at ${accentPath(store.logFilePath)}`);
+}
+
+async function openRuntimeLogStore(configPath?: string): Promise<{
+	config: AppConfig;
+	store: RuntimeLogStore;
+}> {
+	const loaded = await loadRequiredConfig(configPath);
+	const store = createRuntimeLogStore(resolveLogsPath(loaded.path), {
+		maxEntries: loaded.config.logging.maxEntries,
+		maxPreviewChars: loaded.config.logging.maxPreviewChars,
+	});
+	return {
+		config: loaded.config,
+		store,
+	};
+}
+
 async function loadRuntimeConfig(
 	programName: string,
 	options: CommonOptions,
@@ -962,6 +1141,63 @@ function createRuntimeSessionStore(
 	});
 }
 
+function createRuntimeLogger(
+	config: AppConfig,
+	configPath: string,
+	options: {
+		level?: LogLevel;
+		console?: boolean;
+		component?: string;
+	} = {},
+): { logger: ReturnType<typeof createLogger>; store: RuntimeLogStore } {
+	const store = createRuntimeLogStore(resolveLogsPath(configPath), {
+		maxEntries: config.logging.maxEntries,
+		maxPreviewChars: config.logging.maxPreviewChars,
+	});
+	const logger = createLogger(options.level ?? config.logging.level, {
+		store,
+		console: options.console ?? config.logging.console,
+		...(options.component ? { component: options.component } : {}),
+		maxPreviewChars: config.logging.maxPreviewChars,
+	});
+	return { logger, store };
+}
+
+function subscribeAgentLogs(
+	agent: Agent,
+	logger: ReturnType<typeof createLogger>,
+	sessionKey: string,
+): void {
+	agent.subscribe((event: AgentEvent) => {
+		if (event.type === "tool_execution_start") {
+			logger.info("Agent tool call started", {
+				component: "agent",
+				event: "tool_start",
+				sessionKey,
+				toolName: event.toolName,
+			});
+			return;
+		}
+		if (event.type === "tool_execution_end") {
+			logger.info("Agent tool call completed", {
+				component: "agent",
+				event: event.isError ? "tool_error" : "tool_end",
+				sessionKey,
+				toolName: event.toolName,
+				isError: event.isError,
+			});
+			return;
+		}
+		if (event.type === "agent_end") {
+			logger.debug("Agent model turn settled", {
+				component: "agent",
+				event: "agent_end",
+				sessionKey,
+			});
+		}
+	});
+}
+
 function getRuntimeTools(
 	config: AppConfig,
 	options: {
@@ -1055,6 +1291,19 @@ function createCronService(
 							chatId: payload.to,
 							content: reply,
 							role: "assistant",
+						});
+						logger.info("Cron delivered job response", {
+							component: "cron",
+							event: "deliver",
+							jobId: job.id,
+							channel: payload.channel,
+							chatId: payload.to,
+						});
+					} else {
+						logger.info("Cron delivery suppressed by evaluator", {
+							component: "cron",
+							event: "suppress",
+							jobId: job.id,
 						});
 					}
 				}
@@ -1235,6 +1484,21 @@ function parseInteger(value: string): number {
 	return parsed;
 }
 
+function parseLogLevel(value: string): LogLevel {
+	const normalized = value.toLowerCase();
+	if (
+		normalized === "fatal" ||
+		normalized === "error" ||
+		normalized === "warn" ||
+		normalized === "info" ||
+		normalized === "debug" ||
+		normalized === "trace"
+	) {
+		return normalized;
+	}
+	throw new Error(`Invalid log level: ${value}`);
+}
+
 function resolveProgramName(argv: string[]): string {
 	const executable = argv[1];
 	if (!executable) {
@@ -1303,6 +1567,17 @@ function printKeyValue(label: string, value: string): void {
 function printAgentReply(reply: string): void {
 	console.log(
 		`${ANSI.brightBlue}nanobot:${ANSI.reset} ${ANSI.brightCyan}${reply}${ANSI.reset}`,
+	);
+}
+
+function printLogEntry(entry: LogEntry): void {
+	const timestamp = new Date(entry.timestamp).toISOString();
+	const context = [entry.component, entry.event, entry.sessionKey, entry.jobId]
+		.filter(Boolean)
+		.join(" ");
+	const prefix = context ? `${entry.level} ${context}` : entry.level;
+	console.log(
+		`${ANSI.dimCyan}${timestamp}${ANSI.reset} ${ANSI.cyan}${prefix}:${ANSI.reset} ${ANSI.brightCyan}${entry.message}${ANSI.reset}`,
 	);
 }
 

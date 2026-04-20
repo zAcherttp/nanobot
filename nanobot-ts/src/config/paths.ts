@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 export const DEFAULT_DATA_DIR_NAME = ".nanobot";
 export const DEFAULT_CONFIG_FILENAME = "config.json";
 export const DEFAULT_WORKSPACE_PATH = "workspace";
+export const DEFAULT_LOGS_DIR_NAME = "logs";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(MODULE_DIR, "..", "..");
@@ -58,6 +59,13 @@ export function resolveWorkspacePath(
 		return resolveFromBase(configured, baseDir);
 	}
 	return path.join(getDefaultDataDir(), DEFAULT_WORKSPACE_PATH);
+}
+
+export function resolveLogsPath(configPath?: string): string {
+	return path.join(
+		path.dirname(resolveConfigPath(configPath)),
+		DEFAULT_LOGS_DIR_NAME,
+	);
 }
 
 function isSourceCheckout(): boolean {

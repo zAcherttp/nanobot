@@ -82,9 +82,9 @@ describe("telegram channel", () => {
 	});
 
 	it("normalizes Telegram-safe Dream aliases before publishing inbound commands", async () => {
-		expect(normalizeTelegramCommandText("/dream_log@nanobot_test deadbeef")).toBe(
-			"/dream-log deadbeef",
-		);
+		expect(
+			normalizeTelegramCommandText("/dream_log@nanobot_test deadbeef"),
+		).toBe("/dream-log deadbeef");
 		expect(
 			normalizeTelegramCommandText("/dream_restore@nanobot_test deadbeef"),
 		).toBe("/dream-restore deadbeef");

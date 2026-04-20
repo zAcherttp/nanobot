@@ -88,12 +88,33 @@ export class ChannelManager {
 		}
 
 		this.started = true;
+		this.logger.info("Channel manager started", {
+			component: "channel",
+			event: "manager_start",
+			channels: Array.from(this.channels.keys()),
+		});
 		this.unsubscribeOutbound = this.bus.subscribeOutbound(async (message) => {
-			await this.dispatchOutbound(message);
+			try {
+				await this.dispatchOutbound(message);
+			} catch (error) {
+				this.logger.error("Channel outbound dispatch failed", {
+					component: "channel",
+					event: "outbound_error",
+					channel: message.channel,
+					chatId: message.chatId,
+					error,
+				});
+				throw error;
+			}
 		});
 
 		for (const channel of this.channels.values()) {
 			await channel.start();
+			this.logger.info("Channel started", {
+				component: "channel",
+				event: "start",
+				channel: channel.name,
+			});
 		}
 	}
 
@@ -109,8 +130,17 @@ export class ChannelManager {
 		const activeChannels = Array.from(this.channels.values()).reverse();
 		for (const channel of activeChannels) {
 			await channel.stop();
+			this.logger.info("Channel stopped", {
+				component: "channel",
+				event: "stop",
+				channel: channel.name,
+			});
 		}
 		this.bufferedStreams.clear();
+		this.logger.info("Channel manager stopped", {
+			component: "channel",
+			event: "manager_stop",
+		});
 	}
 
 	async send(message: OutboundChannelMessage): Promise<number> {

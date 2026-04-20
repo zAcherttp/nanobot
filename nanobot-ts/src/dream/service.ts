@@ -1,3 +1,7 @@
+import type {
+	ThinkingLevel,
+	ToolExecutionMode,
+} from "@mariozechner/pi-agent-core";
 import { Agent, type AgentEvent } from "@mariozechner/pi-agent-core";
 import {
 	type Api,
@@ -11,15 +15,10 @@ import {
 	type TextContent,
 	type Transport,
 } from "@mariozechner/pi-ai";
-
 import type { AppConfig } from "../config/schema.js";
-import {
-	type HistoryEntry,
-	type MemoryStore,
-} from "../memory/index.js";
+import type { HistoryEntry, MemoryStore } from "../memory/index.js";
 import { renderTemplate } from "../templates/index.js";
 import type { Logger } from "../utils/logging.js";
-import type { ThinkingLevel, ToolExecutionMode } from "@mariozechner/pi-agent-core";
 import { createDreamTools, DREAM_EDIT_FILE_TOOL } from "./tools.js";
 
 export interface DreamRuntimeConfig {
@@ -77,27 +76,38 @@ export class DreamService {
 		this.maxIterations = options.maxIterations ?? 10;
 		this.complete = options.complete ?? completeSimple;
 		this.phaseTwoRunner =
-			options.runPhaseTwo ?? ((analysis, fileContext) =>
-				this.runPhaseTwo(analysis, fileContext));
+			options.runPhaseTwo ??
+			((analysis, fileContext) => this.runPhaseTwo(analysis, fileContext));
 		this.now = options.now ?? (() => new Date());
 	}
 
 	async run(): Promise<DreamRunResult> {
-		const next = this.pending.catch(() => ({
-			processed: false,
-			cursor: 0,
-			entries: 0,
-			edits: 0,
-		})).then(() => this.runOnce());
+		const next = this.pending
+			.catch(() => ({
+				processed: false,
+				cursor: 0,
+				entries: 0,
+				edits: 0,
+			}))
+			.then(() => this.runOnce());
 		this.pending = next;
 		return next;
 	}
 
 	private async runOnce(): Promise<DreamRunResult> {
 		await this.ensureReady();
+		this.options.logger?.info("Dream run started", {
+			component: "dream",
+			event: "start",
+		});
 		const lastCursor = await this.options.store.getLastDreamCursor();
 		const entries = await this.options.store.readUnprocessedHistory(lastCursor);
 		if (entries.length === 0) {
+			this.options.logger?.info("Dream skipped empty history", {
+				component: "dream",
+				event: "skip_empty",
+				cursor: lastCursor,
+			});
 			return {
 				processed: false,
 				cursor: lastCursor,
@@ -111,9 +121,23 @@ export class DreamService {
 		const fileContext = await this.buildFileContext();
 		let analysis: string;
 		try {
+			this.options.logger?.info("Dream phase 1 started", {
+				component: "dream",
+				event: "phase1_start",
+				entries: batch.length,
+			});
 			analysis = await this.runPhaseOne(historyText, fileContext);
+			this.options.logger?.info("Dream phase 1 completed", {
+				component: "dream",
+				event: "phase1_end",
+				analysisPreview: analysis,
+			});
 		} catch (error) {
-			this.options.logger?.error("Dream phase 1 failed", { error });
+			this.options.logger?.error("Dream phase 1 failed", {
+				component: "dream",
+				event: "phase1_error",
+				error,
+			});
 			return {
 				processed: false,
 				cursor: lastCursor,
@@ -124,15 +148,30 @@ export class DreamService {
 
 		let edits = 0;
 		try {
+			this.options.logger?.info("Dream phase 2 started", {
+				component: "dream",
+				event: "phase2_start",
+			});
 			edits = await this.phaseTwoRunner(analysis, fileContext);
+			this.options.logger?.info("Dream phase 2 completed", {
+				component: "dream",
+				event: "phase2_end",
+				edits,
+			});
 		} catch (error) {
-			this.options.logger?.error("Dream phase 2 failed", { error });
+			this.options.logger?.error("Dream phase 2 failed", {
+				component: "dream",
+				event: "phase2_error",
+				error,
+			});
 		}
 
 		const cursor = batch.at(-1)?.cursor ?? lastCursor;
 		await this.options.store.setLastDreamCursor(cursor);
 		await this.options.store.compactHistory();
 		this.options.logger?.info("Dream processed memory history", {
+			component: "dream",
+			event: "end",
 			cursor,
 			entries: batch.length,
 			edits,

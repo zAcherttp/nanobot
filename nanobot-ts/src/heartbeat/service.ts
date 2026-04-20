@@ -97,6 +97,8 @@ export class HeartbeatService {
 		this.running = true;
 		this.scheduleNextTick();
 		this.options.logger.info("Heartbeat service started", {
+			component: "heartbeat",
+			event: "start",
 			intervalSeconds: this.options.intervalSeconds,
 		});
 	}
@@ -107,20 +109,40 @@ export class HeartbeatService {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
+		this.options.logger.info("Heartbeat service stopped", {
+			component: "heartbeat",
+			event: "stop",
+		});
 	}
 
 	async triggerNow(): Promise<string | null> {
 		const content = await this.readHeartbeatFile();
 		if (!content?.trim()) {
+			this.options.logger.debug("Heartbeat skipped empty task file", {
+				component: "heartbeat",
+				event: "skip_empty",
+			});
 			return null;
 		}
 
 		const decision = await this.decideTasks(content);
+		this.options.logger.info("Heartbeat decision completed", {
+			component: "heartbeat",
+			event: "decision",
+			action: decision.action,
+			tasksPreview: decision.tasks,
+		});
 		if (decision.action !== "run" || !decision.tasks.trim()) {
 			return null;
 		}
 
 		const target = await this.resolveTarget();
+		this.options.logger.info("Heartbeat execution started", {
+			component: "heartbeat",
+			event: "run_start",
+			channel: target?.channel,
+			chatId: target?.chatId,
+		});
 		this.activeExecutions += 1;
 		let response: string;
 		try {
@@ -128,6 +150,11 @@ export class HeartbeatService {
 		} finally {
 			this.activeExecutions -= 1;
 		}
+		this.options.logger.info("Heartbeat execution completed", {
+			component: "heartbeat",
+			event: "run_end",
+			responsePreview: response,
+		});
 		if (!response.trim()) {
 			return response;
 		}
@@ -136,8 +163,17 @@ export class HeartbeatService {
 			const shouldNotify = await this.evaluateResult(decision.tasks, response);
 			if (shouldNotify) {
 				await this.onNotify(response, target);
+				this.options.logger.info("Heartbeat response delivered", {
+					component: "heartbeat",
+					event: "notify",
+					channel: target.channel,
+					chatId: target.chatId,
+				});
 			} else {
-				this.options.logger.info("Heartbeat response suppressed by evaluator");
+				this.options.logger.info("Heartbeat response suppressed by evaluator", {
+					component: "heartbeat",
+					event: "suppress",
+				});
 			}
 		}
 
@@ -159,6 +195,8 @@ export class HeartbeatService {
 			await this.triggerNow();
 		} catch (error) {
 			this.options.logger.error("Heartbeat tick failed", {
+				component: "heartbeat",
+				event: "error",
 				error,
 			});
 		} finally {

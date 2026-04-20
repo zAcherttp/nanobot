@@ -119,9 +119,14 @@ describe("heartbeat service", () => {
 		await service.stop();
 
 		expect(triggerNow).toHaveBeenCalledTimes(2);
-		expect(LOGGER.error).toHaveBeenCalledWith("Heartbeat tick failed", {
-			error: expect.any(Error),
-		});
+		expect(LOGGER.error).toHaveBeenCalledWith(
+			"Heartbeat tick failed",
+			expect.objectContaining({
+				component: "heartbeat",
+				event: "error",
+				error: expect.any(Error),
+			}),
+		);
 	});
 
 	it("returns null when HEARTBEAT.md is missing", async () => {

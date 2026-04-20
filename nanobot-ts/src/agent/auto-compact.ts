@@ -1,7 +1,10 @@
 import type { Message } from "@mariozechner/pi-ai";
 
 import type { Logger } from "../utils/logging.js";
-import type { Consolidator, ConsolidatorArchiveResult } from "./consolidator.js";
+import type {
+	Consolidator,
+	ConsolidatorArchiveResult,
+} from "./consolidator.js";
 import {
 	retainRecentLegalSuffix,
 	type SessionMetadata,
@@ -65,6 +68,8 @@ export class AutoCompactor {
 		this.running = true;
 		this.scheduleNextSweep();
 		this.logger?.info("Auto-compact service started", {
+			component: "autoCompact",
+			event: "start",
 			idleCompactAfterMinutes: this.idleCompactAfterMinutes,
 		});
 	}
@@ -75,6 +80,10 @@ export class AutoCompactor {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
+		this.logger?.info("Auto-compact service stopped", {
+			component: "autoCompact",
+			event: "stop",
+		});
 	}
 
 	async sweepOnce(): Promise<void> {
@@ -83,6 +92,11 @@ export class AutoCompactor {
 		}
 
 		const sessions = await this.sessionStore.list();
+		this.logger?.debug("Auto-compact sweep started", {
+			component: "autoCompact",
+			event: "sweep_start",
+			sessions: sessions.length,
+		});
 		await Promise.all(
 			sessions.map(async (summary) => {
 				if (this.archiving.has(summary.key)) {
@@ -107,6 +121,11 @@ export class AutoCompactor {
 		if (!session) {
 			return null;
 		}
+		this.logger?.debug("Auto-compact prepare session", {
+			component: "autoCompact",
+			event: "prepare",
+			sessionKey,
+		});
 
 		if (this.isExpired(session.updatedAt)) {
 			session = await this.compactSession(session, { consumeSummary: false });
@@ -164,9 +183,22 @@ export class AutoCompactor {
 
 			if (archiveMessages.length > 0) {
 				try {
+					this.logger?.info("Auto-compact archive started", {
+						component: "autoCompact",
+						event: "archive_start",
+						sessionKey: session.key,
+						messages: archiveMessages.length,
+					});
 					archiveResult = await this.consolidator.archive(archiveMessages);
+					this.logger?.info("Auto-compact archive completed", {
+						component: "autoCompact",
+						event: "archive_end",
+						sessionKey: session.key,
+					});
 				} catch (error) {
 					this.logger?.warn("Auto-compact archive failed", {
+						component: "autoCompact",
+						event: "archive_error",
 						sessionKey: session.key,
 						error: String(error),
 					});
@@ -256,6 +288,8 @@ export class AutoCompactor {
 			void this.sweepOnce()
 				.catch((error) => {
 					this.logger?.warn("Auto-compact sweep failed", {
+						component: "autoCompact",
+						event: "sweep_error",
 						error: String(error),
 					});
 				})
@@ -300,7 +334,10 @@ function parseUpdatedAt(updatedAt: unknown): Date | null {
 	return Number.isFinite(parsed.getTime()) ? parsed : null;
 }
 
-function normalizeConsolidatedStart(value: number, messageCount: number): number {
+function normalizeConsolidatedStart(
+	value: number,
+	messageCount: number,
+): number {
 	if (!Number.isFinite(value)) {
 		return 0;
 	}
@@ -308,4 +345,3 @@ function normalizeConsolidatedStart(value: number, messageCount: number): number
 	const normalized = Math.max(0, Math.trunc(value));
 	return Math.min(normalized, Math.max(0, messageCount));
 }
-

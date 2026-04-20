@@ -72,9 +72,7 @@ async function handleDream(
 	const started = await context.triggerDream?.();
 	return createCommandReply(
 		context,
-		started
-			? "Dreaming..."
-			: "Dream is not available in this runtime.",
+		started ? "Dreaming..." : "Dream is not available in this runtime.",
 	);
 }
 

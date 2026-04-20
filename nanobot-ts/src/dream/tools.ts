@@ -98,7 +98,10 @@ function replaceExactText(
 	return current.replace(oldText, newText);
 }
 
-function resolveWorkspaceFile(workspacePath: string, requestedPath: string): string {
+function resolveWorkspaceFile(
+	workspacePath: string,
+	requestedPath: string,
+): string {
 	const workspace = path.resolve(workspacePath);
 	const resolved = path.isAbsolute(requestedPath)
 		? path.resolve(requestedPath)

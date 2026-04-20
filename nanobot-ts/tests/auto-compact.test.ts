@@ -2,8 +2,8 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-	fauxAssistantMessage,
 	type Context,
+	fauxAssistantMessage,
 	type Message,
 	registerFauxProvider,
 	streamSimple,
@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	AutoCompactor,
-	createSessionAgent,
 	type ConsolidatorArchiveResult,
+	createSessionAgent,
 	FileSessionStore,
 	getLatestAssistantText,
 	resolveAgentRuntimeConfig,
@@ -122,14 +122,18 @@ class MapSessionStore implements SessionStore {
 function createCompactor(options: {
 	store: SessionStore;
 	idleCompactAfterMinutes?: number;
-	archive?: (messages: readonly Message[]) => Promise<ConsolidatorArchiveResult | null>;
+	archive?: (
+		messages: readonly Message[],
+	) => Promise<ConsolidatorArchiveResult | null>;
 	isSessionActive?: (sessionKey: string) => boolean | Promise<boolean>;
 	now?: Date;
 }) {
-	const archive = options.archive ?? vi.fn(async () => ({
-		content: "archived summary",
-		signals: {},
-	}));
+	const archive =
+		options.archive ??
+		vi.fn(async () => ({
+			content: "archived summary",
+			signals: {},
+		}));
 	return {
 		archive,
 		compactor: new AutoCompactor({
@@ -351,9 +355,9 @@ describe("auto-compact - archival behavior", () => {
 		await compactor.sweepOnce();
 
 		expect(archive).toHaveBeenCalledWith(messages.slice(4, 6));
-		expect((await store.load("telegram:1"))?.messages.map((m) => m.timestamp)).toEqual([
-			6, 7, 8, 9, 10, 11, 12, 13,
-		]);
+		expect(
+			(await store.load("telegram:1"))?.messages.map((m) => m.timestamp),
+		).toEqual([6, 7, 8, 9, 10, 11, 12, 13]);
 	});
 
 	it("suppresses exact '(nothing)' summaries", async () => {
@@ -378,7 +382,9 @@ describe("auto-compact - archival behavior", () => {
 
 		await compactor.sweepOnce();
 
-		expect((await store.load("telegram:1"))?.metadata._last_summary).toBeUndefined();
+		expect(
+			(await store.load("telegram:1"))?.metadata._last_summary,
+		).toBeUndefined();
 	});
 
 	it("keeps the recent suffix if archival throws", async () => {
@@ -401,9 +407,9 @@ describe("auto-compact - archival behavior", () => {
 
 		await compactor.sweepOnce();
 
-		expect((await store.load("telegram:1"))?.messages.map((m) => m.timestamp)).toEqual([
-			2, 3, 4, 5, 6, 7, 8, 9,
-		]);
+		expect(
+			(await store.load("telegram:1"))?.messages.map((m) => m.timestamp),
+		).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
 	});
 
 	it("preserves runtime checkpoint metadata", async () => {
@@ -431,7 +437,9 @@ describe("auto-compact - archival behavior", () => {
 
 		await compactor.sweepOnce();
 
-		expect((await store.load("telegram:1"))?.metadata.runtimeCheckpoint).toEqual(
+		expect(
+			(await store.load("telegram:1"))?.metadata.runtimeCheckpoint,
+		).toEqual(
 			expect.objectContaining({
 				pendingToolCalls: [{ id: "tc-1", name: "probe" }],
 			}),
@@ -458,8 +466,12 @@ describe("auto-compact - resume lifecycle", () => {
 
 		expect(prepared?.summaryContext).toContain("Inactive for 60 minutes.");
 		expect(prepared?.summaryContext).toContain("Earlier useful facts.");
-		expect((await store.load("telegram:1"))?.metadata._last_summary).toBeUndefined();
-		expect((await compactor.prepareSession("telegram:1"))?.summaryContext).toBeUndefined();
+		expect(
+			(await store.load("telegram:1"))?.metadata._last_summary,
+		).toBeUndefined();
+		expect(
+			(await compactor.prepareSession("telegram:1"))?.summaryContext,
+		).toBeUndefined();
 	});
 
 	it("injects summary context into direct agent runs without persisting it", async () => {
@@ -567,7 +579,10 @@ describe("auto-compact - background service", () => {
 
 	it("does not start if idleCompactAfterMinutes is missing or 0", async () => {
 		const store = new MapSessionStore();
-		const { compactor } = createCompactor({ store, idleCompactAfterMinutes: 0 });
+		const { compactor } = createCompactor({
+			store,
+			idleCompactAfterMinutes: 0,
+		});
 
 		await compactor.start();
 		expect(compactor.isRunning()).toBe(false);

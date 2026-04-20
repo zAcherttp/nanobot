@@ -146,11 +146,24 @@ export class GatewayRuntime {
 		}
 
 		this.running = true;
+		this.options.logger.info("Gateway runtime started", {
+			component: "gateway",
+			event: "runtime_start",
+		});
 		this.unsubscribeInbound = this.options.bus.subscribeInbound((message) => {
 			if (!this.running) {
 				return;
 			}
 
+			const sessionKey = resolveChannelSessionKey(message);
+			this.options.logger.info("Gateway inbound message accepted", {
+				component: "gateway",
+				event: "inbound",
+				channel: message.channel,
+				chatId: message.chatId,
+				sessionKey,
+				contentPreview: message.content,
+			});
 			const task = this.commandRouter.isPriority(message.content)
 				? this.handlePriorityCommand(message)
 				: this.enqueue(message);
@@ -173,6 +186,10 @@ export class GatewayRuntime {
 		this.agents.clear();
 		this.sessionChains.clear();
 		this.activePromptTasks.clear();
+		this.options.logger.info("Gateway runtime stopped", {
+			component: "gateway",
+			event: "runtime_stop",
+		});
 	}
 
 	private enqueue(message: InboundChannelMessage): Promise<void> {
@@ -206,6 +223,14 @@ export class GatewayRuntime {
 		try {
 			const commandReply = await this.dispatchCommand(message, sessionKey);
 			if (commandReply) {
+				this.options.logger.info("Gateway command handled", {
+					component: "gateway",
+					event: "command",
+					channel: message.channel,
+					chatId: message.chatId,
+					sessionKey,
+					command: message.content.trim(),
+				});
 				await this.options.bus.publishOutbound(commandReply);
 				return;
 			}
@@ -217,6 +242,13 @@ export class GatewayRuntime {
 				aborted: false,
 			};
 			this.activePromptTasks.set(sessionKey, activePromptTask);
+			this.options.logger.info("Gateway agent turn started", {
+				component: "agent",
+				event: "turn_start",
+				channel: message.channel,
+				chatId: message.chatId,
+				sessionKey,
+			});
 			promptStreamState = {
 				message,
 				sessionKey,
@@ -239,6 +271,8 @@ export class GatewayRuntime {
 				if (activePromptTask.aborted || isAbortError(error)) {
 					await this.finalizeOpenStream(promptStreamState);
 					this.options.logger.info("Gateway runtime aborted active prompt", {
+						component: "agent",
+						event: "abort",
 						channel: message.channel,
 						chatId: message.chatId,
 						sessionKey,
@@ -255,6 +289,14 @@ export class GatewayRuntime {
 
 			await this.finalizeOpenStream(promptStreamState);
 			if (promptStreamState.sawAnyTextDelta) {
+				this.options.logger.info("Gateway agent turn streamed", {
+					component: "agent",
+					event: "turn_end",
+					channel: message.channel,
+					chatId: message.chatId,
+					sessionKey,
+					streamed: true,
+				});
 				return;
 			}
 
@@ -268,6 +310,14 @@ export class GatewayRuntime {
 				return;
 			}
 
+			this.options.logger.info("Gateway agent turn completed", {
+				component: "agent",
+				event: "turn_end",
+				channel: message.channel,
+				chatId: message.chatId,
+				sessionKey,
+				contentPreview: reply,
+			});
 			await this.options.bus.publishOutbound({
 				channel: message.channel,
 				chatId: message.chatId,
@@ -279,6 +329,8 @@ export class GatewayRuntime {
 				await this.finalizeOpenStream(promptStreamState);
 			}
 			this.options.logger.error("Gateway runtime failed to process message", {
+				component: "agent",
+				event: "turn_error",
 				error,
 				channel: message.channel,
 				chatId: message.chatId,
@@ -295,6 +347,8 @@ export class GatewayRuntime {
 				this.options.logger.error(
 					"Gateway runtime failed to publish error reply",
 					{
+						component: "gateway",
+						event: "outbound_error",
 						error: replyError,
 						channel: message.channel,
 						chatId: message.chatId,
@@ -315,11 +369,21 @@ export class GatewayRuntime {
 				return;
 			}
 
+			this.options.logger.info("Gateway priority command handled", {
+				component: "gateway",
+				event: "priority_command",
+				channel: message.channel,
+				chatId: message.chatId,
+				sessionKey,
+				command: message.content.trim(),
+			});
 			await this.options.bus.publishOutbound(reply);
 		} catch (error) {
 			this.options.logger.error(
 				"Gateway runtime failed to process priority command",
 				{
+					component: "gateway",
+					event: "priority_command_error",
 					error,
 					channel: message.channel,
 					chatId: message.chatId,
@@ -416,6 +480,12 @@ export class GatewayRuntime {
 		}
 
 		const startedAt = Date.now();
+		this.options.logger.info("Dream command started", {
+			component: "dream",
+			event: "command_start",
+			channel: message.channel,
+			chatId: message.chatId,
+		});
 		const task = this.runDreamAndNotify(dreamService, message, startedAt);
 		this.activeTasks.add(task);
 		void task.finally(() => {
@@ -432,6 +502,13 @@ export class GatewayRuntime {
 		try {
 			const result = await dreamService.run();
 			const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+			this.options.logger.info("Dream command completed", {
+				component: "dream",
+				event: "command_end",
+				processed: result.processed,
+				entries: result.entries,
+				edits: result.edits,
+			});
 			await this.options.bus.publishOutbound({
 				channel: message.channel,
 				chatId: message.chatId,
@@ -442,7 +519,11 @@ export class GatewayRuntime {
 			});
 		} catch (error) {
 			const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-			this.options.logger.error("Dream command failed", { error });
+			this.options.logger.error("Dream command failed", {
+				component: "dream",
+				event: "command_error",
+				error,
+			});
 			await this.options.bus.publishOutbound({
 				channel: message.channel,
 				chatId: message.chatId,
@@ -621,6 +702,14 @@ export class GatewayRuntime {
 		}
 
 		if (event.type === "tool_execution_start") {
+			this.options.logger.info("Gateway agent tool call started", {
+				component: "agent",
+				event: "tool_start",
+				sessionKey: streamState.sessionKey,
+				channel: streamState.message.channel,
+				chatId: streamState.message.chatId,
+				toolName: event.toolName,
+			});
 			await this.options.bus.publishOutbound({
 				channel: streamState.message.channel,
 				chatId: streamState.message.chatId,
@@ -633,6 +722,19 @@ export class GatewayRuntime {
 						? { _stream_id: streamState.activeStreamId }
 						: {}),
 				},
+			});
+			return;
+		}
+
+		if (event.type === "tool_execution_end") {
+			this.options.logger.info("Gateway agent tool call completed", {
+				component: "agent",
+				event: event.isError ? "tool_error" : "tool_end",
+				sessionKey: streamState.sessionKey,
+				channel: streamState.message.channel,
+				chatId: streamState.message.chatId,
+				toolName: event.toolName,
+				isError: event.isError,
 			});
 			return;
 		}

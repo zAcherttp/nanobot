@@ -1,9 +1,9 @@
 export {
 	AutoCompactor,
-	getSummaryMetadata,
+	type AutoCompactorOptions,
 	type AutoCompactPrepareResult,
 	type AutoCompactSummaryMetadata,
-	type AutoCompactorOptions,
+	getSummaryMetadata,
 } from "./auto-compact.js";
 export {
 	type ConsolidationEstimate,

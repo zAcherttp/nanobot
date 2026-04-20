@@ -73,6 +73,9 @@ export interface CronConfig {
 
 export interface LoggingConfig {
 	level: LogLevel;
+	maxEntries: number;
+	maxPreviewChars: number;
+	console: boolean;
 }
 
 export interface SecurityConfig {

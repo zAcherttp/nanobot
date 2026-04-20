@@ -173,6 +173,8 @@ export class FileSessionStore implements SessionStore {
 		} catch (renameError) {
 			if (!isMissingFileError(renameError)) {
 				this.options.logger?.warn("Failed to quarantine corrupt session file", {
+					component: "session",
+					event: "quarantine_error",
 					path: sessionPath,
 					error: String(renameError),
 				});
@@ -180,6 +182,8 @@ export class FileSessionStore implements SessionStore {
 		}
 
 		this.options.logger?.warn("Quarantined corrupt session file", {
+			component: "session",
+			event: "quarantine",
 			path: sessionPath,
 			quarantinePath,
 			error: String(error),

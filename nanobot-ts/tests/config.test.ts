@@ -19,6 +19,9 @@ import {
 	DEFAULT_HEARTBEAT_ENABLED,
 	DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
 	DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES,
+	DEFAULT_LOGGING_CONSOLE,
+	DEFAULT_LOGGING_MAX_ENTRIES,
+	DEFAULT_LOGGING_MAX_PREVIEW_CHARS,
 	initConfigFile,
 	isSenderAllowed,
 	loadConfig,
@@ -104,6 +107,11 @@ describe("config", () => {
 		expect(loaded.config.security.allowedEnvKeys).toEqual([]);
 		expect(loaded.config.security.ssrfWhitelist).toEqual([]);
 		expect(loaded.config.logging.level).toBe("info");
+		expect(loaded.config.logging.maxEntries).toBe(DEFAULT_LOGGING_MAX_ENTRIES);
+		expect(loaded.config.logging.maxPreviewChars).toBe(
+			DEFAULT_LOGGING_MAX_PREVIEW_CHARS,
+		);
+		expect(loaded.config.logging.console).toBe(DEFAULT_LOGGING_CONSOLE);
 	});
 
 	it("env overrides token and log level", async () => {
@@ -286,6 +294,16 @@ describe("config", () => {
 			[
 				{
 					...DEFAULT_CONFIG,
+					logging: {
+						...DEFAULT_CONFIG.logging,
+						legacyLogging: true,
+					},
+				},
+				/legacyLogging|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
 					providers: {
 						anthropic: {
 							apiKey: "secret",
@@ -437,6 +455,7 @@ describe("config", () => {
 				modelId: "claude-sonnet-4-20250514",
 			},
 			logging: {
+				...DEFAULT_CONFIG.logging,
 				level: "debug" as const,
 			},
 		};
@@ -530,6 +549,30 @@ describe("config", () => {
 
 		expect(() => validateRuntimeConfig(invalidConfig)).toThrow(
 			"Cron timezone is required",
+		);
+	});
+
+	it("rejects invalid logging retention limits", () => {
+		const invalidEntriesConfig = {
+			...DEFAULT_CONFIG,
+			logging: {
+				...DEFAULT_CONFIG.logging,
+				maxEntries: 0,
+			},
+		};
+		const invalidPreviewConfig = {
+			...DEFAULT_CONFIG,
+			logging: {
+				...DEFAULT_CONFIG.logging,
+				maxPreviewChars: 0,
+			},
+		};
+
+		expect(() => validateRuntimeConfig(invalidEntriesConfig)).toThrow(
+			"logging.maxEntries must be positive",
+		);
+		expect(() => validateRuntimeConfig(invalidPreviewConfig)).toThrow(
+			"logging.maxPreviewChars must be positive",
 		);
 	});
 

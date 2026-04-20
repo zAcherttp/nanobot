@@ -76,6 +76,8 @@ export class CronService {
 			this.armTimer();
 		});
 		this.logger?.info("Cron service started", {
+			component: "cron",
+			event: "start",
 			path: this.storePath,
 			jobs: this.store.jobs.length,
 		});
@@ -88,6 +90,10 @@ export class CronService {
 			this.timer = undefined;
 		}
 		await this.pending;
+		this.logger?.info("Cron service stopped", {
+			component: "cron",
+			event: "stop",
+		});
 	}
 
 	async listJobs(includeDisabled = false): Promise<CronJob[]> {
@@ -153,6 +159,8 @@ export class CronService {
 			store.jobs.push(job);
 			await this.commitStore(store);
 			this.logger?.info("Cron job added", {
+				component: "cron",
+				event: "job_add",
 				jobId: job.id,
 				name: job.name,
 			});
@@ -219,11 +227,21 @@ export class CronService {
 				return "not_found" as const;
 			}
 			if (job.payload.kind === "system_event") {
+				this.logger?.warn("Cron protected job removal refused", {
+					component: "cron",
+					event: "job_remove_protected",
+					jobId,
+				});
 				return "protected" as const;
 			}
 			const nextJobs = store.jobs.filter((entry) => entry.id !== jobId);
 			store.jobs = nextJobs;
 			await this.commitStore(store);
+			this.logger?.info("Cron job removed", {
+				component: "cron",
+				event: "job_remove",
+				jobId,
+			});
 			return "removed" as const;
 		});
 	}
@@ -383,6 +401,8 @@ export class CronService {
 		const startedAt = this.now();
 		this.activeJobIds.add(job.id);
 		this.logger?.info("Cron job executing", {
+			component: "cron",
+			event: "job_start",
 			jobId: job.id,
 			name: job.name,
 		});
@@ -391,11 +411,19 @@ export class CronService {
 			await this.onJob?.(structuredClone(job));
 			job.state.lastStatus = "ok";
 			job.state.lastError = null;
+			this.logger?.info("Cron job completed", {
+				component: "cron",
+				event: "job_end",
+				jobId: job.id,
+				name: job.name,
+			});
 		} catch (error) {
 			job.state.lastStatus = "error";
 			job.state.lastError =
 				error instanceof Error ? error.message : String(error);
 			this.logger?.error("Cron job failed", {
+				component: "cron",
+				event: "job_error",
 				jobId: job.id,
 				name: job.name,
 				error,

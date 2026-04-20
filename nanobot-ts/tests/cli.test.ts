@@ -17,10 +17,22 @@ describe("cli", () => {
 			"gateway",
 			"agent",
 			"status",
+			"logs",
 			"channels",
 			"sessions",
 			"cron",
 			"heartbeat",
+		]);
+	});
+
+	it("adds runtime log inspection commands", () => {
+		const program = createCli("nanobot-ts");
+		const logs = program.commands.find((command) => command.name() === "logs");
+
+		expect(logs?.commands.map((command) => command.name())).toEqual([
+			"show",
+			"tail",
+			"clear",
 		]);
 	});
 

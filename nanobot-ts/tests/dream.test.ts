@@ -4,12 +4,15 @@ import path from "node:path";
 
 import type { AssistantMessage, Context } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { resolveAgentRuntimeConfig } from "../src/agent/loop.js";
 import { DEFAULT_CONFIG } from "../src/config/loader.js";
 import { DreamService } from "../src/dream/index.js";
 import { MemoryStore } from "../src/memory/index.js";
-import { ensureNanobotFauxProvider, NANOBOT_FAUX_MODEL_ID, NANOBOT_FAUX_PROVIDER } from "../src/providers/faux.js";
-import { resolveAgentRuntimeConfig } from "../src/agent/loop.js";
+import {
+	ensureNanobotFauxProvider,
+	NANOBOT_FAUX_MODEL_ID,
+	NANOBOT_FAUX_PROVIDER,
+} from "../src/providers/faux.js";
 
 describe("dream - execution", () => {
 	let store: MemoryStore;
@@ -87,10 +90,12 @@ describe("dream - execution", () => {
 		expect(entries.map((entry) => entry.content)).toEqual(["second", "third"]);
 	});
 
-	function createDreamService(options: {
-		complete?: DreamServiceConstructorComplete;
-		runPhaseTwo?: (analysis: string, fileContext: string) => Promise<number>;
-	} = {}): DreamService {
+	function createDreamService(
+		options: {
+			complete?: DreamServiceConstructorComplete;
+			runPhaseTwo?: (analysis: string, fileContext: string) => Promise<number>;
+		} = {},
+	): DreamService {
 		const config = resolveAgentRuntimeConfig({
 			...DEFAULT_CONFIG,
 			workspace: {
