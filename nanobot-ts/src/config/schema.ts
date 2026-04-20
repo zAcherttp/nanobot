@@ -3,6 +3,7 @@ import type {
 	ToolExecutionMode,
 } from "@mariozechner/pi-agent-core";
 import type { KnownProvider, Transport } from "@mariozechner/pi-ai";
+import type { NANOBOT_FAUX_PROVIDER } from "../providers/faux.js";
 
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 
@@ -15,6 +16,7 @@ export interface TelegramConfig {
 	token: string;
 	allowFrom: string[];
 	chatIds: string[];
+	streaming: boolean;
 }
 
 export interface ProviderOverrideConfig {
@@ -24,11 +26,19 @@ export interface ProviderOverrideConfig {
 }
 
 export type ProvidersConfig = Record<string, ProviderOverrideConfig>;
+export type AppProvider = KnownProvider | typeof NANOBOT_FAUX_PROVIDER;
 
 export interface AgentConfig {
-	provider: KnownProvider;
+	provider: AppProvider;
 	modelId: string;
 	systemPrompt: string;
+	skills: string[];
+	contextWindowTokens: number;
+	dream: {
+		intervalHours: number;
+		maxBatchSize: number;
+		maxIterations: number;
+	};
 	thinkingLevel: ThinkingLevel;
 	temperature: number;
 	maxTokens: number;
@@ -38,24 +48,48 @@ export interface AgentConfig {
 	sessionStore: {
 		type: "file";
 		path: string;
+		maxMessages: number;
+		maxPersistedTextChars: number;
+		quarantineCorruptFiles: boolean;
 	};
 }
 
 export interface GatewayConfig {
 	port: number;
+	heartbeat: {
+		enabled: boolean;
+		intervalSeconds: number;
+		keepRecentMessages: number;
+	};
+}
+
+export interface CronConfig {
+	enabled: boolean;
+	path: string;
+	timezone: string;
+	maxRunHistory: number;
+	maxSleepMs: number;
 }
 
 export interface LoggingConfig {
 	level: LogLevel;
 }
 
+export interface SecurityConfig {
+	restrictToWorkspace: boolean;
+	allowedEnvKeys: string[];
+	ssrfWhitelist: string[];
+}
+
 export interface AppConfig {
 	workspace: WorkspaceConfig;
 	gateway: GatewayConfig;
+	cron: CronConfig;
 	channels: {
 		telegram: TelegramConfig;
 	};
 	providers: ProvidersConfig;
 	agent: AgentConfig;
+	security: SecurityConfig;
 	logging: LoggingConfig;
 }

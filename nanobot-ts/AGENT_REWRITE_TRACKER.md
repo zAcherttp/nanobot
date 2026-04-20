@@ -35,7 +35,7 @@ Last updated: 2026-04-17
 | Area | Status | Notes |
 | --- | --- | --- |
 | Runtime contract | Done for v1 slice | Raw `Agent` creation, `streamFn` wrapping, no built-in tool registration |
-| Session persistence | Done for v1 slice | Pluggable session store plus file-backed default |
+| Session persistence | Done for hardening slice | Pluggable session store plus file-backed default, runtime checkpoints, bounded retention, and corrupt-file quarantine |
 | Config resolution | Done for v1 slice | TS-first agent config resolves `provider` + `modelId` into `pi-ai` model |
 | Direct programmable use | Done for v1 slice | Session-backed raw `Agent` factory with auto-persist on `agent_end` |
 | CLI adoption | Partial | `agent` command uses the new runtime; gateway bridging now lives in [AGENT_CHANNELS_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/AGENT_CHANNELS_REWRITE_TRACKER.md) |
@@ -43,6 +43,6 @@ Last updated: 2026-04-17
 
 ## Next Targets
 
-1. Replace provider CLI placeholders with real `pi-ai` auth/runtime flows where applicable.
+1. Decide whether TS needs TTL-based idle-session compaction beyond the hardening slice.
 2. Decide the next gateway-policy slice after the new channel bridge.
-3. Decide the next slice boundary for sessions vs providers vs cron/heartbeat integration.
+3. Decide the next slice boundary for cron/heartbeat integration on top of the hardened session layer.

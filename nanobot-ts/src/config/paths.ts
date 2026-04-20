@@ -37,6 +37,10 @@ export function getDefaultDataDir(): string {
 	return path.join(os.homedir(), DEFAULT_DATA_DIR_NAME);
 }
 
+export function getPackageRoot(): string {
+	return PACKAGE_ROOT;
+}
+
 export function resolveConfigPath(cliPath?: string): string {
 	const configured = cliPath ?? process.env.NANOBOT_TS_CONFIG;
 	if (configured) {

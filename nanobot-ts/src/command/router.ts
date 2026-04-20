@@ -1,7 +1,11 @@
-import type { InboundChannelMessage, OutboundChannelMessage } from "../channels/types.js";
+import type {
+	InboundChannelMessage,
+	OutboundChannelMessage,
+} from "../channels/types.js";
 
 export interface CommandSessionSummary {
 	messageCount: number;
+	promptTokens: number;
 }
 
 export interface CommandContext {
@@ -13,9 +17,11 @@ export interface CommandContext {
 		provider: string;
 		modelId: string;
 		providerAuthSource: "config" | "env" | "none";
+		contextWindowTokens: number;
 	};
 	stopActiveTask: () => Promise<boolean>;
 	clearSession: () => Promise<void>;
+	triggerDream?: () => Promise<boolean>;
 }
 
 export type CommandHandler = (
@@ -25,6 +31,7 @@ export type CommandHandler = (
 export class CommandRouter {
 	private readonly priorityHandlers = new Map<string, CommandHandler>();
 	private readonly exactHandlers = new Map<string, CommandHandler>();
+	private readonly prefixHandlers = new Map<string, CommandHandler>();
 
 	priority(command: string, handler: CommandHandler): void {
 		this.priorityHandlers.set(normalizeCommand(command), handler);
@@ -32,6 +39,10 @@ export class CommandRouter {
 
 	exact(command: string, handler: CommandHandler): void {
 		this.exactHandlers.set(normalizeCommand(command), handler);
+	}
+
+	prefix(command: string, handler: CommandHandler): void {
+		this.prefixHandlers.set(normalizeCommand(command), handler);
 	}
 
 	isPriority(text: string): boolean {
@@ -52,10 +63,17 @@ export class CommandRouter {
 		context: CommandContext,
 	): Promise<OutboundChannelMessage | null> {
 		const handler = this.exactHandlers.get(normalizeCommand(context.raw));
-		if (!handler) {
-			return null;
+		if (handler) {
+			return handler(context);
 		}
-		return handler(context);
+
+		const normalized = normalizeCommand(context.raw);
+		for (const [command, prefixHandler] of this.prefixHandlers) {
+			if (normalized === command || normalized.startsWith(`${command} `)) {
+				return prefixHandler(context);
+			}
+		}
+		return null;
 	}
 }
 

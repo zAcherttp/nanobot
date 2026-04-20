@@ -8,6 +8,9 @@ export function buildHelpText(): string {
 		"/status - Show runtime status",
 		"/new - Start a new conversation",
 		"/stop - Stop the current task",
+		"/dream - Run background memory consolidation",
+		"/dream-log - Dream history is not available in nanobot-ts yet",
+		"/dream-restore - Dream restore is not available in nanobot-ts yet",
 	].join("\n");
 }
 
@@ -16,6 +19,9 @@ export function registerBuiltinCommands(router: CommandRouter): void {
 	router.exact("/help", handleHelp);
 	router.exact("/status", handleStatus);
 	router.exact("/new", handleNew);
+	router.exact("/dream", handleDream);
+	router.prefix("/dream-log", handleDreamLogUnavailable);
+	router.prefix("/dream-restore", handleDreamRestoreUnavailable);
 }
 
 async function handleHelp(
@@ -36,6 +42,7 @@ async function handleStatus(
 			`Provider auth: ${context.runtime.providerAuthSource}`,
 			`Session: ${context.key}`,
 			`Messages: ${context.session?.messageCount ?? 0}`,
+			`Prompt tokens: ${context.session?.promptTokens ?? 0}/${context.runtime.contextWindowTokens}`,
 			`Channel: ${context.msg.channel}`,
 			`Chat: ${context.msg.chatId}`,
 		].join("\n"),
@@ -56,6 +63,36 @@ async function handleStop(
 	return createCommandReply(
 		context,
 		stopped ? "Stopped 1 task(s)." : "No active task to stop.",
+	);
+}
+
+async function handleDream(
+	context: CommandContext,
+): Promise<OutboundChannelMessage> {
+	const started = await context.triggerDream?.();
+	return createCommandReply(
+		context,
+		started
+			? "Dreaming..."
+			: "Dream is not available in this runtime.",
+	);
+}
+
+async function handleDreamLogUnavailable(
+	context: CommandContext,
+): Promise<OutboundChannelMessage> {
+	return createCommandReply(
+		context,
+		"Dream history is not available yet because nanobot-ts does not have git-backed memory versioning.",
+	);
+}
+
+async function handleDreamRestoreUnavailable(
+	context: CommandContext,
+): Promise<OutboundChannelMessage> {
+	return createCommandReply(
+		context,
+		"Dream restore is not available yet because nanobot-ts does not have git-backed memory versioning.",
 	);
 }
 

@@ -4,9 +4,9 @@ import path from "node:path";
 
 import {
 	fauxAssistantMessage,
+	type Message,
 	registerFauxProvider,
 	streamSimple,
-	type Message,
 } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,12 +18,17 @@ import {
 } from "../src/agent/loop.js";
 import { InMemoryMessageBus } from "../src/channels/bus.js";
 import { buildHelpText } from "../src/command/index.js";
+import { DEFAULT_CONFIG } from "../src/config/loader.js";
 import {
 	GATEWAY_RUNTIME_ERROR_MESSAGE,
 	GatewayRuntime,
 	resolveChannelSessionKey,
 } from "../src/gateway/index.js";
-import { DEFAULT_CONFIG } from "../src/config/loader.js";
+import {
+	getNanobotFauxTools,
+	NANOBOT_FAUX_MODEL_ID,
+	NANOBOT_FAUX_PROVIDER,
+} from "../src/providers/faux.js";
 import type { Logger } from "../src/utils/logging.js";
 
 const LOGGER: Logger = {
@@ -49,6 +54,26 @@ function createRuntimeConfig(sessionStorePath: string) {
 		agent: {
 			...DEFAULT_CONFIG.agent,
 			sessionStore: {
+				...DEFAULT_CONFIG.agent.sessionStore,
+				type: "file",
+				path: sessionStorePath,
+			},
+		},
+	});
+}
+
+function createFauxRuntimeConfig(sessionStorePath: string) {
+	return resolveAgentRuntimeConfig({
+		...DEFAULT_CONFIG,
+		workspace: {
+			path: path.dirname(sessionStorePath),
+		},
+		agent: {
+			...DEFAULT_CONFIG.agent,
+			provider: NANOBOT_FAUX_PROVIDER,
+			modelId: NANOBOT_FAUX_MODEL_ID,
+			sessionStore: {
+				...DEFAULT_CONFIG.agent.sessionStore,
 				type: "file",
 				path: sessionStorePath,
 			},
@@ -80,7 +105,9 @@ function createMemorySessionStore() {
 	};
 }
 
-function createMapSessionStore(initial: Array<{ key: string; messages?: Message[] }> = []) {
+function createMapSessionStore(
+	initial: Array<{ key: string; messages?: Message[] }> = [],
+) {
 	const records = new Map(
 		initial.map((entry) => [
 			entry.key,
@@ -227,6 +254,195 @@ describe("gateway runtime", () => {
 				chatId: "42",
 				content: "reply:hello",
 				role: "assistant",
+			}),
+		);
+	});
+
+	it("emits stream delta and end markers for native assistant text streaming", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: Array<{
+			content: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		let listener:
+			| ((event: {
+					type: string;
+					message?: Message;
+					assistantMessageEvent?: { type: string; delta?: string };
+			  }) => Promise<void> | void)
+			| undefined;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [],
+				},
+				subscribe: (nextListener) => {
+					listener = nextListener as typeof listener;
+					return () => {
+						listener = undefined;
+					};
+				},
+				abort: () => undefined,
+				reset: () => undefined,
+				prompt: async () => {
+					await listener?.({
+						type: "message_update",
+						assistantMessageEvent: {
+							type: "text_delta",
+							delta: "Hello",
+						},
+					});
+					await listener?.({
+						type: "message_update",
+						assistantMessageEvent: {
+							type: "text_delta",
+							delta: " world",
+						},
+					});
+					await listener?.({
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Hello world" }],
+							api: "test",
+							provider: "anthropic",
+							model: "claude-opus-4-5",
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									total: 0,
+								},
+							},
+							stopReason: "endTurn",
+							timestamp: Date.now(),
+						},
+					});
+				},
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "hello",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toHaveLength(3);
+		});
+		await runtime.stop();
+
+		expect(published[0]).toEqual(
+			expect.objectContaining({
+				content: "Hello",
+				metadata: expect.objectContaining({
+					_stream_delta: true,
+				}),
+			}),
+		);
+		expect(published[1]).toEqual(
+			expect.objectContaining({
+				content: " world",
+				metadata: expect.objectContaining({
+					_stream_delta: true,
+				}),
+			}),
+		);
+		expect(published[2]).toEqual(
+			expect.objectContaining({
+				content: "",
+				metadata: expect.objectContaining({
+					_stream_end: true,
+					_streamed: true,
+				}),
+			}),
+		);
+	});
+
+	it("emits tool hint progress markers from tool execution events", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: Array<{
+			content: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		let listener:
+			| ((event: {
+					type: string;
+					toolName?: string;
+					args?: unknown;
+			  }) => Promise<void> | void)
+			| undefined;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [],
+				},
+				subscribe: (nextListener) => {
+					listener = nextListener as typeof listener;
+					return () => {
+						listener = undefined;
+					};
+				},
+				abort: () => undefined,
+				reset: () => undefined,
+				prompt: async () => {
+					await listener?.({
+						type: "tool_execution_start",
+						toolName: "read_file",
+						args: {
+							path: "README.md",
+						},
+					});
+				},
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "hello",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toHaveLength(1);
+		});
+		await runtime.stop();
+
+		expect(published[0]).toEqual(
+			expect.objectContaining({
+				content: 'read_file({"path":"README.md"})',
+				metadata: expect.objectContaining({
+					_progress: true,
+					_tool_hint: true,
+				}),
 			}),
 		);
 	});
@@ -413,11 +629,7 @@ describe("gateway runtime", () => {
 						sessionStore: options.sessionStore,
 						tools: options.tools,
 						streamFn: (_model, context, streamOptions) =>
-							streamSimple(
-								registration.getModel(),
-								context,
-								streamOptions,
-							),
+							streamSimple(registration.getModel(), context, streamOptions),
 					}),
 			});
 
@@ -431,7 +643,10 @@ describe("gateway runtime", () => {
 			});
 
 			await waitUntil(() => {
-				expect(published).toEqual(["gateway reply"]);
+				expect(published.at(-1)).toBe("");
+				expect(published.filter((message) => message !== "").join("")).toBe(
+					"gateway reply",
+				);
 			});
 			await runtime.stop();
 
@@ -440,6 +655,115 @@ describe("gateway runtime", () => {
 			expect(getLatestAssistantText(persisted?.messages ?? [])).toBe(
 				"gateway reply",
 			);
+		} finally {
+			registration.unregister();
+		}
+	});
+
+	it("restores persisted checkpoints before processing the next gateway prompt", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-gateway-"));
+		const store = new FileSessionStore(path.join(dir, "sessions"), {
+			maxMessages: 500,
+			maxPersistedTextChars: 16_000,
+			quarantineCorruptFiles: true,
+		});
+		const registration = registerFauxProvider();
+		const published: string[] = [];
+
+		try {
+			await store.save({
+				key: "telegram:42",
+				createdAt: "2026-04-19T08:00:00.000Z",
+				updatedAt: "2026-04-19T08:00:00.000Z",
+				messages: [],
+				metadata: {
+					runtimeCheckpoint: {
+						assistantMessage: {
+							role: "assistant",
+							content: [
+								{
+									type: "toolCall",
+									id: "tool-1",
+									name: "probe",
+									arguments: { prompt: "staging" },
+								},
+							],
+							api: "test",
+							provider: "anthropic",
+							model: "claude-opus-4-5",
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									total: 0,
+								},
+							},
+							stopReason: "toolUse",
+							timestamp: Date.now(),
+						},
+						completedToolResults: [],
+						pendingToolCalls: [
+							{
+								id: "tool-1",
+								name: "probe",
+							},
+						],
+						updatedAt: "2026-04-19T08:00:01.000Z",
+					},
+				},
+			});
+			registration.setResponses([fauxAssistantMessage("after restore")]);
+
+			const bus = new InMemoryMessageBus();
+			bus.subscribeOutbound(async (message) => {
+				published.push(message.content);
+			});
+
+			const runtime = new GatewayRuntime({
+				bus,
+				logger: LOGGER,
+				config: createRuntimeConfig(path.join(dir, "sessions")),
+				sessionStore: store,
+				createAgent: (options) =>
+					createSessionAgent({
+						config: options.config,
+						sessionKey: options.sessionKey,
+						sessionStore: options.sessionStore,
+						tools: options.tools,
+						streamFn: (_model, context, streamOptions) =>
+							streamSimple(registration.getModel(), context, streamOptions),
+					}),
+			});
+
+			await runtime.start();
+			await bus.publishInbound({
+				channel: "telegram",
+				senderId: "99",
+				chatId: "42",
+				content: "hello",
+				timestamp: new Date(),
+			});
+
+			await waitUntil(() => {
+				expect(published.at(-1)).toBe("");
+				expect(published.filter((message) => message !== "").join("")).toBe(
+					"after restore",
+				);
+			});
+			await runtime.stop();
+
+			expect(
+				(await store.load("telegram:42"))?.messages.map(
+					(message) => message.role,
+				),
+			).toEqual(["assistant", "toolResult", "user", "assistant"]);
 		} finally {
 			registration.unregister();
 		}
@@ -517,6 +841,280 @@ describe("gateway runtime", () => {
 			expect(published).toEqual([GATEWAY_RUNTIME_ERROR_MESSAGE]);
 		});
 		await runtime.stop();
+	});
+
+	it("runs the nanobot faux provider through streaming and tool hints", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: Array<{
+			content: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createFauxRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			tools: getNanobotFauxTools(),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "inspect staging state",
+			timestamp: new Date(),
+		});
+
+		await waitUntil(() => {
+			expect(
+				published.some(
+					(message) =>
+						message.metadata?._tool_hint === true &&
+						message.content.includes("nanobot_faux_probe"),
+				),
+			).toBe(true);
+			expect(
+				published.some(
+					(message) =>
+						message.metadata?._stream_delta === true &&
+						message.content.includes("Faux"),
+				),
+			).toBe(true);
+			expect(
+				published.filter((message) => message.metadata?._stream_end === true)
+					.length,
+			).toBeGreaterThanOrEqual(1);
+		});
+		await runtime.stop();
+
+		const streamedText = published
+			.filter((message) => message.metadata?._stream_delta === true)
+			.map((message) => message.content)
+			.join("");
+
+		expect(streamedText).toContain("Faux stream start.");
+		expect(streamedText).toContain("resumed after tool execution");
+		expect(
+			published.some(
+				(message) => message.content === GATEWAY_RUNTIME_ERROR_MESSAGE,
+			),
+		).toBe(false);
+	});
+
+	it("does not publish a duplicate settled reply after a streamed turn", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: Array<{
+			content: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		let listener:
+			| ((event: {
+					type: string;
+					message?: Message;
+					assistantMessageEvent?: { type: string; delta?: string };
+			  }) => Promise<void> | void)
+			| undefined;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [
+						{
+							role: "assistant",
+							content: [{ type: "text", text: "final" }],
+							api: "test",
+							provider: "anthropic",
+							model: "claude-opus-4-5",
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									total: 0,
+								},
+							},
+							stopReason: "endTurn",
+							timestamp: 1,
+						},
+					],
+				},
+				subscribe: (nextListener) => {
+					listener = nextListener as typeof listener;
+					return () => {
+						listener = undefined;
+					};
+				},
+				abort: () => undefined,
+				reset: () => undefined,
+				prompt: async () => {
+					await listener?.({
+						type: "message_update",
+						assistantMessageEvent: {
+							type: "text_delta",
+							delta: "final",
+						},
+					});
+					await listener?.({
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "final" }],
+							api: "test",
+							provider: "anthropic",
+							model: "claude-opus-4-5",
+							usage: {
+								input: 0,
+								output: 0,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 0,
+								cost: {
+									input: 0,
+									output: 0,
+									cacheRead: 0,
+									cacheWrite: 0,
+									total: 0,
+								},
+							},
+							stopReason: "endTurn",
+							timestamp: Date.now(),
+						},
+					});
+				},
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "hello",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toHaveLength(2);
+		});
+		await runtime.stop();
+
+		expect(published.map((message) => message.content)).toEqual(["final", ""]);
+		expect(published.some((message) => message.content === "reply:hello")).toBe(
+			false,
+		);
+	});
+
+	it("finalizes an open stream on abort without publishing the generic error reply", async () => {
+		const bus = new InMemoryMessageBus();
+		const published: Array<{
+			content: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		let rejectPrompt: ((reason?: unknown) => void) | undefined;
+		let listener:
+			| ((event: {
+					type: string;
+					assistantMessageEvent?: { type: string; delta?: string };
+			  }) => Promise<void> | void)
+			| undefined;
+		const runtime = new GatewayRuntime({
+			bus,
+			logger: LOGGER,
+			config: createRuntimeConfig("E:\\tmp\\sessions"),
+			sessionStore: createMemorySessionStore(),
+			createAgent: async () => ({
+				state: {
+					messages: [],
+				},
+				subscribe: (nextListener) => {
+					listener = nextListener as typeof listener;
+					return () => {
+						listener = undefined;
+					};
+				},
+				abort: () => {
+					rejectPrompt?.(new DOMException("Aborted", "AbortError"));
+				},
+				reset: () => undefined,
+				prompt: async () => {
+					await listener?.({
+						type: "message_update",
+						assistantMessageEvent: {
+							type: "text_delta",
+							delta: "partial",
+						},
+					});
+					return new Promise<void>((_resolve, reject) => {
+						rejectPrompt = reject;
+					});
+				},
+			}),
+		});
+
+		bus.subscribeOutbound(async (message) => {
+			published.push(message);
+		});
+
+		await runtime.start();
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "long task",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toHaveLength(1);
+		});
+
+		await bus.publishInbound({
+			channel: "telegram",
+			senderId: "99",
+			chatId: "42",
+			content: "/stop",
+			timestamp: new Date(),
+		});
+		await waitUntil(() => {
+			expect(published).toHaveLength(3);
+		});
+		await runtime.stop();
+
+		expect(published[0]).toEqual(
+			expect.objectContaining({
+				content: "partial",
+				metadata: expect.objectContaining({
+					_stream_delta: true,
+				}),
+			}),
+		);
+		expect(
+			published.some((message) => message.content === "Stopped 1 task(s)."),
+		).toBe(true);
+		expect(
+			published.some((message) => message.metadata?._stream_end === true),
+		).toBe(true);
+		expect(
+			published.some(
+				(message) => message.content === GATEWAY_RUNTIME_ERROR_MESSAGE,
+			),
+		).toBe(false);
 	});
 
 	it("handles /help without invoking the agent", async () => {

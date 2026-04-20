@@ -14,12 +14,15 @@ class FakeChannel extends BaseChannel<{ allowFrom: string[] }> {
 	startCalls = 0;
 	stopCalls = 0;
 	sentMessages: OutboundChannelMessage[] = [];
-
-	constructor(name: string) {
+	constructor(
+		name: string,
+		private readonly streamingSupported = false,
+		allowFrom: string[] = ["*"],
+	) {
 		super({
 			name,
 			displayName: name,
-			config: { allowFrom: ["*"] },
+			config: { allowFrom },
 			bus: {
 				publishInbound: async () => undefined,
 				publishOutbound: async () => undefined,
@@ -27,6 +30,14 @@ class FakeChannel extends BaseChannel<{ allowFrom: string[] }> {
 				subscribeOutbound: () => () => undefined,
 			},
 		});
+	}
+
+	protected override getAllowFrom(): string[] {
+		return this.config.allowFrom;
+	}
+
+	override supportsStreaming(): boolean {
+		return this.streamingSupported;
 	}
 
 	async start(): Promise<void> {
@@ -231,6 +242,65 @@ describe("channel manager", () => {
 		]);
 	});
 
+	it("buffers streamed outbound messages for non-streaming channels until the end marker", async () => {
+		const channel = new FakeChannel("enabled", false);
+		const manager = new ChannelManager(createConfig(), LOGGER, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "hello",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: " world",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+
+		expect(channel.sentMessages).toEqual([]);
+
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "",
+			role: "assistant",
+			metadata: {
+				_stream_end: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await manager.stop();
+
+		expect(channel.sentMessages).toEqual([
+			expect.objectContaining({
+				channel: "enabled",
+				chatId: "room-1",
+				content: "hello world",
+				role: "assistant",
+			}),
+		]);
+	});
+
 	it("handles disabled and unknown channel targets", async () => {
 		const factories: ChannelFactory[] = [
 			{
@@ -317,5 +387,21 @@ describe("channel manager", () => {
 				content: "hello",
 			}),
 		).rejects.toThrow("No channels are enabled");
+	});
+
+	it("fails fast when an enabled channel has an empty allowFrom policy", () => {
+		expect(
+			() =>
+				new ChannelManager(createConfig(), LOGGER, {
+					channelFactories: [
+						{
+							name: "enabled",
+							displayName: "Enabled",
+							isEnabled: () => true,
+							createChannel: () => new FakeChannel("enabled", false, []),
+						},
+					],
+				}),
+		).toThrow('Enabled channel "enabled" has empty allowFrom');
 	});
 });

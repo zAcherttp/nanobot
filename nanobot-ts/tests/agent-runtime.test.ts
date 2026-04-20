@@ -20,6 +20,11 @@ import {
 } from "../src/agent/loop.js";
 import { FileSessionStore } from "../src/agent/session-store.js";
 import { DEFAULT_CONFIG } from "../src/config/loader.js";
+import {
+	getNanobotFauxTools,
+	NANOBOT_FAUX_MODEL_ID,
+	NANOBOT_FAUX_PROVIDER,
+} from "../src/providers/faux.js";
 
 describe("agent runtime", () => {
 	it("resolves provider and modelId into a pi-ai model", () => {
@@ -29,6 +34,9 @@ describe("agent runtime", () => {
 		expect(resolved.modelId).toBe("claude-opus-4-5");
 		expect(resolved.model.provider).toBe("anthropic");
 		expect(resolved.model.id).toBe("claude-opus-4-5");
+		expect(resolved.sessionStore.maxMessages).toBe(500);
+		expect(resolved.sessionStore.maxPersistedTextChars).toBe(16_000);
+		expect(resolved.sessionStore.quarantineCorruptFiles).toBe(true);
 	});
 
 	it("prefers config provider settings over env and applies model overrides", () => {
@@ -76,6 +84,24 @@ describe("agent runtime", () => {
 		);
 	});
 
+	it("resolves the nanobot faux provider without requiring an api key", () => {
+		const resolved = resolveAgentRuntimeConfig({
+			...DEFAULT_CONFIG,
+			agent: {
+				...DEFAULT_CONFIG.agent,
+				provider: NANOBOT_FAUX_PROVIDER,
+				modelId: NANOBOT_FAUX_MODEL_ID,
+			},
+		});
+
+		expect(resolved.provider).toBe(NANOBOT_FAUX_PROVIDER);
+		expect(resolved.modelId).toBe(NANOBOT_FAUX_MODEL_ID);
+		expect(resolved.providerAuthSource).toBe("none");
+		expect(resolved.model.provider).toBe(NANOBOT_FAUX_PROVIDER);
+		expect(resolved.model.id).toBe(NANOBOT_FAUX_MODEL_ID);
+		expect(resolved.apiKey).toBeUndefined();
+	});
+
 	it("hydrates transcript, persists prompt results, and exposes native agent events", async () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-agent-"));
 		const store = new FileSessionStore(path.join(dir, "sessions"));
@@ -98,7 +124,7 @@ describe("agent runtime", () => {
 				updatedAt: "2026-04-17T08:00:00.000Z",
 				metadata: {},
 				messages: initialMessages,
-					});
+			});
 
 			const agent = await createSessionAgent({
 				config: resolveAgentRuntimeConfig({
@@ -109,6 +135,7 @@ describe("agent runtime", () => {
 					agent: {
 						...DEFAULT_CONFIG.agent,
 						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
 							type: "file",
 							path: path.join(dir, "sessions"),
 						},
@@ -186,6 +213,7 @@ describe("agent runtime", () => {
 					agent: {
 						...DEFAULT_CONFIG.agent,
 						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
 							type: "file",
 							path: path.join(dir, "sessions"),
 						},
@@ -253,6 +281,7 @@ describe("agent runtime", () => {
 					agent: {
 						...DEFAULT_CONFIG.agent,
 						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
 							type: "file",
 							path: path.join(dir, "sessions"),
 						},
@@ -278,6 +307,160 @@ describe("agent runtime", () => {
 			expect(getLatestAssistantText(agent.state.messages)).toBe(
 				"tool completed",
 			);
+		} finally {
+			registration.unregister();
+		}
+	});
+
+	it("runs the nanobot faux provider through a real stream -> tool -> stream turn", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-agent-"));
+		const store = new FileSessionStore(path.join(dir, "sessions"));
+		const agent = await createSessionAgent({
+			config: resolveAgentRuntimeConfig({
+				...DEFAULT_CONFIG,
+				workspace: {
+					path: dir,
+				},
+				agent: {
+					...DEFAULT_CONFIG.agent,
+					provider: NANOBOT_FAUX_PROVIDER,
+					modelId: NANOBOT_FAUX_MODEL_ID,
+					sessionStore: {
+						...DEFAULT_CONFIG.agent.sessionStore,
+						type: "file",
+						path: path.join(dir, "sessions"),
+					},
+				},
+			}),
+			sessionKey: "sdk:faux",
+			sessionStore: store,
+			tools: getNanobotFauxTools(),
+		});
+
+		await agent.prompt("inspect staging state");
+
+		expect(agent.state.messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+			"toolResult",
+			"assistant",
+		]);
+		expect(getLatestAssistantText(agent.state.messages)).toContain(
+			"Faux stream resumed after tool execution.",
+		);
+		expect(getLatestAssistantText(agent.state.messages)).toContain(
+			"faux tool result for: inspect staging state",
+		);
+		expect(
+			(await store.load("sdk:faux"))?.messages.map((message) => message.role),
+		).toEqual(["user", "assistant", "toolResult", "assistant"]);
+	});
+
+	it("writes a checkpoint on abort and restores it on the next prompt", async () => {
+		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-agent-"));
+		const store = new FileSessionStore(path.join(dir, "sessions"), {
+			maxMessages: 500,
+			maxPersistedTextChars: 16_000,
+			quarantineCorruptFiles: true,
+		});
+		const registration = registerFauxProvider();
+		let firstAgent: Awaited<ReturnType<typeof createSessionAgent>> | undefined;
+		const abortingTool: AgentTool = {
+			name: "aborting_probe",
+			label: "Aborting Probe",
+			description: "Aborts the agent immediately.",
+			parameters: Type.Object({
+				text: Type.String(),
+			}),
+			execute: async () => {
+				firstAgent?.abort();
+				throw new DOMException("Aborted", "AbortError");
+			},
+		};
+
+		try {
+			registration.setResponses([
+				fauxAssistantMessage(
+					[
+						fauxToolCall(
+							"aborting_probe",
+							{ text: "staging" },
+							{ id: "tool-1" },
+						),
+					],
+					{ stopReason: "toolUse" },
+				),
+			]);
+
+			firstAgent = await createSessionAgent({
+				config: resolveAgentRuntimeConfig({
+					...DEFAULT_CONFIG,
+					workspace: {
+						path: dir,
+					},
+					agent: {
+						...DEFAULT_CONFIG.agent,
+						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
+							type: "file",
+							path: path.join(dir, "sessions"),
+						},
+					},
+				}),
+				sessionKey: "sdk:checkpoint",
+				sessionStore: store,
+				tools: [abortingTool],
+				streamFn: (_model, context, options) =>
+					streamSimple(registration.getModel(), context, options),
+			});
+
+			await firstAgent.prompt("inspect").catch(() => undefined);
+			const interrupted = await store.load("sdk:checkpoint");
+			expect(
+				(interrupted?.metadata as Record<string, unknown>)?.runtimeCheckpoint,
+			).toBeTruthy();
+			expect(interrupted?.messages).toEqual([]);
+
+			registration.setResponses([fauxAssistantMessage("recovered reply")]);
+			const restoredAgent = await createSessionAgent({
+				config: resolveAgentRuntimeConfig({
+					...DEFAULT_CONFIG,
+					workspace: {
+						path: dir,
+					},
+					agent: {
+						...DEFAULT_CONFIG.agent,
+						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
+							type: "file",
+							path: path.join(dir, "sessions"),
+						},
+					},
+				}),
+				sessionKey: "sdk:checkpoint",
+				sessionStore: store,
+				streamFn: (_model, context, options) =>
+					streamSimple(registration.getModel(), context, options),
+			});
+
+			await restoredAgent.prompt("next");
+
+			expect(
+				restoredAgent.state.messages.map((message) => message.role),
+			).toEqual(["user", "assistant"]);
+			expect(
+				getLatestAssistantText(
+					(await store.load("sdk:checkpoint"))?.messages ?? [],
+				),
+			).toBe("recovered reply");
+			expect(
+				(
+					(await store.load("sdk:checkpoint"))?.metadata as Record<
+						string,
+						unknown
+					>
+				)?.runtimeCheckpoint,
+			).toBeUndefined();
 		} finally {
 			registration.unregister();
 		}
@@ -316,7 +499,12 @@ describe("agent runtime", () => {
 			},
 		];
 
-		expect(sanitizeMessagesForPersistence(messages)).toEqual([
+		expect(
+			sanitizeMessagesForPersistence(messages, {
+				maxMessages: 500,
+				maxPersistedTextChars: 16_000,
+			}),
+		).toEqual([
 			{
 				role: "user",
 				content: "hello",

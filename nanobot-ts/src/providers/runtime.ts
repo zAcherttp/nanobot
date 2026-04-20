@@ -1,15 +1,13 @@
 import {
-	getEnvApiKey,
 	type Api,
+	getEnvApiKey,
 	getModel,
 	getModels,
+	type KnownProvider,
 	type Model,
 } from "@mariozechner/pi-ai";
-
-import type {
-	AppConfig,
-	ProviderOverrideConfig,
-} from "../config/schema.js";
+import type { AppConfig, ProviderOverrideConfig } from "../config/schema.js";
+import { ensureNanobotFauxProvider, isNanobotFauxProvider } from "./faux.js";
 
 const API_KEY_REQUIRED_PROVIDERS = new Set<AppConfig["agent"]["provider"]>([
 	"anthropic",
@@ -39,6 +37,10 @@ export interface ResolvedProviderConfig {
 export function providerRequiresApiKey(
 	provider: AppConfig["agent"]["provider"],
 ): boolean {
+	if (isNanobotFauxProvider(provider)) {
+		return false;
+	}
+
 	return API_KEY_REQUIRED_PROVIDERS.has(provider);
 }
 
@@ -73,17 +75,35 @@ export function resolveProviderModel(
 	provider: AppConfig["agent"]["provider"],
 	modelId: string,
 ): {
-		model: Model<Api>;
-		providerConfig: ResolvedProviderConfig;
-	} {
-	const availableModel = getModels(provider).find(
+	model: Model<Api>;
+	providerConfig: ResolvedProviderConfig;
+} {
+	if (isNanobotFauxProvider(provider)) {
+		const registration = ensureNanobotFauxProvider();
+		const fauxModel = registration.getModel(modelId);
+		if (!fauxModel) {
+			throw new Error(
+				`Unknown modelId '${modelId}' for provider '${provider}'.`,
+			);
+		}
+
+		return {
+			model: fauxModel as Model<Api>,
+			providerConfig: {
+				apiKeySource: "none",
+			},
+		};
+	}
+
+	const builtInProvider = provider as KnownProvider;
+	const availableModel = getModels(builtInProvider).find(
 		(candidate) => candidate.id === modelId,
 	);
 	if (!availableModel) {
 		throw new Error(`Unknown modelId '${modelId}' for provider '${provider}'.`);
 	}
 
-	const baseModel = getModel(provider, modelId as never) as Model<Api>;
+	const baseModel = getModel(builtInProvider, modelId as never) as Model<Api>;
 	const providerConfig = resolveProviderConfig(config, provider);
 
 	return {

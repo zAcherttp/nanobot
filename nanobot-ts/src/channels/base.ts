@@ -44,6 +44,10 @@ export abstract class BaseChannel<TConfig> {
 	abstract stop(): Promise<void>;
 	abstract send(message: OutboundChannelMessage): Promise<number>;
 
+	supportsStreaming(_message?: OutboundChannelMessage): boolean {
+		return false;
+	}
+
 	protected get config(): TConfig {
 		return this.options.config;
 	}
@@ -68,6 +72,10 @@ export abstract class BaseChannel<TConfig> {
 
 	protected getAllowFrom(): string[] {
 		return [];
+	}
+
+	configuredAllowFrom(): string[] {
+		return [...this.getAllowFrom()];
 	}
 
 	protected getDefaultInboundMetadata(): Record<string, unknown> {

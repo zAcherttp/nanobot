@@ -18,6 +18,9 @@ describe("cli", () => {
 			"agent",
 			"status",
 			"channels",
+			"sessions",
+			"cron",
+			"heartbeat",
 		]);
 	});
 
@@ -30,6 +33,44 @@ describe("cli", () => {
 		expect(channels?.commands.map((command) => command.name())).toEqual([
 			"status",
 			"message",
+		]);
+	});
+
+	it("adds a minimal session admin surface", () => {
+		const program = createCli("nanobot-ts");
+		const sessions = program.commands.find(
+			(command) => command.name() === "sessions",
+		);
+
+		expect(sessions?.commands.map((command) => command.name())).toEqual([
+			"list",
+			"show",
+			"clear",
+		]);
+	});
+
+	it("adds cron admin commands", () => {
+		const program = createCli("nanobot-ts");
+		const cron = program.commands.find((command) => command.name() === "cron");
+
+		expect(cron?.commands.map((command) => command.name())).toEqual([
+			"list",
+			"add",
+			"remove",
+			"run",
+			"status",
+		]);
+	});
+
+	it("adds heartbeat admin commands", () => {
+		const program = createCli("nanobot-ts");
+		const heartbeat = program.commands.find(
+			(command) => command.name() === "heartbeat",
+		);
+
+		expect(heartbeat?.commands.map((command) => command.name())).toEqual([
+			"run",
+			"status",
 		]);
 	});
 

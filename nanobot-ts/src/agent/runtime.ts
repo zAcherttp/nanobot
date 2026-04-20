@@ -10,22 +10,35 @@ import {
 } from "@mariozechner/pi-agent-core";
 import {
 	type Api,
+	type AssistantMessage,
 	type Message,
 	type Model,
 	streamSimple,
+	type ToolResultMessage,
 	type Transport,
 } from "@mariozechner/pi-ai";
 
 import type { AppConfig } from "../config/schema.js";
+import { MemoryStore } from "../memory/index.js";
+import {
+	providerRequiresApiKey,
+	resolveProviderModel,
+} from "../providers/runtime.js";
+import { Consolidator, normalizeLastConsolidated } from "./consolidator.js";
+import { buildSystemPrompt } from "./prompt.js";
+import {
+	createRuntimeCheckpoint,
+	restoreRuntimeCheckpoint,
+	type SessionMetadata,
+	type SessionRuntimeCheckpoint,
+	sanitizeMessagesForPersistence,
+	stripRuntimeCheckpoint,
+} from "./session-persistence.js";
 import {
 	FileSessionStore,
 	type SessionRecord,
 	type SessionStore,
 } from "./session-store.js";
-import {
-	providerRequiresApiKey,
-	resolveProviderModel,
-} from "../providers/runtime.js";
 
 export interface ResolvedAgentRuntimeConfig {
 	provider: AppConfig["agent"]["provider"];
@@ -34,19 +47,25 @@ export interface ResolvedAgentRuntimeConfig {
 	apiKey?: string;
 	providerAuthSource: "config" | "env" | "none";
 	systemPrompt: string;
+	workspacePath: string;
+	skills: string[];
+	contextWindowTokens: number;
 	thinkingLevel: ThinkingLevel;
 	temperature: number;
 	maxTokens: number;
 	toolExecution: ToolExecutionMode;
 	transport: Transport;
 	maxRetryDelayMs: number;
-	sessionStorePath: string;
+	sessionStore: AppConfig["agent"]["sessionStore"] & {
+		path: string;
+	};
 }
 
 export interface CreateSessionAgentOptions {
 	config: ResolvedAgentRuntimeConfig;
 	sessionKey?: string;
 	sessionStore?: SessionStore;
+	channel?: string;
 	tools?: AgentTool[];
 	transformContext?: AgentOptions["transformContext"];
 	convertToLlm?: AgentOptions["convertToLlm"];
@@ -56,6 +75,7 @@ export interface CreateSessionAgentOptions {
 	streamFn?: StreamFn;
 	onPayload?: AgentOptions["onPayload"];
 	thinkingBudgets?: AgentOptions["thinkingBudgets"];
+	consolidator?: Consolidator;
 }
 
 export const DEFAULT_SESSION_KEY = "sdk:default";
@@ -75,13 +95,19 @@ export function resolveAgentRuntimeConfig(
 		...(providerConfig.apiKey ? { apiKey: providerConfig.apiKey } : {}),
 		providerAuthSource: providerConfig.apiKeySource,
 		systemPrompt: config.agent.systemPrompt,
+		workspacePath: config.workspace.path,
+		skills: config.agent.skills,
+		contextWindowTokens: config.agent.contextWindowTokens,
 		thinkingLevel: config.agent.thinkingLevel,
 		temperature: config.agent.temperature,
 		maxTokens: config.agent.maxTokens,
 		toolExecution: config.agent.toolExecution,
 		transport: config.agent.transport,
 		maxRetryDelayMs: config.agent.maxRetryDelayMs,
-		sessionStorePath: config.agent.sessionStore.path,
+		sessionStore: {
+			...config.agent.sessionStore,
+			path: config.agent.sessionStore.path,
+		},
 	};
 }
 
@@ -91,16 +117,43 @@ export async function createSessionAgent(
 	const sessionKey = options.sessionKey ?? DEFAULT_SESSION_KEY;
 	const sessionStore =
 		options.sessionStore ??
-		new FileSessionStore(options.config.sessionStorePath);
-	const existingSession = await sessionStore.load(sessionKey);
-	const initialMessages = sanitizeMessagesForPersistence(
-		existingSession?.messages ?? [],
+		new FileSessionStore(options.config.sessionStore.path, {
+			maxMessages: options.config.sessionStore.maxMessages,
+			maxPersistedTextChars: options.config.sessionStore.maxPersistedTextChars,
+			quarantineCorruptFiles:
+				options.config.sessionStore.quarantineCorruptFiles,
+		});
+	let persistedSession =
+		(await sessionStore.load(sessionKey)) ??
+		createEmptySessionRecord(sessionKey);
+	let createdAt = persistedSession.createdAt;
+	let sessionMetadata = stripRuntimeCheckpoint(
+		persistedSession.metadata as SessionMetadata,
 	);
-	const createdAt = existingSession?.createdAt ?? new Date().toISOString();
+	let currentCheckpoint: SessionRuntimeCheckpoint | undefined;
+	let persistedMessages = sanitizeMessagesForPersistence(
+		persistedSession.messages,
+		{
+			maxMessages: options.config.sessionStore.maxMessages,
+			maxPersistedTextChars: options.config.sessionStore.maxPersistedTextChars,
+		},
+	);
 	const streamFn = withRuntimeDefaults(
 		options.streamFn ?? streamSimple,
 		options.config,
 	);
+	const consolidator =
+		options.consolidator ??
+		createRuntimeConsolidator({
+			config: options.config,
+			sessionStore,
+			getTools: async () => options.tools ?? [],
+		});
+	const systemPrompt = await buildSystemPrompt({
+		workspacePath: options.config.workspacePath,
+		selectedSkills: options.config.skills,
+		...(options.channel ? { channel: options.channel } : {}),
+	});
 	if (
 		!options.getApiKey &&
 		!options.config.apiKey &&
@@ -113,11 +166,11 @@ export async function createSessionAgent(
 
 	const agentOptions: AgentOptions = {
 		initialState: {
-			systemPrompt: options.config.systemPrompt,
+			systemPrompt,
 			model: options.config.model,
 			thinkingLevel: options.config.thinkingLevel,
 			tools: options.tools ?? [],
-			messages: initialMessages,
+			messages: persistedMessages,
 		},
 		streamFn,
 		sessionId: sessionKey,
@@ -125,14 +178,23 @@ export async function createSessionAgent(
 		maxRetryDelayMs: options.config.maxRetryDelayMs,
 		toolExecution: options.config.toolExecution,
 		...(options.convertToLlm ? { convertToLlm: options.convertToLlm } : {}),
-		...(options.transformContext
-			? { transformContext: options.transformContext }
-			: {}),
+		transformContext: async (messages, signal) => {
+			const start = normalizeLastConsolidated(
+				persistedSession.lastConsolidated,
+				messages.length,
+			);
+			const visibleMessages = messages
+				.slice(start)
+				.map((message) => structuredClone(message));
+			if (!options.transformContext) {
+				return visibleMessages;
+			}
+			return options.transformContext(visibleMessages, signal);
+		},
 		...(options.getApiKey || options.config.apiKey
 			? {
 					getApiKey:
-						options.getApiKey ??
-						((_provider: string) => options.config.apiKey),
+						options.getApiKey ?? ((_provider: string) => options.config.apiKey),
 				}
 			: {}),
 		...(options.onPayload ? { onPayload: options.onPayload } : {}),
@@ -147,8 +209,118 @@ export async function createSessionAgent(
 
 	const agent = new Agent(agentOptions);
 
+	await prepareSessionForExecution();
+
 	agent.subscribe(async (event) => {
+		if (event.type === "message_update" || event.type === "message_end") {
+			const assistantMessage = resolveLatestAssistantMessage(
+				event.type === "message_update" ? event.message : event.message,
+				agent.state.messages,
+			);
+			if (assistantMessage) {
+				currentCheckpoint = createRuntimeCheckpoint(
+					assistantMessage,
+					getCompletedToolResults(agent.state.messages),
+				);
+				await persistCheckpoint();
+			}
+		}
+
+		if (event.type === "message_end" && event.message.role === "toolResult") {
+			currentCheckpoint = createRuntimeCheckpoint(
+				getLatestAssistantMessage(agent.state.messages),
+				getCompletedToolResults(agent.state.messages),
+			);
+			await persistCheckpoint();
+		}
+
 		if (event.type !== "agent_end") {
+			return;
+		}
+
+		const latestAssistant = getLatestAssistantMessage(agent.state.messages);
+		if (
+			latestAssistant &&
+			(latestAssistant.stopReason === "error" ||
+				latestAssistant.stopReason === "aborted")
+		) {
+			await persistCheckpoint();
+			return;
+		}
+
+		currentCheckpoint = undefined;
+		persistedMessages = sanitizeMessagesForPersistence(agent.state.messages, {
+			maxMessages: options.config.sessionStore.maxMessages,
+			maxPersistedTextChars: options.config.sessionStore.maxPersistedTextChars,
+		});
+		await sessionStore.save({
+			key: sessionKey,
+			createdAt,
+			updatedAt: new Date().toISOString(),
+			lastConsolidated: persistedSession.lastConsolidated,
+			messages: persistedMessages,
+			metadata: sessionMetadata,
+		});
+		try {
+			const consolidated = await consolidator.maybeConsolidateByTokens(
+				sessionKey,
+				options.channel,
+			);
+			if (consolidated) {
+				persistedSession = consolidated;
+			}
+		} catch {
+			// Consolidation failures should not break a completed agent turn.
+		}
+	});
+
+	const originalPrompt = agent.prompt.bind(agent);
+	(agent.prompt as typeof agent.prompt) = (async (
+		...args: Parameters<Agent["prompt"]>
+	) => {
+		await prepareSessionForExecution();
+		return originalPrompt(...args);
+	}) as Agent["prompt"];
+
+	const originalContinue = agent.continue.bind(agent);
+	(agent.continue as typeof agent.continue) = (async () => {
+		await prepareSessionForExecution();
+		return originalContinue();
+	}) as Agent["continue"];
+
+	return agent;
+
+	async function prepareSessionForExecution(): Promise<void> {
+		const loaded =
+			(await sessionStore.load(sessionKey)) ??
+			createEmptySessionRecord(sessionKey, createdAt);
+		createdAt = loaded.createdAt;
+		const restored = restoreRuntimeCheckpoint(loaded);
+		persistedSession = restored.session;
+		sessionMetadata = stripRuntimeCheckpoint(
+			persistedSession.metadata as SessionMetadata,
+		);
+		persistedMessages = sanitizeMessagesForPersistence(
+			persistedSession.messages,
+			{
+				maxMessages: options.config.sessionStore.maxMessages,
+				maxPersistedTextChars:
+					options.config.sessionStore.maxPersistedTextChars,
+			},
+		);
+		currentCheckpoint = undefined;
+		if (restored.restored) {
+			await sessionStore.save({
+				...persistedSession,
+				messages: persistedMessages,
+				metadata: sessionMetadata,
+			});
+		}
+		agent.state.messages = structuredClone(persistedMessages);
+	}
+
+	async function persistCheckpoint(): Promise<void> {
+		if (!currentCheckpoint) {
 			return;
 		}
 
@@ -156,12 +328,28 @@ export async function createSessionAgent(
 			key: sessionKey,
 			createdAt,
 			updatedAt: new Date().toISOString(),
-			messages: sanitizeMessagesForPersistence(agent.state.messages),
-			metadata: {},
+			lastConsolidated: persistedSession.lastConsolidated,
+			messages: persistedMessages,
+			metadata: {
+				...sessionMetadata,
+				runtimeCheckpoint: currentCheckpoint,
+			},
 		});
-	});
+	}
+}
 
-	return agent;
+export function createRuntimeConsolidator(options: {
+	config: ResolvedAgentRuntimeConfig;
+	sessionStore: SessionStore;
+	getTools?: () => AgentTool[] | Promise<AgentTool[]>;
+}): Consolidator {
+	return new Consolidator({
+		memoryStore: new MemoryStore(options.config.workspacePath),
+		sessionStore: options.sessionStore,
+		config: options.config,
+		buildSystemPrompt,
+		...(options.getTools ? { getTools: options.getTools } : {}),
+	});
 }
 
 export function getLatestAssistantMessage(
@@ -197,19 +385,6 @@ export function resolveSessionStorePath(
 		: path.resolve(workspacePath, sessionStorePath);
 }
 
-export function sanitizeMessagesForPersistence(
-	messages: readonly Message[],
-): Message[] {
-	return messages
-		.filter((message) => {
-			return !(
-				message.role === "assistant" &&
-				(message.stopReason === "error" || message.stopReason === "aborted")
-			);
-		})
-		.map((message) => structuredClone(message));
-}
-
 export function createSessionRecord(
 	key: string,
 	messages: readonly Message[],
@@ -219,8 +394,9 @@ export function createSessionRecord(
 		key,
 		createdAt,
 		updatedAt: new Date().toISOString(),
+		lastConsolidated: 0,
 		metadata: {},
-		messages: sanitizeMessagesForPersistence(messages),
+		messages: [...messages].map((message) => structuredClone(message)),
 	};
 }
 
@@ -236,4 +412,36 @@ function withRuntimeDefaults(
 			transport: options?.transport ?? config.transport,
 			maxRetryDelayMs: options?.maxRetryDelayMs ?? config.maxRetryDelayMs,
 		});
+}
+
+function createEmptySessionRecord(
+	key: string,
+	createdAt = new Date().toISOString(),
+): SessionRecord {
+	return {
+		key,
+		createdAt,
+		updatedAt: createdAt,
+		lastConsolidated: 0,
+		metadata: {},
+		messages: [],
+	};
+}
+
+function resolveLatestAssistantMessage(
+	candidate: Message | undefined,
+	messages: readonly Message[],
+): AssistantMessage | undefined {
+	if (candidate?.role === "assistant") {
+		return candidate;
+	}
+	return getLatestAssistantMessage(messages);
+}
+
+function getCompletedToolResults(
+	messages: readonly Message[],
+): ToolResultMessage[] {
+	return messages.filter(
+		(message): message is ToolResultMessage => message.role === "toolResult",
+	);
 }

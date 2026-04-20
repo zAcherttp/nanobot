@@ -5,6 +5,7 @@ import {
 	handleStart,
 	handleTextMessage,
 	handleUnsupportedMessage,
+	normalizeTelegramCommandText,
 	START_MESSAGE,
 	SYSTEM_ROLE,
 	TELEGRAM_CHANNEL_NAME,
@@ -15,6 +16,7 @@ import {
 describe("telegram channel", () => {
 	function createChannel(
 		sendMessage = vi.fn(async () => undefined),
+		editMessage = vi.fn(async () => undefined),
 		now = () => new Date("2026-04-17T08:00:00.000Z"),
 	) {
 		const bus = new InMemoryMessageBus();
@@ -27,10 +29,11 @@ describe("telegram channel", () => {
 					token: "123:abc",
 					allowFrom: ["*"],
 					chatIds: ["111", "222"],
+					streaming: true,
 				},
 				bus,
 			},
-			{ sendMessage, now },
+			{ sendMessage, editMessage, now },
 		);
 
 		return { channel, bus };
@@ -78,6 +81,15 @@ describe("telegram channel", () => {
 		]);
 	});
 
+	it("normalizes Telegram-safe Dream aliases before publishing inbound commands", async () => {
+		expect(normalizeTelegramCommandText("/dream_log@nanobot_test deadbeef")).toBe(
+			"/dream-log deadbeef",
+		);
+		expect(
+			normalizeTelegramCommandText("/dream_restore@nanobot_test deadbeef"),
+		).toBe("/dream-restore deadbeef");
+	});
+
 	it("replies once for unsupported message types", async () => {
 		const reply = vi.fn(async () => undefined);
 		const { channel } = createChannel();
@@ -111,6 +123,7 @@ describe("telegram channel", () => {
 				token: "123:abc",
 				allowFrom: ["123"],
 				chatIds: [],
+				streaming: true,
 			},
 			bus,
 		});
@@ -145,6 +158,7 @@ describe("telegram channel", () => {
 				token: "123:abc",
 				allowFrom: ["*"],
 				chatIds: [],
+				streaming: true,
 			},
 			bus,
 		});
@@ -223,6 +237,7 @@ describe("telegram channel", () => {
 				token: "123:abc",
 				allowFrom: ["*"],
 				chatIds: [],
+				streaming: true,
 			},
 			bus: new InMemoryMessageBus(),
 		});
@@ -246,5 +261,96 @@ describe("telegram channel", () => {
 				content: "   ",
 			}),
 		).rejects.toThrow("cannot be empty");
+	});
+
+	it("streams assistant text by sending first and editing later deltas", async () => {
+		const sendMessage = vi.fn(async () => ({ message_id: 7 }));
+		const editMessage = vi.fn(async () => undefined);
+		let currentTime = Date.parse("2026-04-17T08:00:00.000Z");
+		const { channel } = createChannel(
+			sendMessage,
+			editMessage,
+			() => new Date(currentTime),
+		);
+
+		await channel.send({
+			channel: "telegram",
+			chatId: "111",
+			content: "Hello",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+		currentTime += 350;
+		await channel.send({
+			channel: "telegram",
+			chatId: "111",
+			content: " world",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await channel.send({
+			channel: "telegram",
+			chatId: "111",
+			content: "",
+			role: "assistant",
+			metadata: {
+				_stream_end: true,
+				_stream_id: "stream-1",
+			},
+		});
+
+		expect(sendMessage).toHaveBeenCalledOnce();
+		expect(sendMessage).toHaveBeenCalledWith("111", "Hello");
+		expect(editMessage).toHaveBeenCalledWith("111", 7, "Hello world");
+	});
+
+	it("does not create a streamed message for whitespace-only deltas", async () => {
+		const sendMessage = vi.fn(async () => ({ message_id: 7 }));
+		const { channel } = createChannel(sendMessage);
+
+		await expect(
+			channel.send({
+				channel: "telegram",
+				chatId: "111",
+				content: "   ",
+				role: "assistant",
+				metadata: {
+					_stream_delta: true,
+					_stream_id: "stream-2",
+				},
+			}),
+		).resolves.toBe(0);
+
+		expect(sendMessage).not.toHaveBeenCalled();
+	});
+
+	it("sends tool hints as lightweight progress messages when streaming is enabled", async () => {
+		const sendMessage = vi.fn(async () => undefined);
+		const { channel } = createChannel(sendMessage);
+
+		await expect(
+			channel.send({
+				channel: "telegram",
+				chatId: "111",
+				content: 'read_file({"path":"README.md"})',
+				role: "assistant",
+				metadata: {
+					_progress: true,
+					_tool_hint: true,
+					_stream_id: "stream-3",
+				},
+			}),
+		).resolves.toBe(1);
+
+		expect(sendMessage).toHaveBeenCalledWith(
+			"111",
+			'read_file({"path":"README.md"})',
+		);
 	});
 });

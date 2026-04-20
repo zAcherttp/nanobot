@@ -4,24 +4,32 @@ import { getProviders } from "@mariozechner/pi-ai";
 import dotenv from "dotenv";
 import { z } from "zod";
 import {
+	isNanobotFauxProvider,
+	NANOBOT_FAUX_PROVIDER,
+} from "../providers/faux.js";
+import {
 	DEFAULT_CONFIG_FILENAME,
 	DEFAULT_WORKSPACE_PATH,
 	resolveConfigPath,
 	resolveWorkspacePath,
 } from "./paths.js";
-import type {
-	AppConfig,
-	LogLevel,
-	ProviderOverrideConfig,
-} from "./schema.js";
+import type { AppConfig, LogLevel, ProviderOverrideConfig } from "./schema.js";
 
 dotenv.config({ quiet: true });
 
 export const DEFAULT_GATEWAY_PORT = 18790;
+export const DEFAULT_HEARTBEAT_ENABLED = true;
+export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30 * 60;
+export const DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES = 8;
 export const DEFAULT_AGENT_PROVIDER = "anthropic";
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-4-5";
 export const DEFAULT_AGENT_SYSTEM_PROMPT =
 	"You are nanobot, a personal AI assistant.";
+export const DEFAULT_AGENT_SKILLS: string[] = [];
+export const DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS = 65_536;
+export const DEFAULT_AGENT_DREAM_INTERVAL_HOURS = 2;
+export const DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE = 20;
+export const DEFAULT_AGENT_DREAM_MAX_ITERATIONS = 10;
 export const DEFAULT_AGENT_THINKING_LEVEL = "off";
 export const DEFAULT_AGENT_TEMPERATURE = 0.1;
 export const DEFAULT_AGENT_MAX_TOKENS = 8192;
@@ -29,6 +37,17 @@ export const DEFAULT_AGENT_TOOL_EXECUTION = "parallel";
 export const DEFAULT_AGENT_TRANSPORT = "sse";
 export const DEFAULT_AGENT_MAX_RETRY_DELAY_MS = 60_000;
 export const DEFAULT_AGENT_SESSION_STORE_PATH = "sessions";
+export const DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES = 500;
+export const DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS = 16_000;
+export const DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES = true;
+export const DEFAULT_CRON_ENABLED = true;
+export const DEFAULT_CRON_PATH = path.join("cron", "jobs.json");
+export const DEFAULT_CRON_TIMEZONE = "UTC";
+export const DEFAULT_CRON_MAX_RUN_HISTORY = 20;
+export const DEFAULT_CRON_MAX_SLEEP_MS = 300_000;
+export const DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE = false;
+export const DEFAULT_SECURITY_ALLOWED_ENV_KEYS: string[] = [];
+export const DEFAULT_SECURITY_SSRF_WHITELIST: string[] = [];
 
 const LOG_LEVELS = [
 	"fatal",
@@ -49,6 +68,10 @@ const THINKING_LEVELS = [
 const TOOL_EXECUTION_MODES = ["parallel", "sequential"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 const PROVIDERS = getProviders();
+const SUPPORTED_AGENT_PROVIDERS = new Set<string>([
+	...PROVIDERS,
+	NANOBOT_FAUX_PROVIDER,
+]);
 
 const appConfigSchema = z.object({
 	workspace: z
@@ -59,8 +82,57 @@ const appConfigSchema = z.object({
 	gateway: z
 		.object({
 			port: z.number().int().positive().default(DEFAULT_GATEWAY_PORT),
+			heartbeat: z
+				.object({
+					enabled: z.boolean().default(DEFAULT_HEARTBEAT_ENABLED),
+					intervalSeconds: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_HEARTBEAT_INTERVAL_SECONDS),
+					keepRecentMessages: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES),
+				})
+				.default({
+					enabled: DEFAULT_HEARTBEAT_ENABLED,
+					intervalSeconds: DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+					keepRecentMessages: DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES,
+				}),
 		})
-		.default({ port: DEFAULT_GATEWAY_PORT }),
+		.default({
+			port: DEFAULT_GATEWAY_PORT,
+			heartbeat: {
+				enabled: DEFAULT_HEARTBEAT_ENABLED,
+				intervalSeconds: DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+				keepRecentMessages: DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES,
+			},
+		}),
+	cron: z
+		.object({
+			enabled: z.boolean().default(DEFAULT_CRON_ENABLED),
+			path: z.string().default(DEFAULT_CRON_PATH),
+			timezone: z.string().default(DEFAULT_CRON_TIMEZONE),
+			maxRunHistory: z
+				.number()
+				.int()
+				.positive()
+				.default(DEFAULT_CRON_MAX_RUN_HISTORY),
+			maxSleepMs: z
+				.number()
+				.int()
+				.positive()
+				.default(DEFAULT_CRON_MAX_SLEEP_MS),
+		})
+		.default({
+			enabled: DEFAULT_CRON_ENABLED,
+			path: DEFAULT_CRON_PATH,
+			timezone: DEFAULT_CRON_TIMEZONE,
+			maxRunHistory: DEFAULT_CRON_MAX_RUN_HISTORY,
+			maxSleepMs: DEFAULT_CRON_MAX_SLEEP_MS,
+		}),
 	channels: z
 		.object({
 			telegram: z
@@ -69,12 +141,14 @@ const appConfigSchema = z.object({
 					token: z.string().default(""),
 					allowFrom: z.array(z.string()).default([]),
 					chatIds: z.array(z.string()).default([]),
+					streaming: z.boolean().default(true),
 				})
 				.default({
 					enabled: false,
 					token: "",
 					allowFrom: [],
 					chatIds: [],
+					streaming: true,
 				}),
 		})
 		.default({
@@ -83,6 +157,7 @@ const appConfigSchema = z.object({
 				token: "",
 				allowFrom: [],
 				chatIds: [],
+				streaming: true,
 			},
 		}),
 	providers: z
@@ -95,19 +170,62 @@ const appConfigSchema = z.object({
 			}),
 		)
 		.default({}),
+	security: z
+		.object({
+			restrictToWorkspace: z
+				.boolean()
+				.default(DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE),
+			allowedEnvKeys: z
+				.array(z.string())
+				.default(DEFAULT_SECURITY_ALLOWED_ENV_KEYS),
+			ssrfWhitelist: z
+				.array(z.string())
+				.default(DEFAULT_SECURITY_SSRF_WHITELIST),
+		})
+		.default({
+			restrictToWorkspace: DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE,
+			allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
+			ssrfWhitelist: DEFAULT_SECURITY_SSRF_WHITELIST,
+		}),
 	agent: z
 		.object({
 			provider: z
 				.string()
-				.refine(
-					(value) => PROVIDERS.includes(value as (typeof PROVIDERS)[number]),
-					{
-						message: "Unsupported agent provider.",
-					},
-				)
+				.refine((value) => SUPPORTED_AGENT_PROVIDERS.has(value), {
+					message: "Unsupported agent provider.",
+				})
 				.default(DEFAULT_AGENT_PROVIDER),
 			modelId: z.string().default(DEFAULT_AGENT_MODEL_ID),
 			systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
+			skills: z.array(z.string()).default(DEFAULT_AGENT_SKILLS),
+			contextWindowTokens: z
+				.number()
+				.int()
+				.positive()
+				.default(DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS),
+			dream: z
+				.object({
+					intervalHours: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_AGENT_DREAM_INTERVAL_HOURS),
+					maxBatchSize: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE),
+					maxIterations: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_AGENT_DREAM_MAX_ITERATIONS),
+				})
+				.default({
+					intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
+					maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,
+					maxIterations: DEFAULT_AGENT_DREAM_MAX_ITERATIONS,
+				}),
 			thinkingLevel: z
 				.enum(THINKING_LEVELS)
 				.default(DEFAULT_AGENT_THINKING_LEVEL),
@@ -126,16 +244,41 @@ const appConfigSchema = z.object({
 				.object({
 					type: z.literal("file").default("file"),
 					path: z.string().default(DEFAULT_AGENT_SESSION_STORE_PATH),
+					maxMessages: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES),
+					maxPersistedTextChars: z
+						.number()
+						.int()
+						.positive()
+						.default(DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS),
+					quarantineCorruptFiles: z
+						.boolean()
+						.default(DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES),
 				})
 				.default({
 					type: "file",
 					path: DEFAULT_AGENT_SESSION_STORE_PATH,
+					maxMessages: DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES,
+					maxPersistedTextChars:
+						DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS,
+					quarantineCorruptFiles:
+						DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES,
 				}),
 		})
 		.default({
 			provider: DEFAULT_AGENT_PROVIDER,
 			modelId: DEFAULT_AGENT_MODEL_ID,
 			systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+			skills: DEFAULT_AGENT_SKILLS,
+			contextWindowTokens: DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS,
+			dream: {
+				intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
+				maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,
+				maxIterations: DEFAULT_AGENT_DREAM_MAX_ITERATIONS,
+			},
 			thinkingLevel: DEFAULT_AGENT_THINKING_LEVEL,
 			temperature: DEFAULT_AGENT_TEMPERATURE,
 			maxTokens: DEFAULT_AGENT_MAX_TOKENS,
@@ -145,6 +288,11 @@ const appConfigSchema = z.object({
 			sessionStore: {
 				type: "file",
 				path: DEFAULT_AGENT_SESSION_STORE_PATH,
+				maxMessages: DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES,
+				maxPersistedTextChars:
+					DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS,
+				quarantineCorruptFiles:
+					DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES,
 			},
 		}),
 	logging: z
@@ -169,6 +317,18 @@ export const DEFAULT_CONFIG: AppConfig = {
 	},
 	gateway: {
 		port: DEFAULT_GATEWAY_PORT,
+		heartbeat: {
+			enabled: DEFAULT_HEARTBEAT_ENABLED,
+			intervalSeconds: DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+			keepRecentMessages: DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES,
+		},
+	},
+	cron: {
+		enabled: DEFAULT_CRON_ENABLED,
+		path: DEFAULT_CRON_PATH,
+		timezone: DEFAULT_CRON_TIMEZONE,
+		maxRunHistory: DEFAULT_CRON_MAX_RUN_HISTORY,
+		maxSleepMs: DEFAULT_CRON_MAX_SLEEP_MS,
 	},
 	channels: {
 		telegram: {
@@ -176,13 +336,26 @@ export const DEFAULT_CONFIG: AppConfig = {
 			token: "",
 			allowFrom: [],
 			chatIds: [],
+			streaming: true,
 		},
 	},
 	providers: {},
+	security: {
+		restrictToWorkspace: DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE,
+		allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
+		ssrfWhitelist: DEFAULT_SECURITY_SSRF_WHITELIST,
+	},
 	agent: {
 		provider: DEFAULT_AGENT_PROVIDER,
 		modelId: DEFAULT_AGENT_MODEL_ID,
 		systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
+		skills: DEFAULT_AGENT_SKILLS,
+		contextWindowTokens: DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS,
+		dream: {
+			intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
+			maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,
+			maxIterations: DEFAULT_AGENT_DREAM_MAX_ITERATIONS,
+		},
 		thinkingLevel: DEFAULT_AGENT_THINKING_LEVEL,
 		temperature: DEFAULT_AGENT_TEMPERATURE,
 		maxTokens: DEFAULT_AGENT_MAX_TOKENS,
@@ -192,6 +365,11 @@ export const DEFAULT_CONFIG: AppConfig = {
 		sessionStore: {
 			type: "file",
 			path: DEFAULT_AGENT_SESSION_STORE_PATH,
+			maxMessages: DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES,
+			maxPersistedTextChars:
+				DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS,
+			quarantineCorruptFiles:
+				DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES,
 		},
 	},
 	logging: {
@@ -222,6 +400,13 @@ export async function loadConfig(
 				path.dirname(resolvedPath),
 			),
 		},
+		cron: {
+			...parsed.cron,
+			path: resolveWorkspacePath(
+				parsed.cron.path,
+				resolveWorkspacePath(parsed.workspace.path, path.dirname(resolvedPath)),
+			),
+		},
 		agent: {
 			...parsed.agent,
 			provider: parsed.agent.provider as AppConfig["agent"]["provider"],
@@ -242,10 +427,15 @@ export async function loadConfig(
 				token:
 					options.telegramTokenOverride ??
 					envToken ??
-				parsed.channels.telegram.token,
+					parsed.channels.telegram.token,
 			},
 		},
 		providers: normalizeProviderOverrides(parsed.providers),
+		security: {
+			restrictToWorkspace: parsed.security.restrictToWorkspace,
+			allowedEnvKeys: parsed.security.allowedEnvKeys.map((key) => key.trim()),
+			ssrfWhitelist: parsed.security.ssrfWhitelist.map((cidr) => cidr.trim()),
+		},
 		logging: {
 			level: envLogLevel ?? parsed.logging.level,
 		},
@@ -275,9 +465,30 @@ export function validateRuntimeConfig(config: AppConfig): void {
 		throw new Error(`Invalid log level: ${config.logging.level}`);
 	}
 	if (
-		!PROVIDERS.includes(config.agent.provider as (typeof PROVIDERS)[number])
+		!SUPPORTED_AGENT_PROVIDERS.has(config.agent.provider) &&
+		!isNanobotFauxProvider(config.agent.provider)
 	) {
 		throw new Error(`Unsupported agent provider: ${config.agent.provider}`);
+	}
+	if (!config.cron.timezone.trim()) {
+		throw new Error("Cron timezone is required.");
+	}
+	if (
+		config.channels.telegram.enabled &&
+		config.channels.telegram.allowFrom.length === 0
+	) {
+		throw new Error(
+			'Enabled channel "telegram" has empty allowFrom (denies all). Set ["*"] to allow everyone, or add specific sender IDs.',
+		);
+	}
+	if (config.gateway.heartbeat.intervalSeconds <= 0) {
+		throw new Error("Heartbeat intervalSeconds must be positive.");
+	}
+	if (config.security.allowedEnvKeys.some((key) => key.length === 0)) {
+		throw new Error("security.allowedEnvKeys cannot contain empty entries.");
+	}
+	if (config.security.ssrfWhitelist.some((cidr) => cidr.length === 0)) {
+		throw new Error("security.ssrfWhitelist cannot contain empty entries.");
 	}
 }
 
@@ -296,7 +507,9 @@ export async function saveConfig(
 	return resolvedPath;
 }
 
-function resolveConfigEnvVars(value: Record<string, unknown>): Record<string, unknown> {
+function resolveConfigEnvVars(
+	value: Record<string, unknown>,
+): Record<string, unknown> {
 	return resolveEnvVars(value) as Record<string, unknown>;
 }
 
@@ -322,10 +535,7 @@ function resolveEnvVars(value: unknown): unknown {
 
 	if (value && typeof value === "object") {
 		return Object.fromEntries(
-			Object.entries(value).map(([key, entry]) => [
-				key,
-				resolveEnvVars(entry),
-			]),
+			Object.entries(value).map(([key, entry]) => [key, resolveEnvVars(entry)]),
 		);
 	}
 

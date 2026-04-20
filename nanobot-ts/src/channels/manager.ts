@@ -30,6 +30,7 @@ export class ChannelManager {
 	private readonly channels = new Map<string, BaseChannel<unknown>>();
 	private readonly factories: ChannelFactory[];
 	private readonly factoryByName: Map<string, ChannelFactory>;
+	private readonly bufferedStreams = new Map<string, BufferedStreamState>();
 	private unsubscribeOutbound: (() => void) | undefined;
 	private started = false;
 
@@ -53,6 +54,8 @@ export class ChannelManager {
 				factory.createChannel(this.config, this.bus, this.logger),
 			);
 		}
+
+		this.validateEnabledChannelPolicies();
 	}
 
 	getBus(): MessageBus {
@@ -107,6 +110,7 @@ export class ChannelManager {
 		for (const channel of activeChannels) {
 			await channel.stop();
 		}
+		this.bufferedStreams.clear();
 	}
 
 	async send(message: OutboundChannelMessage): Promise<number> {
@@ -135,6 +139,9 @@ export class ChannelManager {
 		message: OutboundChannelMessage,
 	): Promise<number> {
 		const channel = this.getChannelForMessage(message);
+		if (hasStreamingMetadata(message) && !channel.supportsStreaming(message)) {
+			return this.dispatchBufferedStream(channel, message);
+		}
 		return channel.send(message);
 	}
 
@@ -158,4 +165,91 @@ export class ChannelManager {
 
 		return channel;
 	}
+
+	private async dispatchBufferedStream(
+		channel: BaseChannel<unknown>,
+		message: OutboundChannelMessage,
+	): Promise<number> {
+		if (!message.chatId) {
+			throw new Error("Buffered stream messages require a chatId.");
+		}
+
+		if (message.metadata?._progress === true) {
+			return 0;
+		}
+
+		const streamId = getStreamId(message);
+		if (!streamId) {
+			throw new Error("Buffered stream messages require metadata._stream_id.");
+		}
+
+		const key = getBufferedStreamKey(message.channel, message.chatId, streamId);
+		if (message.metadata?._stream_delta === true) {
+			const existing = this.bufferedStreams.get(key);
+			this.bufferedStreams.set(key, {
+				channel: message.channel,
+				chatId: message.chatId,
+				content: `${existing?.content ?? ""}${message.content}`,
+				role: message.role,
+			});
+			return 0;
+		}
+
+		if (message.metadata?._stream_end === true) {
+			const buffered = this.bufferedStreams.get(key);
+			this.bufferedStreams.delete(key);
+			if (!buffered || !buffered.content.trim()) {
+				return 0;
+			}
+
+			return channel.send({
+				channel: buffered.channel,
+				chatId: buffered.chatId,
+				content: buffered.content,
+				...(buffered.role ? { role: buffered.role } : {}),
+			});
+		}
+
+		return channel.send(message);
+	}
+
+	private validateEnabledChannelPolicies(): void {
+		for (const [name, channel] of this.channels) {
+			if (channel.configuredAllowFrom().length > 0) {
+				continue;
+			}
+
+			throw new Error(
+				`Enabled channel "${name}" has empty allowFrom (denies all). Set ["*"] to allow everyone, or add specific sender IDs.`,
+			);
+		}
+	}
+}
+
+interface BufferedStreamState {
+	channel: string;
+	chatId: string;
+	content: string;
+	role?: OutboundChannelMessage["role"];
+}
+
+function hasStreamingMetadata(message: OutboundChannelMessage): boolean {
+	return (
+		message.metadata?._stream_delta === true ||
+		message.metadata?._stream_end === true ||
+		message.metadata?._progress === true
+	);
+}
+
+function getStreamId(message: OutboundChannelMessage): string | null {
+	const streamId = message.metadata?._stream_id;
+	return typeof streamId === "string" && streamId ? streamId : null;
+}
+
+function getBufferedStreamKey(
+	channel: string,
+	chatId: string,
+	streamId: string,
+): string {
+	return `${channel}:${chatId}:${streamId}`;
 }

@@ -3,8 +3,8 @@ export {
 	registerBuiltinCommands,
 } from "./builtin.js";
 export {
-	CommandRouter,
 	type CommandContext,
 	type CommandHandler,
+	CommandRouter,
 	type CommandSessionSummary,
 } from "./router.js";
