@@ -8,6 +8,8 @@ import type { Message } from "@mariozechner/pi-ai";
 import { Command } from "commander";
 
 import {
+	createRuntimeAutoCompactor,
+	createRuntimeConsolidator,
 	createSessionAgent,
 	FileSessionStore,
 	getLatestAssistantText,
@@ -329,7 +331,7 @@ async function runOnboard(
 
 	if (options.wizard) {
 		printNote(
-			"Interactive wizard is not implemented in nanobot-ts yet. Writing the stub config instead.",
+			"Interactive wizard is not implemented in nanobot-ts yet. Writing the initial config instead.",
 		);
 	}
 
@@ -376,11 +378,27 @@ async function runGateway(
 		dreamService,
 	});
 	await registerDreamCronJob(config, cronService);
-	const runtime = new GatewayRuntime({
+	const runtimeSessionStore = createRuntimeSessionStore(agentConfig);
+	let runtime!: GatewayRuntime;
+	let heartbeatService!: HeartbeatService;
+	const autoCompactor = createRuntimeAutoCompactor({
+		config: agentConfig,
+		sessionStore: runtimeSessionStore,
+		consolidator: createRuntimeConsolidator({
+			config: agentConfig,
+			sessionStore: runtimeSessionStore,
+		}),
+		logger,
+		isSessionActive: (sessionKey) =>
+			runtime.isSessionActive(sessionKey) ||
+			cronService.isSessionActive(sessionKey) ||
+			heartbeatService.isSessionActive(sessionKey),
+	});
+	runtime = new GatewayRuntime({
 		bus: manager.getBus(),
 		logger,
 		config: agentConfig,
-		sessionStore: createRuntimeSessionStore(agentConfig),
+		sessionStore: runtimeSessionStore,
 		getTools: ({ message }) =>
 			getRuntimeTools(config, {
 				cronService,
@@ -388,8 +406,9 @@ async function runGateway(
 				chatId: message.chatId,
 			}),
 		dreamService,
+		autoCompactor,
 	});
-	const heartbeatService = createHeartbeatService(config, logger, {
+	heartbeatService = createHeartbeatService(config, logger, {
 		manager,
 		agentConfig,
 		cronService,
@@ -398,10 +417,11 @@ async function runGateway(
 	if (
 		!manager.hasEnabledChannels() &&
 		!config.cron.enabled &&
-		!config.gateway.heartbeat.enabled
+		!config.gateway.heartbeat.enabled &&
+		config.agent.idleCompactAfterMinutes <= 0
 	) {
 		throw new Error(
-			"No channels are enabled and both cron and heartbeat are disabled. Enable a channel or set cron.enabled=true / gateway.heartbeat.enabled=true before starting the gateway.",
+			"No channels are enabled and cron, heartbeat, and auto-compact are disabled. Enable a channel, set cron.enabled=true / gateway.heartbeat.enabled=true, or set agent.idleCompactAfterMinutes before starting the gateway.",
 		);
 	}
 
@@ -418,10 +438,12 @@ async function runGateway(
 	if (config.gateway.heartbeat.enabled) {
 		await heartbeatService.start();
 	}
+	await autoCompactor.start();
 	printInfo("Gateway is running. Press Ctrl+C to stop.");
 
 	await waitForShutdown(async (signal) => {
 		printNote(`Received ${signal}, stopping gateway...`);
+		await autoCompactor.stop();
 		await heartbeatService.stop();
 		await cronService.stop();
 		await runtime.stop();

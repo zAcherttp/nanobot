@@ -31,9 +31,9 @@ export type AppProvider = KnownProvider | typeof NANOBOT_FAUX_PROVIDER;
 export interface AgentConfig {
 	provider: AppProvider;
 	modelId: string;
-	systemPrompt: string;
 	skills: string[];
 	contextWindowTokens: number;
+	idleCompactAfterMinutes: number;
 	dream: {
 		intervalHours: number;
 		maxBatchSize: number;

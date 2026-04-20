@@ -23,10 +23,9 @@ export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30 * 60;
 export const DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES = 8;
 export const DEFAULT_AGENT_PROVIDER = "anthropic";
 export const DEFAULT_AGENT_MODEL_ID = "claude-opus-4-5";
-export const DEFAULT_AGENT_SYSTEM_PROMPT =
-	"You are nanobot, a personal AI assistant.";
 export const DEFAULT_AGENT_SKILLS: string[] = [];
 export const DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS = 65_536;
+export const DEFAULT_AGENT_IDLE_COMPACT_AFTER_MINUTES = 0;
 export const DEFAULT_AGENT_DREAM_INTERVAL_HOURS = 2;
 export const DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE = 20;
 export const DEFAULT_AGENT_DREAM_MAX_ITERATIONS = 10;
@@ -73,11 +72,20 @@ const SUPPORTED_AGENT_PROVIDERS = new Set<string>([
 	NANOBOT_FAUX_PROVIDER,
 ]);
 
+const providerOverrideSchema = z
+	.object({
+		apiKey: z.string().optional(),
+		apiBase: z.string().optional(),
+		headers: z.record(z.string(), z.string()).optional(),
+	})
+	.strict();
+
 const appConfigSchema = z.object({
 	workspace: z
 		.object({
 			path: z.string().default(DEFAULT_WORKSPACE_PATH),
 		})
+		.strict()
 		.default({ path: DEFAULT_WORKSPACE_PATH }),
 	gateway: z
 		.object({
@@ -96,12 +104,14 @@ const appConfigSchema = z.object({
 						.positive()
 						.default(DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES),
 				})
+				.strict()
 				.default({
 					enabled: DEFAULT_HEARTBEAT_ENABLED,
 					intervalSeconds: DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
 					keepRecentMessages: DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES,
-				}),
+			}),
 		})
+		.strict()
 		.default({
 			port: DEFAULT_GATEWAY_PORT,
 			heartbeat: {
@@ -126,6 +136,7 @@ const appConfigSchema = z.object({
 				.positive()
 				.default(DEFAULT_CRON_MAX_SLEEP_MS),
 		})
+		.strict()
 		.default({
 			enabled: DEFAULT_CRON_ENABLED,
 			path: DEFAULT_CRON_PATH,
@@ -143,14 +154,16 @@ const appConfigSchema = z.object({
 					chatIds: z.array(z.string()).default([]),
 					streaming: z.boolean().default(true),
 				})
+				.strict()
 				.default({
 					enabled: false,
 					token: "",
 					allowFrom: [],
 					chatIds: [],
 					streaming: true,
-				}),
+			}),
 		})
+		.strict()
 		.default({
 			telegram: {
 				enabled: false,
@@ -161,14 +174,7 @@ const appConfigSchema = z.object({
 			},
 		}),
 	providers: z
-		.record(
-			z.string(),
-			z.object({
-				apiKey: z.string().optional(),
-				apiBase: z.string().optional(),
-				headers: z.record(z.string(), z.string()).optional(),
-			}),
-		)
+		.record(z.string(), providerOverrideSchema)
 		.default({}),
 	security: z
 		.object({
@@ -182,6 +188,7 @@ const appConfigSchema = z.object({
 				.array(z.string())
 				.default(DEFAULT_SECURITY_SSRF_WHITELIST),
 		})
+		.strict()
 		.default({
 			restrictToWorkspace: DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE,
 			allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
@@ -196,13 +203,17 @@ const appConfigSchema = z.object({
 				})
 				.default(DEFAULT_AGENT_PROVIDER),
 			modelId: z.string().default(DEFAULT_AGENT_MODEL_ID),
-			systemPrompt: z.string().default(DEFAULT_AGENT_SYSTEM_PROMPT),
 			skills: z.array(z.string()).default(DEFAULT_AGENT_SKILLS),
 			contextWindowTokens: z
 				.number()
 				.int()
 				.positive()
 				.default(DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS),
+			idleCompactAfterMinutes: z
+				.number()
+				.int()
+				.min(0)
+				.default(DEFAULT_AGENT_IDLE_COMPACT_AFTER_MINUTES),
 			dream: z
 				.object({
 					intervalHours: z
@@ -221,6 +232,7 @@ const appConfigSchema = z.object({
 						.positive()
 						.default(DEFAULT_AGENT_DREAM_MAX_ITERATIONS),
 				})
+				.strict()
 				.default({
 					intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
 					maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,
@@ -258,6 +270,7 @@ const appConfigSchema = z.object({
 						.boolean()
 						.default(DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES),
 				})
+				.strict()
 				.default({
 					type: "file",
 					path: DEFAULT_AGENT_SESSION_STORE_PATH,
@@ -268,12 +281,13 @@ const appConfigSchema = z.object({
 						DEFAULT_AGENT_SESSION_STORE_QUARANTINE_CORRUPT_FILES,
 				}),
 		})
+		.strict()
 		.default({
 			provider: DEFAULT_AGENT_PROVIDER,
 			modelId: DEFAULT_AGENT_MODEL_ID,
-			systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
 			skills: DEFAULT_AGENT_SKILLS,
 			contextWindowTokens: DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS,
+			idleCompactAfterMinutes: DEFAULT_AGENT_IDLE_COMPACT_AFTER_MINUTES,
 			dream: {
 				intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
 				maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,
@@ -299,10 +313,11 @@ const appConfigSchema = z.object({
 		.object({
 			level: z.enum(LOG_LEVELS).default("info"),
 		})
+		.strict()
 		.default({
 			level: "info",
 		}),
-});
+}).strict();
 
 export {
 	DEFAULT_CONFIG_FILENAME,
@@ -348,9 +363,9 @@ export const DEFAULT_CONFIG: AppConfig = {
 	agent: {
 		provider: DEFAULT_AGENT_PROVIDER,
 		modelId: DEFAULT_AGENT_MODEL_ID,
-		systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT,
 		skills: DEFAULT_AGENT_SKILLS,
 		contextWindowTokens: DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS,
+		idleCompactAfterMinutes: DEFAULT_AGENT_IDLE_COMPACT_AFTER_MINUTES,
 		dream: {
 			intervalHours: DEFAULT_AGENT_DREAM_INTERVAL_HOURS,
 			maxBatchSize: DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE,

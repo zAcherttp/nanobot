@@ -9,7 +9,7 @@ import {
 import { DEFAULT_CONFIG } from "../src/config/loader.js";
 
 describe("cli", () => {
-	it("matches the python-style top-level command surface", () => {
+	it("matches the TS top-level command surface", () => {
 		const program = createCli("nanobot-ts");
 
 		expect(program.commands.map((command) => command.name())).toEqual([
@@ -24,7 +24,7 @@ describe("cli", () => {
 		]);
 	});
 
-	it("exposes python-like channel subcommands", () => {
+	it("exposes channel subcommands", () => {
 		const program = createCli("nanobot-ts");
 		const channels = program.commands.find(
 			(command) => command.name() === "channels",
@@ -74,7 +74,7 @@ describe("cli", () => {
 		]);
 	});
 
-	it("keeps the python agent flags on the stub command", () => {
+	it("keeps the direct agent command flags", () => {
 		const program = createCli("nanobot-ts");
 		const agent = program.commands.find(
 			(command) => command.name() === "agent",

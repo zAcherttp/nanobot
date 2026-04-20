@@ -24,6 +24,8 @@ import {
 	providerRequiresApiKey,
 	resolveProviderModel,
 } from "../providers/runtime.js";
+import type { Logger } from "../utils/logging.js";
+import { AutoCompactor } from "./auto-compact.js";
 import { Consolidator, normalizeLastConsolidated } from "./consolidator.js";
 import { buildSystemPrompt } from "./prompt.js";
 import {
@@ -46,10 +48,10 @@ export interface ResolvedAgentRuntimeConfig {
 	model: Model<Api>;
 	apiKey?: string;
 	providerAuthSource: "config" | "env" | "none";
-	systemPrompt: string;
 	workspacePath: string;
 	skills: string[];
 	contextWindowTokens: number;
+	idleCompactAfterMinutes: number;
 	thinkingLevel: ThinkingLevel;
 	temperature: number;
 	maxTokens: number;
@@ -76,6 +78,7 @@ export interface CreateSessionAgentOptions {
 	onPayload?: AgentOptions["onPayload"];
 	thinkingBudgets?: AgentOptions["thinkingBudgets"];
 	consolidator?: Consolidator;
+	autoCompactor?: AutoCompactor;
 }
 
 export const DEFAULT_SESSION_KEY = "sdk:default";
@@ -94,10 +97,10 @@ export function resolveAgentRuntimeConfig(
 		model,
 		...(providerConfig.apiKey ? { apiKey: providerConfig.apiKey } : {}),
 		providerAuthSource: providerConfig.apiKeySource,
-		systemPrompt: config.agent.systemPrompt,
 		workspacePath: config.workspace.path,
 		skills: config.agent.skills,
 		contextWindowTokens: config.agent.contextWindowTokens,
+		idleCompactAfterMinutes: config.agent.idleCompactAfterMinutes,
 		thinkingLevel: config.agent.thinkingLevel,
 		temperature: config.agent.temperature,
 		maxTokens: config.agent.maxTokens,
@@ -131,6 +134,7 @@ export async function createSessionAgent(
 		persistedSession.metadata as SessionMetadata,
 	);
 	let currentCheckpoint: SessionRuntimeCheckpoint | undefined;
+	let pendingSummaryContext: string | undefined;
 	let persistedMessages = sanitizeMessagesForPersistence(
 		persistedSession.messages,
 		{
@@ -148,6 +152,13 @@ export async function createSessionAgent(
 			config: options.config,
 			sessionStore,
 			getTools: async () => options.tools ?? [],
+		});
+	const autoCompactor =
+		options.autoCompactor ??
+		createRuntimeAutoCompactor({
+			config: options.config,
+			sessionStore,
+			consolidator,
 		});
 	const systemPrompt = await buildSystemPrompt({
 		workspacePath: options.config.workspacePath,
@@ -186,10 +197,20 @@ export async function createSessionAgent(
 			const visibleMessages = messages
 				.slice(start)
 				.map((message) => structuredClone(message));
+			const contextMessages = pendingSummaryContext
+				? [
+						{
+							role: "user" as const,
+							content: `## Previous idle-session summary\n${pendingSummaryContext}`,
+							timestamp: Date.now(),
+						},
+						...visibleMessages,
+					]
+				: visibleMessages;
 			if (!options.transformContext) {
-				return visibleMessages;
+				return contextMessages;
 			}
-			return options.transformContext(visibleMessages, signal);
+			return options.transformContext(contextMessages, signal);
 		},
 		...(options.getApiKey || options.config.apiKey
 			? {
@@ -279,21 +300,34 @@ export async function createSessionAgent(
 		...args: Parameters<Agent["prompt"]>
 	) => {
 		await prepareSessionForExecution();
-		return originalPrompt(...args);
+		try {
+			return await originalPrompt(...args);
+		} finally {
+			pendingSummaryContext = undefined;
+		}
 	}) as Agent["prompt"];
 
 	const originalContinue = agent.continue.bind(agent);
 	(agent.continue as typeof agent.continue) = (async () => {
 		await prepareSessionForExecution();
-		return originalContinue();
+		try {
+			return await originalContinue();
+		} finally {
+			pendingSummaryContext = undefined;
+		}
 	}) as Agent["continue"];
 
 	return agent;
 
 	async function prepareSessionForExecution(): Promise<void> {
+		const prepared = await autoCompactor.prepareSession(sessionKey);
 		const loaded =
+			prepared?.session ??
 			(await sessionStore.load(sessionKey)) ??
 			createEmptySessionRecord(sessionKey, createdAt);
+		if (prepared?.summaryContext) {
+			pendingSummaryContext = prepared.summaryContext;
+		}
 		createdAt = loaded.createdAt;
 		const restored = restoreRuntimeCheckpoint(loaded);
 		persistedSession = restored.session;
@@ -349,6 +383,24 @@ export function createRuntimeConsolidator(options: {
 		config: options.config,
 		buildSystemPrompt,
 		...(options.getTools ? { getTools: options.getTools } : {}),
+	});
+}
+
+export function createRuntimeAutoCompactor(options: {
+	config: ResolvedAgentRuntimeConfig;
+	sessionStore: SessionStore;
+	consolidator: Consolidator;
+	isSessionActive?: (sessionKey: string) => boolean | Promise<boolean>;
+	logger?: Logger;
+}): AutoCompactor {
+	return new AutoCompactor({
+		sessionStore: options.sessionStore,
+		consolidator: options.consolidator,
+		idleCompactAfterMinutes: options.config.idleCompactAfterMinutes,
+		...(options.isSessionActive
+			? { isSessionActive: options.isSessionActive }
+			: {}),
+		...(options.logger ? { logger: options.logger } : {}),
 	});
 }
 

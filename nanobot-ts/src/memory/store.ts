@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
 	AssistantMessage,
@@ -25,18 +25,12 @@ export interface ArchivedMemoryEntry {
 	signals?: Record<string, string>;
 }
 
-const TIMESTAMP_RE = /^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*/;
-const ENTRY_START_RE = /^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*/;
-const RAW_MESSAGE_RE =
-	/^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:/;
-
 export class MemoryStore {
 	readonly workspace: string;
 	readonly maxHistoryEntries: number;
 	readonly memoryDir: string;
 	readonly memoryFile: string;
 	readonly historyFile: string;
-	readonly legacyHistoryFile: string;
 	readonly soulFile: string;
 	readonly userFile: string;
 	readonly goalsFile: string;
@@ -49,7 +43,6 @@ export class MemoryStore {
 		this.memoryDir = path.join(workspacePath, "memory");
 		this.memoryFile = path.join(this.memoryDir, "MEMORY.md");
 		this.historyFile = path.join(this.memoryDir, "history.jsonl");
-		this.legacyHistoryFile = path.join(this.memoryDir, "HISTORY.md");
 		this.soulFile = path.join(workspacePath, "SOUL.md");
 		this.userFile = path.join(workspacePath, "USER.md");
 		this.goalsFile = path.join(workspacePath, "GOALS.md");
@@ -59,7 +52,6 @@ export class MemoryStore {
 
 	async init(): Promise<void> {
 		await mkdir(this.memoryDir, { recursive: true });
-		await this.maybeMigrateLegacyHistory();
 	}
 
 	async readMemory(): Promise<string> {
@@ -260,118 +252,6 @@ export class MemoryStore {
 			.map((entry) => `${JSON.stringify(entry)}\n`)
 			.join("");
 		await this.writeTextFile(this.historyFile, content);
-	}
-
-	private async maybeMigrateLegacyHistory(): Promise<void> {
-		let legacyStat;
-		try {
-			legacyStat = await stat(this.legacyHistoryFile);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				return;
-			}
-			throw error;
-		}
-
-		try {
-			const currentHistoryStat = await stat(this.historyFile);
-			if (currentHistoryStat.size > 0) {
-				return;
-			}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-				throw error;
-			}
-		}
-
-		const legacyText = await readFile(this.legacyHistoryFile, "utf8");
-		const entries = this.parseLegacyHistory(
-			legacyText,
-			formatTimestamp(legacyStat.mtime),
-		);
-		if (entries.length > 0) {
-			await this.writeEntries(entries);
-			const lastCursor = entries.at(-1)?.cursor ?? 0;
-			await this.writeTextFile(this.cursorFile, String(lastCursor));
-			await this.writeTextFile(this.dreamCursorFile, String(lastCursor));
-		}
-
-		const backupPath = `${this.legacyHistoryFile}.bak`;
-		try {
-			await rename(this.legacyHistoryFile, backupPath);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-				await rename(this.legacyHistoryFile, `${backupPath}.${Date.now()}`);
-				return;
-			}
-			throw error;
-		}
-	}
-
-	private parseLegacyHistory(
-		text: string,
-		fallbackTimestamp = formatTimestamp(new Date()),
-	): HistoryEntry[] {
-		const normalized = text.replace(/\r\n?/g, "\n").trim();
-		if (!normalized) {
-			return [];
-		}
-
-		return this.splitLegacyHistoryChunks(normalized).map((chunk, index) => {
-			const match = chunk.match(TIMESTAMP_RE);
-			const timestamp = match?.[1] ?? fallbackTimestamp;
-			const content = match
-				? chunk.slice(match[0].length).trim()
-				: chunk.trim();
-			return {
-				cursor: index + 1,
-				timestamp,
-				content,
-				signals: {},
-			};
-		});
-	}
-
-	private splitLegacyHistoryChunks(text: string): string[] {
-		const chunks: string[] = [];
-		let current: string[] = [];
-		let sawBlankSeparator = false;
-
-		for (const line of text.split("\n")) {
-			if (!line.trim()) {
-				if (current.length > 0) {
-					current.push("");
-					sawBlankSeparator = true;
-				}
-				continue;
-			}
-
-			const startsEntry = ENTRY_START_RE.test(line);
-			const currentIsRawBlock =
-				current.length > 0 && RAW_MESSAGE_RE.test(current[0]!.trim());
-			const shouldStartNewChunk =
-				current.length > 0 &&
-				(sawBlankSeparator || (startsEntry && !currentIsRawBlock));
-
-			if (shouldStartNewChunk) {
-				const chunk = current.join("\n").trim();
-				if (chunk) {
-					chunks.push(chunk);
-				}
-				current = [line];
-			} else {
-				current.push(line);
-			}
-
-			sawBlankSeparator = false;
-		}
-
-		const finalChunk = current.join("\n").trim();
-		if (finalChunk) {
-			chunks.push(finalChunk);
-		}
-
-		return chunks;
 	}
 }
 

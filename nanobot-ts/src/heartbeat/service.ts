@@ -49,6 +49,7 @@ export class HeartbeatService {
 		response: string,
 	) => Promise<boolean>;
 	private timer: NodeJS.Timeout | undefined;
+	private activeExecutions = 0;
 	private running = false;
 
 	constructor(private readonly options: HeartbeatServiceOptions) {
@@ -84,6 +85,10 @@ export class HeartbeatService {
 		return this.running;
 	}
 
+	isSessionActive(sessionKey: string): boolean {
+		return sessionKey === "heartbeat" && this.activeExecutions > 0;
+	}
+
 	async start(): Promise<void> {
 		if (!this.options.enabled || this.running) {
 			return;
@@ -116,7 +121,13 @@ export class HeartbeatService {
 		}
 
 		const target = await this.resolveTarget();
-		const response = await this.onExecute(decision.tasks, target);
+		this.activeExecutions += 1;
+		let response: string;
+		try {
+			response = await this.onExecute(decision.tasks, target);
+		} finally {
+			this.activeExecutions -= 1;
+		}
 		if (!response.trim()) {
 			return response;
 		}

@@ -4,6 +4,7 @@ import {
 	getUnconsolidatedMessages,
 } from "../agent/consolidator.js";
 import {
+	type AutoCompactor,
 	createRuntimeConsolidator,
 	createSessionAgent,
 	getLatestAssistantMessage,
@@ -66,6 +67,7 @@ export interface GatewayRuntimeOptions {
 	createConsolidator?: (
 		getTools?: () => AgentTool[] | Promise<AgentTool[]>,
 	) => Consolidator;
+	autoCompactor?: AutoCompactor;
 	commandRouter?: CommandRouter;
 	dreamService?: DreamService;
 }
@@ -120,12 +122,22 @@ export class GatewayRuntime {
 					...(agentOptions.consolidator
 						? { consolidator: agentOptions.consolidator }
 						: {}),
+					...(options.autoCompactor
+						? { autoCompactor: options.autoCompactor }
+						: {}),
 				}));
 		this.commandRouter = options.commandRouter ?? createDefaultCommandRouter();
 	}
 
 	isRunning(): boolean {
 		return this.running;
+	}
+
+	isSessionActive(sessionKey: string): boolean {
+		return (
+			this.activePromptTasks.has(sessionKey) ||
+			this.sessionChains.has(sessionKey)
+		);
 	}
 
 	async start(): Promise<void> {

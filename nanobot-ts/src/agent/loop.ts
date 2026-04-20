@@ -1,4 +1,11 @@
 export {
+	AutoCompactor,
+	getSummaryMetadata,
+	type AutoCompactPrepareResult,
+	type AutoCompactSummaryMetadata,
+	type AutoCompactorOptions,
+} from "./auto-compact.js";
+export {
 	type ConsolidationEstimate,
 	Consolidator,
 	type ConsolidatorArchiveResult,
@@ -11,6 +18,7 @@ export {
 } from "./consolidator.js";
 export {
 	type CreateSessionAgentOptions,
+	createRuntimeAutoCompactor,
 	createRuntimeConsolidator,
 	createSessionAgent,
 	createSessionRecord,

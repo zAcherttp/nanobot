@@ -20,7 +20,7 @@ Last updated: 2026-04-20
 
 - Config field is `agents.defaults.session_ttl_minutes`.
 - Preferred user-facing alias is `idleCompactAfterMinutes`.
-- Legacy alias `sessionTtlMinutes` is also accepted.
+- Legacy alias `sessionTtlMinutes` is intentionally rejected by strict TS config parsing.
 - Serialization emits `idleCompactAfterMinutes`.
 - Default is `0`, which disables idle compaction.
 
@@ -78,9 +78,9 @@ Last updated: 2026-04-20
 
 ## Current TS State
 
-- TS has no auto-compact runtime service yet.
-- `tests/auto-compact.test.ts` is currently a stub suite documenting expected behavior.
-- TS already has the prerequisites:
+- TS has an auto-compact runtime service.
+- `tests/auto-compact.test.ts` has real coverage for the current TS contract.
+- TS prerequisites are in place:
   - file-backed `SessionStore`
   - `SessionRecord.updatedAt`
   - `SessionRecord.lastConsolidated`
@@ -101,39 +101,53 @@ Last updated: 2026-04-20
 - Keep summary injection as a prompt-composition/runtime-context input, not as a persisted message.
 - Do not couple auto-compact to the Heartbeat task evaluator; heartbeat and auto-compact have different responsibilities.
 
-## Open Decisions
+## Decisions Locked
 
-1. Keep Python default `idleCompactAfterMinutes = 0` disabled?
-2. Accept both `idleCompactAfterMinutes` and legacy `sessionTtlMinutes`, or only the preferred TS key?
-3. Run proactive sweeps only in `gateway`, or also from direct CLI commands?
-4. Keep one-shot summary injection into the next prompt context?
-5. Keep recent suffix size fixed at Python's 8 messages?
-6. Keep archive-only-unconsolidated-prefix behavior using `lastConsolidated`?
-7. Keep `(nothing)` summary suppression?
-8. If archive fails, keep Python behavior of still trimming to the recent suffix after raw fallback?
-9. Defer inbound `system` message parity until the gateway system-message policy exists?
-10. Should the proactive sweep be its own gateway service instead of piggybacking on Heartbeat?
+1. Keep Python default `idleCompactAfterMinutes = 0` disabled.
+2. Accept only `idleCompactAfterMinutes`; reject legacy `sessionTtlMinutes`.
+3. Run proactive sweeps from `gateway` only.
+4. Apply `prepareSession(...)` to both gateway-created agents and direct CLI agents.
+5. Keep one-shot summary injection into the next prompt context.
+6. Keep recent suffix size fixed at Python's 8 messages.
+7. Keep archive-only-unconsolidated-prefix behavior using `lastConsolidated`.
+8. Keep `(nothing)` summary suppression.
+9. Keep raw-fallback/trim behavior: archival failure must not block trimming or future prompts.
+10. Defer inbound `system` message parity until the gateway system-message policy exists.
+11. Keep auto-compact as its own gateway service, not a Heartbeat concern.
+12. Sweep all safe sessions while skipping sessions reported active by gateway, cron, or heartbeat.
 
-## Suggested First TS Slice
+## Progress
 
-- Add config:
+| Area | Status | Notes |
+| --- | --- | --- |
+| Config | Done for this slice | `agent.idleCompactAfterMinutes`, default `0`, legacy key rejected |
+| Runtime service | Done for this slice | `AutoCompactor` supports `start`, `stop`, `isRunning`, `sweepOnce`, and `prepareSession` |
+| Session archival | Done for this slice | Archives unconsolidated prefix, keeps legal suffix of 8, resets `lastConsolidated` |
+| Summary lifecycle | Done for this slice | `_last_summary` metadata is consumed once into transient context |
+| Gateway integration | Done for this slice | Gateway starts/stops auto-compact and skips active gateway/cron/heartbeat sessions |
+| Direct CLI integration | Done for this slice | `createSessionAgent` runs prepare before `prompt` and `continue` |
+| Tests | Done for this slice | `tests/auto-compact.test.ts` converted from stubs to real coverage |
+
+## Implemented TS Slice
+
+- Added config:
   - `agent.idleCompactAfterMinutes: number`
-  - optional legacy loader alias `sessionTtlMinutes`
-- Add auto-compact runtime:
+  - strict unknown-key rejection for legacy `sessionTtlMinutes`
+- Added auto-compact runtime:
   - `isExpired(...)`
-  - `checkExpired(...)`
+  - `sweepOnce(...)`
   - `prepareSession(...)`
-  - `archiveSession(...)`
+  - internal session archival path
   - per-session active archival guard
 - Add summary metadata shape:
   - `_last_summary.text`
   - `_last_summary.last_active`
-- Integrate:
+- Integrated:
   - gateway service startup and shutdown
   - gateway prompt preflight
   - direct CLI agent preflight
   - `/new` archival behavior if kept
-- Convert `tests/auto-compact.test.ts` from TODOs into real tests.
+- Converted `tests/auto-compact.test.ts` from TODOs into real tests.
 
 ## Test Targets
 
@@ -149,4 +163,3 @@ Last updated: 2026-04-20
 - Runtime checkpoints survive auto-compact preparation.
 - `/new` clears even if auto-compact archival fails.
 - Priority commands are unaffected by active or pending auto-compaction.
-

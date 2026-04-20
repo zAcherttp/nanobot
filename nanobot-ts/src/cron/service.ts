@@ -39,6 +39,7 @@ export class CronService {
 	private running = false;
 	private timer: NodeJS.Timeout | undefined;
 	private pending = Promise.resolve<void>(undefined);
+	private readonly activeJobIds = new Set<string>();
 
 	constructor(
 		private readonly storePath: string,
@@ -53,6 +54,13 @@ export class CronService {
 
 	isRunning(): boolean {
 		return this.running;
+	}
+
+	isSessionActive(sessionKey: string): boolean {
+		if (!sessionKey.startsWith("cron:")) {
+			return false;
+		}
+		return this.activeJobIds.has(sessionKey.slice("cron:".length));
 	}
 
 	async start(): Promise<void> {
@@ -373,6 +381,7 @@ export class CronService {
 
 	private async executeJob(job: CronJob, store: CronStoreData): Promise<void> {
 		const startedAt = this.now();
+		this.activeJobIds.add(job.id);
 		this.logger?.info("Cron job executing", {
 			jobId: job.id,
 			name: job.name,
@@ -391,6 +400,8 @@ export class CronService {
 				name: job.name,
 				error,
 			});
+		} finally {
+			this.activeJobIds.delete(job.id);
 		}
 
 		const finishedAt = this.now();

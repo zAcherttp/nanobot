@@ -11,7 +11,6 @@ import {
 	DEFAULT_AGENT_SESSION_STORE_MAX_MESSAGES,
 	DEFAULT_AGENT_SESSION_STORE_MAX_PERSISTED_TEXT_CHARS,
 	DEFAULT_AGENT_SESSION_STORE_PATH,
-	DEFAULT_AGENT_SYSTEM_PROMPT,
 	DEFAULT_AGENT_TEMPERATURE,
 	DEFAULT_CONFIG,
 	DEFAULT_CONFIG_FILENAME,
@@ -36,6 +35,19 @@ import {
 	NANOBOT_FAUX_MODEL_ID,
 	NANOBOT_FAUX_PROVIDER,
 } from "../src/providers/faux.js";
+
+async function expectConfigLoadFailure(
+	rawConfig: unknown,
+	expected: RegExp,
+): Promise<void> {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-config-"));
+	const configPath = path.join(dir, DEFAULT_CONFIG_FILENAME);
+	await writeFile(configPath, JSON.stringify(rawConfig), "utf8");
+
+	await expect(loadConfig({ cliConfigPath: configPath })).rejects.toThrow(
+		expected,
+	);
+}
 
 describe("config", () => {
 	beforeEach(() => {
@@ -63,7 +75,7 @@ describe("config", () => {
 		expect(loaded.config.agent.provider).toBe(DEFAULT_AGENT_PROVIDER);
 		expect(loaded.config.providers).toEqual({});
 		expect(loaded.config.agent.modelId).toBe(DEFAULT_AGENT_MODEL_ID);
-		expect(loaded.config.agent.systemPrompt).toBe(DEFAULT_AGENT_SYSTEM_PROMPT);
+		expect("systemPrompt" in loaded.config.agent).toBe(false);
 		expect(loaded.config.agent.temperature).toBe(DEFAULT_AGENT_TEMPERATURE);
 		expect(loaded.config.agent.maxTokens).toBe(DEFAULT_AGENT_MAX_TOKENS);
 		expect(loaded.config.agent.maxRetryDelayMs).toBe(
@@ -152,6 +164,142 @@ describe("config", () => {
 		await expect(loadConfig({ cliConfigPath: configPath })).rejects.toThrow(
 			"Environment variable 'MISSING_ENV_KEY'",
 		);
+	});
+
+	it("rejects unknown root config keys", async () => {
+		await expectConfigLoadFailure(
+			{
+				...DEFAULT_CONFIG,
+				legacyRoot: true,
+			},
+			/legacyRoot|unrecognized/i,
+		);
+	});
+
+	it("rejects unknown agent keys including removed legacy fields", async () => {
+		await expectConfigLoadFailure(
+			{
+				...DEFAULT_CONFIG,
+				agent: {
+					...DEFAULT_CONFIG.agent,
+					sessionTtlMinutes: 15,
+				},
+			},
+			/sessionTtlMinutes|unrecognized/i,
+		);
+
+		await expectConfigLoadFailure(
+			{
+				...DEFAULT_CONFIG,
+				agent: {
+					...DEFAULT_CONFIG.agent,
+					systemPrompt: "legacy prompt",
+				},
+			},
+			/systemPrompt|unrecognized/i,
+		);
+	});
+
+	it("rejects unknown nested config keys", async () => {
+		const cases: Array<[unknown, RegExp]> = [
+			[
+				{
+					...DEFAULT_CONFIG,
+					gateway: {
+						...DEFAULT_CONFIG.gateway,
+						legacyGateway: true,
+					},
+				},
+				/legacyGateway|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					gateway: {
+						...DEFAULT_CONFIG.gateway,
+						heartbeat: {
+							...DEFAULT_CONFIG.gateway.heartbeat,
+							legacyHeartbeat: true,
+						},
+					},
+				},
+				/legacyHeartbeat|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					cron: {
+						...DEFAULT_CONFIG.cron,
+						legacyCron: true,
+					},
+				},
+				/legacyCron|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					channels: {
+						telegram: {
+							...DEFAULT_CONFIG.channels.telegram,
+							legacyTelegram: true,
+						},
+					},
+				},
+				/legacyTelegram|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					security: {
+						...DEFAULT_CONFIG.security,
+						legacySecurity: true,
+					},
+				},
+				/legacySecurity|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					agent: {
+						...DEFAULT_CONFIG.agent,
+						sessionStore: {
+							...DEFAULT_CONFIG.agent.sessionStore,
+							legacyStore: true,
+						},
+					},
+				},
+				/legacyStore|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					agent: {
+						...DEFAULT_CONFIG.agent,
+						dream: {
+							...DEFAULT_CONFIG.agent.dream,
+							legacyDream: true,
+						},
+					},
+				},
+				/legacyDream|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					providers: {
+						anthropic: {
+							apiKey: "secret",
+							legacyProvider: true,
+						},
+					},
+				},
+				/legacyProvider|unrecognized/i,
+			],
+		];
+
+		for (const [rawConfig, expected] of cases) {
+			await expectConfigLoadFailure(rawConfig, expected);
+		}
 	});
 
 	it("throws clear error when token is missing", async () => {
