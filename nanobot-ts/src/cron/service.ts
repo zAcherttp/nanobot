@@ -12,7 +12,7 @@ import type {
 } from "./types.js";
 
 export interface CronServiceOptions {
-	onJob?: (job: CronJob) => Promise<string | null | void>;
+	onJob?: (job: CronJob) => Promise<string | null | undefined>;
 	maxSleepMs?: number;
 	maxRunHistory?: number;
 	logger?: Logger;
@@ -26,7 +26,7 @@ const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 
 export class CronService {
 	private readonly onJob:
-		| ((job: CronJob) => Promise<string | null | void>)
+		| ((job: CronJob) => Promise<string | null | undefined>)
 		| undefined;
 	private readonly maxSleepMs: number;
 	private readonly maxRunHistory: number;
@@ -184,7 +184,9 @@ export class CronService {
 				(job) => job.id === options.id,
 			);
 			const createdAtMs =
-				existingIndex >= 0 ? store.jobs[existingIndex]!.createdAtMs : now;
+				existingIndex >= 0
+					? (store.jobs[existingIndex]?.createdAtMs ?? now)
+					: now;
 			const job: CronJob = {
 				id: options.id,
 				name: options.name,
@@ -639,12 +641,12 @@ export function parseNaiveIsoToMs(input: string, timeZone: string): number {
 		throw new Error(`Unknown timezone '${timeZone}'.`);
 	}
 
-	const year = match[1]!;
-	const month = match[2]!;
-	const day = match[3]!;
-	const hour = match[4]!;
-	const minute = match[5]!;
-	const second = match[6] ?? "00";
+	const [, year, month, day, hour, minute, second = "00"] = match;
+	if (!year || !month || !day || !hour || !minute) {
+		throw new Error(
+			`Invalid ISO datetime '${input}'. Expected YYYY-MM-DDTHH:MM[:SS].`,
+		);
+	}
 	const target = {
 		year: Number.parseInt(year, 10),
 		month: Number.parseInt(month, 10),
@@ -733,7 +735,9 @@ function normalizePayload(
 function getNextWakeAtMs(jobs: readonly CronJob[]): number | null {
 	const wakeTimes = jobs
 		.filter((job) => job.enabled && job.state.nextRunAtMs !== null)
-		.map((job) => job.state.nextRunAtMs as number);
+		.flatMap((job) =>
+			job.state.nextRunAtMs === null ? [] : [job.state.nextRunAtMs],
+		);
 	return wakeTimes.length > 0 ? Math.min(...wakeTimes) : null;
 }
 
@@ -746,14 +750,18 @@ function parseCronExpression(expression: string): CronFields | null {
 	if (parts.length !== 5) {
 		return null;
 	}
+	const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+	if (!minute || !hour || !dayOfMonth || !month || !dayOfWeek) {
+		return null;
+	}
 
 	try {
 		return {
-			minute: parseCronField(parts[0]!, 0, 59),
-			hour: parseCronField(parts[1]!, 0, 23),
-			dayOfMonth: parseCronField(parts[2]!, 1, 31),
-			month: parseCronField(parts[3]!, 1, 12),
-			dayOfWeek: parseCronField(parts[4]!, 0, 6, {
+			minute: parseCronField(minute, 0, 59),
+			hour: parseCronField(hour, 0, 23),
+			dayOfMonth: parseCronField(dayOfMonth, 1, 31),
+			month: parseCronField(month, 1, 12),
+			dayOfWeek: parseCronField(dayOfWeek, 0, 6, {
 				sun: 0,
 				mon: 1,
 				tue: 2,

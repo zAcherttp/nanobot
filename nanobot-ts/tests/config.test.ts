@@ -22,6 +22,24 @@ import {
 	DEFAULT_LOGGING_CONSOLE,
 	DEFAULT_LOGGING_MAX_ENTRIES,
 	DEFAULT_LOGGING_MAX_PREVIEW_CHARS,
+	DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES,
+	DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+	DEFAULT_TOOLS_CALENDAR_ENABLED,
+	DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+	DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+	DEFAULT_TOOLS_CALENDAR_PROVIDER,
+	DEFAULT_TOOLS_ENABLED,
+	DEFAULT_TOOLS_WEB_ENABLED,
+	DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+	DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+	DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+	DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+	DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+	DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+	DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES,
+	DEFAULT_TOOLS_WORKSPACE_ENABLED,
+	DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS,
+	DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS,
 	initConfigFile,
 	isSenderAllowed,
 	loadConfig,
@@ -34,6 +52,7 @@ import {
 	resolveConfigPath,
 	resolveWorkspacePath,
 } from "../src/config/paths.js";
+import type { AppConfig } from "../src/config/schema.js";
 import {
 	NANOBOT_FAUX_MODEL_ID,
 	NANOBOT_FAUX_PROVIDER,
@@ -106,6 +125,56 @@ describe("config", () => {
 		expect(loaded.config.security.restrictToWorkspace).toBe(false);
 		expect(loaded.config.security.allowedEnvKeys).toEqual([]);
 		expect(loaded.config.security.ssrfWhitelist).toEqual([]);
+		expect(loaded.config.tools.enabled).toEqual(DEFAULT_TOOLS_ENABLED);
+		expect(loaded.config.tools.workspace.enabled).toBe(
+			DEFAULT_TOOLS_WORKSPACE_ENABLED,
+		);
+		expect(loaded.config.tools.workspace.allowWrites).toBe(
+			DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES,
+		);
+		expect(loaded.config.tools.workspace.maxReadChars).toBe(
+			DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS,
+		);
+		expect(loaded.config.tools.workspace.maxSearchResults).toBe(
+			DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS,
+		);
+		expect(loaded.config.tools.web.enabled).toBe(DEFAULT_TOOLS_WEB_ENABLED);
+		expect(loaded.config.tools.web.search.provider).toBe(
+			DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+		);
+		expect(loaded.config.tools.web.search.baseUrl).toBe(
+			DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+		);
+		expect(loaded.config.tools.web.search.maxResults).toBe(
+			DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+		);
+		expect(loaded.config.tools.web.search.timeoutMs).toBe(
+			DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+		);
+		expect(loaded.config.tools.web.fetch.maxChars).toBe(
+			DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+		);
+		expect(loaded.config.tools.web.fetch.timeoutMs).toBe(
+			DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+		);
+		expect(loaded.config.tools.calendar.enabled).toBe(
+			DEFAULT_TOOLS_CALENDAR_ENABLED,
+		);
+		expect(loaded.config.tools.calendar.provider).toBe(
+			DEFAULT_TOOLS_CALENDAR_PROVIDER,
+		);
+		expect(loaded.config.tools.calendar.allowWrites).toBe(
+			DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES,
+		);
+		expect(loaded.config.tools.calendar.defaultCalendarId).toBe(
+			DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+		);
+		expect(loaded.config.tools.calendar.gws.command).toBe(
+			DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+		);
+		expect(loaded.config.tools.calendar.lark.baseUrl).toBe(
+			DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+		);
 		expect(loaded.config.logging.level).toBe("info");
 		expect(loaded.config.logging.maxEntries).toBe(DEFAULT_LOGGING_MAX_ENTRIES);
 		expect(loaded.config.logging.maxPreviewChars).toBe(
@@ -127,9 +196,11 @@ describe("config", () => {
 		expect(loaded.config.logging.level).toBe("debug");
 	});
 
-	it("resolves ${ENV_VAR} placeholders in config values", async () => {
+	it("resolves env placeholders in config values", async () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-config-"));
 		const configPath = path.join(dir, DEFAULT_CONFIG_FILENAME);
+		const envPrefix = "$";
+		const providerKeyPlaceholder = `${envPrefix}{NANOBOT_TEST_PROVIDER_KEY}`;
 		process.env.NANOBOT_TEST_PROVIDER_KEY = "from-env";
 		await writeFile(
 			configPath,
@@ -137,7 +208,7 @@ describe("config", () => {
 				...DEFAULT_CONFIG,
 				providers: {
 					anthropic: {
-						apiKey: "${NANOBOT_TEST_PROVIDER_KEY}",
+						apiKey: providerKeyPlaceholder,
 						apiBase: "https://example.test",
 					},
 				},
@@ -153,16 +224,18 @@ describe("config", () => {
 		});
 	});
 
-	it("throws when an ${ENV_VAR} placeholder is unset", async () => {
+	it("throws when an env placeholder is unset", async () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-config-"));
 		const configPath = path.join(dir, DEFAULT_CONFIG_FILENAME);
+		const envPrefix = "$";
+		const missingKeyPlaceholder = `${envPrefix}{MISSING_ENV_KEY}`;
 		await writeFile(
 			configPath,
 			JSON.stringify({
 				...DEFAULT_CONFIG,
 				providers: {
 					anthropic: {
-						apiKey: "${MISSING_ENV_KEY}",
+						apiKey: missingKeyPlaceholder,
 					},
 				},
 			}),
@@ -264,6 +337,71 @@ describe("config", () => {
 					},
 				},
 				/legacySecurity|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					tools: {
+						...DEFAULT_CONFIG.tools,
+						legacyTools: true,
+					},
+				},
+				/legacyTools|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					tools: {
+						...DEFAULT_CONFIG.tools,
+						workspace: {
+							...DEFAULT_CONFIG.tools.workspace,
+							legacyWorkspaceTool: true,
+						},
+					},
+				},
+				/legacyWorkspaceTool|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					tools: {
+						...DEFAULT_CONFIG.tools,
+						web: {
+							...DEFAULT_CONFIG.tools.web,
+							legacyWebTool: true,
+						},
+					},
+				},
+				/legacyWebTool|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					tools: {
+						...DEFAULT_CONFIG.tools,
+						web: {
+							...DEFAULT_CONFIG.tools.web,
+							search: {
+								...DEFAULT_CONFIG.tools.web.search,
+								apiKey: "paid-provider-key",
+							},
+						},
+					},
+				},
+				/apiKey|unrecognized/i,
+			],
+			[
+				{
+					...DEFAULT_CONFIG,
+					tools: {
+						...DEFAULT_CONFIG.tools,
+						calendar: {
+							...DEFAULT_CONFIG.tools.calendar,
+							legacyCalendar: true,
+						},
+					},
+				},
+				/legacyCalendar|unrecognized/i,
 			],
 			[
 				{
@@ -521,6 +659,68 @@ describe("config", () => {
 		);
 	});
 
+	it("rejects invalid tools config", () => {
+		const invalidEnabledConfig = {
+			...DEFAULT_CONFIG,
+			tools: {
+				...DEFAULT_CONFIG.tools,
+				enabled: ["workspace", ""],
+			},
+		};
+		const invalidWorkspaceConfig = {
+			...DEFAULT_CONFIG,
+			tools: {
+				...DEFAULT_CONFIG.tools,
+				workspace: {
+					...DEFAULT_CONFIG.tools.workspace,
+					maxReadChars: 0,
+				},
+			},
+		};
+		const invalidLarkConfig = {
+			...DEFAULT_CONFIG,
+			tools: {
+				...DEFAULT_CONFIG.tools,
+				calendar: {
+					...DEFAULT_CONFIG.tools.calendar,
+					enabled: true,
+					provider: "lark" as const,
+					lark: {
+						...DEFAULT_CONFIG.tools.calendar.lark,
+						appId: "",
+						appSecret: "",
+					},
+				},
+			},
+		};
+		const invalidWebConfig = {
+			...DEFAULT_CONFIG,
+			tools: {
+				...DEFAULT_CONFIG.tools,
+				web: {
+					...DEFAULT_CONFIG.tools.web,
+					search: {
+						...DEFAULT_CONFIG.tools.web.search,
+						maxResults: 0,
+					},
+				},
+			},
+		};
+
+		expect(() => validateRuntimeConfig(invalidEnabledConfig)).toThrow(
+			"tools.enabled cannot contain empty entries",
+		);
+		expect(() => validateRuntimeConfig(invalidWorkspaceConfig)).toThrow(
+			"tools.workspace.maxReadChars must be positive",
+		);
+		expect(() => validateRuntimeConfig(invalidWebConfig)).toThrow(
+			"tools.web.search.maxResults must be positive",
+		);
+		expect(() => validateRuntimeConfig(invalidLarkConfig)).toThrow(
+			"tools.calendar.lark.appId and appSecret",
+		);
+	});
+
 	it("rejects zero heartbeat intervalSeconds", () => {
 		const invalidConfig = {
 			...DEFAULT_CONFIG,
@@ -600,7 +800,7 @@ describe("config", () => {
 			...DEFAULT_CONFIG,
 			agent: {
 				...DEFAULT_CONFIG.agent,
-				provider: "nonexistent_llm" as any,
+				provider: "nonexistent_llm" as AppConfig["agent"]["provider"],
 			},
 		};
 

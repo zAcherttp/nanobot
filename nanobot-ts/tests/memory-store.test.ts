@@ -112,8 +112,8 @@ describe("memory store — history with cursor", () => {
 		await store.appendHistory("C");
 		const entries = await store.readUnprocessedHistory(1);
 		expect(entries).toHaveLength(2);
-		expect(entries[0]!.content).toBe("B");
-		expect(entries[1]!.content).toBe("C");
+		expect(entries[0]?.content).toBe("B");
+		expect(entries[1]?.content).toBe("C");
 	});
 
 	it("read_unprocessed_history returns all when cursor is zero", async () => {
@@ -131,7 +131,7 @@ describe("memory store — history with cursor", () => {
 		await store.compactHistory();
 		const entries = await store.readUnprocessedHistory(0);
 		expect(entries).toHaveLength(3);
-		expect(entries[0]!.content).toBe("B");
+		expect(entries[0]?.content).toBe("B");
 	});
 
 	it("initial cursor is zero", async () => {
@@ -152,11 +152,11 @@ describe("memory store — history with cursor", () => {
 	it("read_unprocessed_history handles entries without cursor field", async () => {
 		await writeFile(
 			path.join(workspace, "memory", "history.jsonl"),
-			JSON.stringify({ content: "no cursor" }) + "\n",
+			`${JSON.stringify({ content: "no cursor" })}\n`,
 			"utf8",
 		);
 		const entries = await store.readUnprocessedHistory(0);
-		expect(entries[0]!.cursor).toBe(1);
-		expect(entries[0]!.content).toBe("no cursor");
+		expect(entries[0]?.cursor).toBe(1);
+		expect(entries[0]?.content).toBe("no cursor");
 	});
 });

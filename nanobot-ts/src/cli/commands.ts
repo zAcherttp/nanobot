@@ -33,7 +33,6 @@ import type { AppConfig, LogLevel } from "../config/schema.js";
 import {
 	type CronSchedule,
 	CronService,
-	createCronTool,
 	formatCronTimestamp,
 	isValidTimeZone,
 	parseNaiveIsoToMs,
@@ -42,12 +41,9 @@ import { DreamService } from "../dream/index.js";
 import { GatewayRuntime } from "../gateway/index.js";
 import { HeartbeatService, runHeartbeatTasks } from "../heartbeat/index.js";
 import { MemoryStore } from "../memory/index.js";
-import {
-	getNanobotFauxTools,
-	isNanobotFauxProvider,
-} from "../providers/faux.js";
 import { resolveProviderConfig } from "../providers/runtime.js";
 import { syncWorkspaceTemplates } from "../templates/index.js";
+import { createRuntimeTools } from "../tools/index.js";
 import {
 	createLogger,
 	createRuntimeLogStore,
@@ -1207,22 +1203,13 @@ function getRuntimeTools(
 		inCronContext?: boolean;
 	} = {},
 ): AgentTool[] {
-	const tools: AgentTool[] = [];
-	if (isNanobotFauxProvider(config.agent.provider)) {
-		tools.push(...getNanobotFauxTools());
-	}
-	if (options.cronService) {
-		tools.push(
-			createCronTool({
-				service: options.cronService,
-				defaultTimeZone: config.cron.timezone,
-				...(options.channel ? { channel: options.channel } : {}),
-				...(options.chatId ? { chatId: options.chatId } : {}),
-				...(options.inCronContext ? { inCronContext: true } : {}),
-			}),
-		);
-	}
-	return tools;
+	return createRuntimeTools({
+		config,
+		...(options.cronService ? { cronService: options.cronService } : {}),
+		...(options.channel ? { channel: options.channel } : {}),
+		...(options.chatId ? { chatId: options.chatId } : {}),
+		...(options.inCronContext ? { inCronContext: true } : {}),
+	});
 }
 
 function createCronService(

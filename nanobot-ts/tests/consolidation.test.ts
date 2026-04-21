@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type {
+	Api,
 	AssistantMessage,
 	Context,
 	Message,
@@ -162,7 +163,7 @@ function createConsolidator(
 	overrides: Partial<{
 		contextWindowTokens: number;
 		complete: (
-			model: Model<any>,
+			model: Model<Api>,
 			context: Context,
 			options?: SimpleStreamOptions,
 		) => Promise<AssistantMessage>;
@@ -462,8 +463,9 @@ describe("consolidation offset - /new command integration", () => {
 		const archiveSpy = vi.fn(async () => {
 			throw new Error("archive failed");
 		});
+		const bus = new InMemoryMessageBus();
 		const runtime = new GatewayRuntime({
-			bus: new InMemoryMessageBus(),
+			bus,
 			logger: LOGGER,
 			config: createRuntimeConfig(workspace),
 			sessionStore: store,
@@ -480,12 +482,12 @@ describe("consolidation offset - /new command integration", () => {
 				}) as unknown as Consolidator,
 		});
 		const published: string[] = [];
-		runtime["options"].bus.subscribeOutbound(async (message) => {
+		bus.subscribeOutbound(async (message) => {
 			published.push(message.content);
 		});
 
 		await runtime.start();
-		await runtime["options"].bus.publishInbound({
+		await bus.publishInbound({
 			channel: "telegram",
 			senderId: "99",
 			chatId: "42",

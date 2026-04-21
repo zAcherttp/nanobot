@@ -25,6 +25,7 @@ This tracker is intentionally blunt. Percentages are parity estimates against th
 | Heartbeat | 72% | Background policy slice landed | Gateway-owned `HeartbeatService`, `HEARTBEAT.md` workspace contract, two-phase LLM decision/notify flow, heuristic recent-session delivery target selection, bounded `heartbeat` session reuse, and `heartbeat run/status` CLI are in place. See [HEARTBEAT_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/HEARTBEAT_REWRITE_TRACKER.md) | No dedicated model override, no slash-command/manual in-channel trigger, no richer observability or reporting | Decide whether heartbeat should gain richer operator controls or stay gateway-owned only |
 | Security | 62% | Foundation slice landed | TS now has top-level security config, fail-fast enabled-channel allowlist validation, shared shell/network/env guard helpers, and protected internal cron job boundaries. See [SECURITY_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/SECURITY_REWRITE_TRACKER.md) | No public exec/web tools consume the helpers yet, no sandbox backend support, no richer admin/auth policy | Decide whether future shell/web tools should expose all security knobs or keep them mostly config-driven |
 | Observability | 55% | Runtime logs slice landed | TS now has structured in-memory and file-backed JSONL runtime logs under `.nanobot/logs`, sanitized preview truncation, `logs show/tail/clear`, `agent --logs`, and `gateway --verbose` lifecycle streaming. See [OBSERVABILITY_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/OBSERVABILITY_REWRITE_TRACKER.md) | No metrics, dashboards, tracing backend, HTTP log API, or size/time-based rotation | Decide whether operator UX needs metrics or richer log filtering next |
+| Tools | 45% | Workspace/calendar foundation landed | Shared runtime tool factory, config-gated tool filtering, workspace file/search tools, cron/faux factory wiring, and opt-in calendar provider contract with GWS/Lark adapters are in place. See [TOOLS_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/TOOLS_REWRITE_TRACKER.md) | No exec/web/notebook/message/spawn/MCP tools, no channel-level permission prompt, limited calendar adapter live coverage | Decide whether to add message tool or shell/web tools next |
 | Skills | 62% | Composition slice landed | TS-native builtin/workspace skill loader, requirement filtering, summaries with availability markers, selected skill bodies via `agent.skills`, and prompt-composition integration. See [TEMPLATES_SKILLS_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/TEMPLATES_SKILLS_REWRITE_TRACKER.md) | No dynamic skill selection, no skill authoring tooling, no auto-registration of tools from skills | Decide whether dynamic skill selection belongs in commands or agent policy |
 | Templates | 74% | Composition slice landed | Bundled templates, missing-files-only workspace sync, bootstrap files, `USER.md` heuristic extraction, memory scaffolding, and canonical runtime prompt composition. See [TEMPLATES_SKILLS_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/TEMPLATES_SKILLS_REWRITE_TRACKER.md) | No memory-versioning template sync, no richer onboard wizard integration | Decide whether template sync needs versioning or manual repair commands |
 
@@ -33,10 +34,12 @@ This tracker is intentionally blunt. Percentages are parity estimates against th
 1. Memory versioning
 2. Restart/system-message policy
 3. Metrics/operator reporting, if local logs are not enough
-4. Skills
-5. Templates
-6. Unified-session policy
-7. Final CLI cleanup / parity pass
+4. Tool permission gate in the channel contract
+5. Shell/web tool implementation
+6. Skills
+7. Templates
+8. Unified-session policy
+9. Final CLI cleanup / parity pass
 
 ## Notes
 
@@ -49,6 +52,7 @@ This tracker is intentionally blunt. Percentages are parity estimates against th
 - `Auto-compact` is now implemented as the next session reliability layer after `MemoryStore`, `Consolidator`, and `Dream`.
 - `Legacy cleanup` removed inactive prompt config, Python-era memory migration, and TODO-only unified-session tests.
 - `Observability` now gives direct CLI and gateway services a durable local debugging trail without adding a dashboard or tracing backend.
+- `Tools` now has a TS-native factory and safe first workspace/calendar surface; permission prompts are intentionally still config-only.
 
 ## Update Rule
 

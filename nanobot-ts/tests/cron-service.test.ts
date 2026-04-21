@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-	type CronJob,
 	CronService,
 	computeNextRun,
 	formatCronTimestamp,
@@ -282,7 +281,10 @@ describe("cron service", () => {
 
 		const updated = await service.getJob(job.id);
 		expect(updated?.name).toBe("New Name");
-		expect((updated?.schedule as any)?.everyMs).toBe(120_000);
+		expect(updated?.schedule.kind).toBe("every");
+		expect(
+			updated?.schedule.kind === "every" ? updated.schedule.everyMs : null,
+		).toBe(120_000);
 	});
 
 	it("handles one-shot 'at' job with a past timestamp by returning it from next run", () => {

@@ -46,9 +46,10 @@ describe("cron tool", () => {
 			content: Array<{ type: string; text: string }>;
 		};
 
-		expect(result.content[0]?.text).toBe(
-			"Error: no session context (channel/chat_id)",
+		expect(result.content[0]?.text).toContain(
+			"Cannot run cron: no session context is available for delivery",
 		);
+		expect(result.content[0]?.text).toContain("set deliver=false");
 	});
 
 	it("creates jobs with channel delivery context when available", async () => {

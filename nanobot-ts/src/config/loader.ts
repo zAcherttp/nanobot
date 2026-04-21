@@ -47,6 +47,25 @@ export const DEFAULT_CRON_MAX_SLEEP_MS = 300_000;
 export const DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE = false;
 export const DEFAULT_SECURITY_ALLOWED_ENV_KEYS: string[] = [];
 export const DEFAULT_SECURITY_SSRF_WHITELIST: string[] = [];
+export const DEFAULT_TOOLS_ENABLED = ["*"];
+export const DEFAULT_TOOLS_WORKSPACE_ENABLED = true;
+export const DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES = true;
+export const DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS = 128_000;
+export const DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS = 250;
+export const DEFAULT_TOOLS_WEB_ENABLED = true;
+export const DEFAULT_TOOLS_WEB_SEARCH_PROVIDER = "duckduckgo";
+export const DEFAULT_TOOLS_WEB_SEARCH_BASE_URL = "";
+export const DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS = 5;
+export const DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS = 30_000;
+export const DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS = 50_000;
+export const DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS = 30_000;
+export const DEFAULT_TOOLS_CALENDAR_ENABLED = false;
+export const DEFAULT_TOOLS_CALENDAR_PROVIDER = "gws";
+export const DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES = false;
+export const DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID = "primary";
+export const DEFAULT_TOOLS_CALENDAR_GWS_COMMAND = "gws";
+export const DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL =
+	"https://open.larksuite.com";
 export const DEFAULT_LOGGING_MAX_ENTRIES = 5_000;
 export const DEFAULT_LOGGING_MAX_PREVIEW_CHARS = 500;
 export const DEFAULT_LOGGING_CONSOLE = false;
@@ -195,6 +214,185 @@ const appConfigSchema = z
 				restrictToWorkspace: DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE,
 				allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
 				ssrfWhitelist: DEFAULT_SECURITY_SSRF_WHITELIST,
+			}),
+		tools: z
+			.object({
+				enabled: z.array(z.string()).default(DEFAULT_TOOLS_ENABLED),
+				workspace: z
+					.object({
+						enabled: z.boolean().default(DEFAULT_TOOLS_WORKSPACE_ENABLED),
+						allowWrites: z
+							.boolean()
+							.default(DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES),
+						maxReadChars: z
+							.number()
+							.int()
+							.positive()
+							.default(DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS),
+						maxSearchResults: z
+							.number()
+							.int()
+							.positive()
+							.default(DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS),
+					})
+					.strict()
+					.default({
+						enabled: DEFAULT_TOOLS_WORKSPACE_ENABLED,
+						allowWrites: DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES,
+						maxReadChars: DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS,
+						maxSearchResults: DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS,
+					}),
+				web: z
+					.object({
+						enabled: z.boolean().default(DEFAULT_TOOLS_WEB_ENABLED),
+						search: z
+							.object({
+								provider: z
+									.enum(["duckduckgo", "searxng"])
+									.default(DEFAULT_TOOLS_WEB_SEARCH_PROVIDER),
+								baseUrl: z.string().default(DEFAULT_TOOLS_WEB_SEARCH_BASE_URL),
+								maxResults: z
+									.number()
+									.int()
+									.positive()
+									.default(DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS),
+								timeoutMs: z
+									.number()
+									.int()
+									.positive()
+									.default(DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS),
+							})
+							.strict()
+							.default({
+								provider: DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+								baseUrl: DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+								maxResults: DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+								timeoutMs: DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+							}),
+						fetch: z
+							.object({
+								maxChars: z
+									.number()
+									.int()
+									.positive()
+									.default(DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS),
+								timeoutMs: z
+									.number()
+									.int()
+									.positive()
+									.default(DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS),
+							})
+							.strict()
+							.default({
+								maxChars: DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+								timeoutMs: DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+							}),
+					})
+					.strict()
+					.default({
+						enabled: DEFAULT_TOOLS_WEB_ENABLED,
+						search: {
+							provider: DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+							baseUrl: DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+							maxResults: DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+							timeoutMs: DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+						},
+						fetch: {
+							maxChars: DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+							timeoutMs: DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+						},
+					}),
+				calendar: z
+					.object({
+						enabled: z.boolean().default(DEFAULT_TOOLS_CALENDAR_ENABLED),
+						provider: z
+							.enum(["gws", "lark"])
+							.default(DEFAULT_TOOLS_CALENDAR_PROVIDER),
+						allowWrites: z
+							.boolean()
+							.default(DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES),
+						defaultCalendarId: z
+							.string()
+							.default(DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID),
+						gws: z
+							.object({
+								command: z.string().default(DEFAULT_TOOLS_CALENDAR_GWS_COMMAND),
+							})
+							.strict()
+							.default({
+								command: DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+							}),
+						lark: z
+							.object({
+								appId: z.string().default(""),
+								appSecret: z.string().default(""),
+								calendarId: z.string().default(""),
+								baseUrl: z
+									.string()
+									.default(DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL),
+							})
+							.strict()
+							.default({
+								appId: "",
+								appSecret: "",
+								calendarId: "",
+								baseUrl: DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+							}),
+					})
+					.strict()
+					.default({
+						enabled: DEFAULT_TOOLS_CALENDAR_ENABLED,
+						provider: DEFAULT_TOOLS_CALENDAR_PROVIDER,
+						allowWrites: DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES,
+						defaultCalendarId: DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+						gws: {
+							command: DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+						},
+						lark: {
+							appId: "",
+							appSecret: "",
+							calendarId: "",
+							baseUrl: DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+						},
+					}),
+			})
+			.strict()
+			.default({
+				enabled: DEFAULT_TOOLS_ENABLED,
+				workspace: {
+					enabled: DEFAULT_TOOLS_WORKSPACE_ENABLED,
+					allowWrites: DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES,
+					maxReadChars: DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS,
+					maxSearchResults: DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS,
+				},
+				web: {
+					enabled: DEFAULT_TOOLS_WEB_ENABLED,
+					search: {
+						provider: DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+						baseUrl: DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+						maxResults: DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+						timeoutMs: DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+					},
+					fetch: {
+						maxChars: DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+						timeoutMs: DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+					},
+				},
+				calendar: {
+					enabled: DEFAULT_TOOLS_CALENDAR_ENABLED,
+					provider: DEFAULT_TOOLS_CALENDAR_PROVIDER,
+					allowWrites: DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES,
+					defaultCalendarId: DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+					gws: {
+						command: DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+					},
+					lark: {
+						appId: "",
+						appSecret: "",
+						calendarId: "",
+						baseUrl: DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+					},
+				},
 			}),
 		agent: z
 			.object({
@@ -385,6 +583,43 @@ export const DEFAULT_CONFIG: AppConfig = {
 		allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
 		ssrfWhitelist: DEFAULT_SECURITY_SSRF_WHITELIST,
 	},
+	tools: {
+		enabled: DEFAULT_TOOLS_ENABLED,
+		workspace: {
+			enabled: DEFAULT_TOOLS_WORKSPACE_ENABLED,
+			allowWrites: DEFAULT_TOOLS_WORKSPACE_ALLOW_WRITES,
+			maxReadChars: DEFAULT_TOOLS_WORKSPACE_MAX_READ_CHARS,
+			maxSearchResults: DEFAULT_TOOLS_WORKSPACE_MAX_SEARCH_RESULTS,
+		},
+		web: {
+			enabled: DEFAULT_TOOLS_WEB_ENABLED,
+			search: {
+				provider: DEFAULT_TOOLS_WEB_SEARCH_PROVIDER,
+				baseUrl: DEFAULT_TOOLS_WEB_SEARCH_BASE_URL,
+				maxResults: DEFAULT_TOOLS_WEB_SEARCH_MAX_RESULTS,
+				timeoutMs: DEFAULT_TOOLS_WEB_SEARCH_TIMEOUT_MS,
+			},
+			fetch: {
+				maxChars: DEFAULT_TOOLS_WEB_FETCH_MAX_CHARS,
+				timeoutMs: DEFAULT_TOOLS_WEB_FETCH_TIMEOUT_MS,
+			},
+		},
+		calendar: {
+			enabled: DEFAULT_TOOLS_CALENDAR_ENABLED,
+			provider: DEFAULT_TOOLS_CALENDAR_PROVIDER,
+			allowWrites: DEFAULT_TOOLS_CALENDAR_ALLOW_WRITES,
+			defaultCalendarId: DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+			gws: {
+				command: DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+			},
+			lark: {
+				appId: "",
+				appSecret: "",
+				calendarId: "",
+				baseUrl: DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+			},
+		},
+	},
 	agent: {
 		provider: DEFAULT_AGENT_PROVIDER,
 		modelId: DEFAULT_AGENT_MODEL_ID,
@@ -479,6 +714,39 @@ export async function loadConfig(
 			allowedEnvKeys: parsed.security.allowedEnvKeys.map((key) => key.trim()),
 			ssrfWhitelist: parsed.security.ssrfWhitelist.map((cidr) => cidr.trim()),
 		},
+		tools: {
+			enabled: parsed.tools.enabled.map((entry) => entry.trim()),
+			workspace: parsed.tools.workspace,
+			web: {
+				enabled: parsed.tools.web.enabled,
+				search: {
+					provider: parsed.tools.web.search.provider,
+					baseUrl: parsed.tools.web.search.baseUrl.trim(),
+					maxResults: parsed.tools.web.search.maxResults,
+					timeoutMs: parsed.tools.web.search.timeoutMs,
+				},
+				fetch: parsed.tools.web.fetch,
+			},
+			calendar: {
+				...parsed.tools.calendar,
+				defaultCalendarId:
+					parsed.tools.calendar.defaultCalendarId.trim() ||
+					DEFAULT_TOOLS_CALENDAR_DEFAULT_CALENDAR_ID,
+				gws: {
+					command:
+						parsed.tools.calendar.gws.command.trim() ||
+						DEFAULT_TOOLS_CALENDAR_GWS_COMMAND,
+				},
+				lark: {
+					appId: parsed.tools.calendar.lark.appId.trim(),
+					appSecret: parsed.tools.calendar.lark.appSecret.trim(),
+					calendarId: parsed.tools.calendar.lark.calendarId.trim(),
+					baseUrl:
+						parsed.tools.calendar.lark.baseUrl.trim() ||
+						DEFAULT_TOOLS_CALENDAR_LARK_BASE_URL,
+				},
+			},
+		},
 		logging: {
 			level: envLogLevel ?? parsed.logging.level,
 			maxEntries: parsed.logging.maxEntries,
@@ -541,6 +809,52 @@ export function validateRuntimeConfig(config: AppConfig): void {
 	}
 	if (config.security.ssrfWhitelist.some((cidr) => cidr.length === 0)) {
 		throw new Error("security.ssrfWhitelist cannot contain empty entries.");
+	}
+	if (config.tools.enabled.some((entry) => entry.length === 0)) {
+		throw new Error("tools.enabled cannot contain empty entries.");
+	}
+	if (config.tools.workspace.maxReadChars <= 0) {
+		throw new Error("tools.workspace.maxReadChars must be positive.");
+	}
+	if (config.tools.workspace.maxSearchResults <= 0) {
+		throw new Error("tools.workspace.maxSearchResults must be positive.");
+	}
+	if (config.tools.web.search.maxResults <= 0) {
+		throw new Error("tools.web.search.maxResults must be positive.");
+	}
+	if (config.tools.web.search.timeoutMs <= 0) {
+		throw new Error("tools.web.search.timeoutMs must be positive.");
+	}
+	if (config.tools.web.fetch.maxChars <= 0) {
+		throw new Error("tools.web.fetch.maxChars must be positive.");
+	}
+	if (config.tools.web.fetch.timeoutMs <= 0) {
+		throw new Error("tools.web.fetch.timeoutMs must be positive.");
+	}
+	if (config.tools.calendar.enabled) {
+		if (!config.tools.calendar.defaultCalendarId.trim()) {
+			throw new Error(
+				"tools.calendar.defaultCalendarId is required when calendar is enabled.",
+			);
+		}
+		if (
+			config.tools.calendar.provider === "gws" &&
+			!config.tools.calendar.gws.command.trim()
+		) {
+			throw new Error(
+				"tools.calendar.gws.command is required when GWS calendar is enabled.",
+			);
+		}
+		if (config.tools.calendar.provider === "lark") {
+			if (
+				!config.tools.calendar.lark.appId.trim() ||
+				!config.tools.calendar.lark.appSecret.trim()
+			) {
+				throw new Error(
+					"tools.calendar.lark.appId and appSecret are required when Lark calendar is enabled.",
+				);
+			}
+		}
 	}
 }
 

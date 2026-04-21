@@ -84,6 +84,44 @@ export interface SecurityConfig {
 	ssrfWhitelist: string[];
 }
 
+export interface ToolsConfig {
+	enabled: string[];
+	workspace: {
+		enabled: boolean;
+		allowWrites: boolean;
+		maxReadChars: number;
+		maxSearchResults: number;
+	};
+	web: {
+		enabled: boolean;
+		search: {
+			provider: "duckduckgo" | "searxng";
+			baseUrl: string;
+			maxResults: number;
+			timeoutMs: number;
+		};
+		fetch: {
+			maxChars: number;
+			timeoutMs: number;
+		};
+	};
+	calendar: {
+		enabled: boolean;
+		provider: "gws" | "lark";
+		allowWrites: boolean;
+		defaultCalendarId: string;
+		gws: {
+			command: string;
+		};
+		lark: {
+			appId: string;
+			appSecret: string;
+			calendarId: string;
+			baseUrl: string;
+		};
+	};
+}
+
 export interface AppConfig {
 	workspace: WorkspaceConfig;
 	gateway: GatewayConfig;
@@ -94,5 +132,6 @@ export interface AppConfig {
 	providers: ProvidersConfig;
 	agent: AgentConfig;
 	security: SecurityConfig;
+	tools: ToolsConfig;
 	logging: LoggingConfig;
 }

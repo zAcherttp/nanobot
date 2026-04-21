@@ -1,5 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@mariozechner/pi-ai";
+import {
+	toolInvalidRequestMessage,
+	toolUnavailableMessage,
+} from "../tools/messages.js";
 import type { CronService } from "./service.js";
 import {
 	formatCronTimestamp,
@@ -79,7 +83,11 @@ async function executeCronAction(
 ): Promise<string> {
 	if (input.action === "add") {
 		if (options.inCronContext) {
-			return "Error: cannot schedule new jobs from within a cron job execution";
+			return toolInvalidRequestMessage(
+				"cron",
+				"cannot schedule new jobs from within a cron job execution.",
+				"Ask the user to schedule this from a normal chat/session instead.",
+			);
 		}
 		return addCronJob(input, options);
 	}
@@ -109,19 +117,29 @@ async function executeCronAction(
 
 	if (input.action === "remove") {
 		if (!input.job_id?.trim()) {
-			return "Error: job_id is required for remove";
+			return toolInvalidRequestMessage(
+				"cron",
+				"job_id is required for remove.",
+			);
 		}
 		const result = await options.service.removeJob(input.job_id.trim());
 		if (result === "removed") {
 			return `Removed job ${input.job_id.trim()}`;
 		}
 		if (result === "protected") {
-			return `Error: job ${input.job_id.trim()} is a protected internal job`;
+			return toolInvalidRequestMessage(
+				"cron",
+				`job ${input.job_id.trim()} is a protected internal job.`,
+				"Do not retry removal through the public cron tool.",
+			);
 		}
 		return `Job ${input.job_id.trim()} not found`;
 	}
 
-	return `Unknown action: ${input.action ?? ""}`;
+	return toolInvalidRequestMessage(
+		"cron",
+		`unknown action '${input.action ?? ""}'.`,
+	);
 }
 
 async function addCronJob(
@@ -138,15 +156,22 @@ async function addCronJob(
 ): Promise<string> {
 	const message = input.message?.trim();
 	if (!message) {
-		return "Error: message is required for add";
+		return toolInvalidRequestMessage("cron", "message is required for add.");
 	}
 
 	const deliver = input.deliver ?? true;
 	if (deliver && (!options.channel || !options.chatId)) {
-		return "Error: no session context (channel/chat_id)";
+		return toolInvalidRequestMessage(
+			"cron",
+			"no session context is available for delivery (channel/chat_id).",
+			"Either create the job from a channel session or set deliver=false.",
+		);
 	}
 	if (input.tz && !input.cron_expr) {
-		return "Error: tz can only be used with cron_expr";
+		return toolInvalidRequestMessage(
+			"cron",
+			"tz can only be used with cron_expr.",
+		);
 	}
 
 	let schedule: CronSchedule | null = null;
@@ -174,12 +199,18 @@ async function addCronJob(
 			};
 			deleteAfterRun = true;
 		} catch (error) {
-			return `Error: ${error instanceof Error ? error.message : String(error)}`;
+			return toolInvalidRequestMessage(
+				"cron",
+				error instanceof Error ? error.message : String(error),
+			);
 		}
 	}
 
 	if (!schedule) {
-		return "Error: either every_seconds, cron_expr, or at is required";
+		return toolInvalidRequestMessage(
+			"cron",
+			"either every_seconds, cron_expr, or at is required.",
+		);
 	}
 
 	try {
@@ -194,7 +225,13 @@ async function addCronJob(
 		});
 		return `Created job '${job.name}' (id: ${job.id})`;
 	} catch (error) {
-		return `Error: ${error instanceof Error ? error.message : String(error)}`;
+		return toolUnavailableMessage({
+			tool: "Cron",
+			target: input.name ?? message,
+			reason: error instanceof Error ? error.message : String(error),
+			guidance:
+				"Do not assume the job was scheduled. Retry later or ask the user to check cron storage/configuration.",
+		});
 	}
 }
 

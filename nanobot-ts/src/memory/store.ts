@@ -5,7 +5,6 @@ import type {
 	Message,
 	TextContent,
 	ToolCall,
-	ToolResultMessage,
 	UserMessage,
 } from "@mariozechner/pi-ai";
 

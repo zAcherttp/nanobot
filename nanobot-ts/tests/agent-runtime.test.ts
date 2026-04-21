@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	Type,
 } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
 	createSessionAgent,

@@ -228,7 +228,7 @@ export class ChannelManager {
 		if (message.metadata?._stream_end === true) {
 			const buffered = this.bufferedStreams.get(key);
 			this.bufferedStreams.delete(key);
-			if (!buffered || !buffered.content.trim()) {
+			if (!buffered?.content.trim()) {
 				return 0;
 			}
 

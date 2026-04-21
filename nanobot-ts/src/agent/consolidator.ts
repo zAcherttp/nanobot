@@ -12,11 +12,7 @@ import {
 } from "@mariozechner/pi-ai";
 
 import type { AppConfig } from "../config/schema.js";
-import {
-	type ArchivedMemoryEntry,
-	formatMessagesForHistory,
-	type MemoryStore,
-} from "../memory/index.js";
+import { formatMessagesForHistory, type MemoryStore } from "../memory/index.js";
 import { renderTemplate } from "../templates/index.js";
 import {
 	findLegalMessageStart,

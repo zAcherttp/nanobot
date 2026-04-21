@@ -3,10 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAgentRuntimeConfig } from "../src/agent/loop.js";
 import { InMemoryMessageBus } from "../src/channels/bus.js";
 import { DEFAULT_CONFIG } from "../src/config/loader.js";
-import {
-	GATEWAY_RUNTIME_ERROR_MESSAGE,
-	GatewayRuntime,
-} from "../src/gateway/index.js";
+import { GatewayRuntime } from "../src/gateway/index.js";
 import type { Logger } from "../src/utils/logging.js";
 
 const LOGGER: Logger = {

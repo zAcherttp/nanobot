@@ -1,3 +1,4 @@
+import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -310,7 +311,15 @@ describe("session persistence", () => {
 		});
 
 		expect(sanitized).toHaveLength(2);
-		const assistantContent = (sanitized[1] as any).content[0].text;
+		const assistant = sanitized[1];
+		if (assistant?.role !== "assistant") {
+			throw new Error("Expected sanitized assistant message.");
+		}
+		const textBlock = assistant.content[0];
+		if (textBlock?.type !== "text") {
+			throw new Error("Expected sanitized assistant text block.");
+		}
+		const assistantContent = textBlock.text;
 		expect(assistantContent.length).toBeLessThanOrEqual(100);
 		expect(assistantContent).toContain("...");
 	});
@@ -433,9 +442,9 @@ describe("session persistence", () => {
 			"toolResult",
 		]);
 		const toolResults = restored.session.messages.filter(
-			(m) => m.role === "toolResult",
+			(m): m is ToolResultMessage => m.role === "toolResult",
 		);
 		expect(toolResults).toHaveLength(2);
-		expect(toolResults.every((m) => (m as any).isError)).toBe(true);
+		expect(toolResults.every((m) => m.isError)).toBe(true);
 	});
 });
