@@ -38,7 +38,7 @@ Last updated: 2026-04-17
 | Session persistence | Done for hardening slice | Pluggable session store plus file-backed default, runtime checkpoints, bounded retention, and corrupt-file quarantine |
 | Config resolution | Done for v1 slice | TS-first agent config resolves `provider` + `modelId` into `pi-ai` model |
 | Direct programmable use | Done for v1 slice | Session-backed raw `Agent` factory with auto-persist on `agent_end` |
-| CLI adoption | Partial | `agent` command uses the new runtime; gateway bridging now lives in [AGENT_CHANNELS_REWRITE_TRACKER.md](E:/Web/.tauri/nanobot/nanobot-ts/AGENT_CHANNELS_REWRITE_TRACKER.md) |
+| CLI adoption | Partial | `agent` command uses the new runtime; gateway bridging now lives in [AGENT_CHANNELS_REWRITE_TRACKER.md](AGENT_CHANNELS_REWRITE_TRACKER.md) |
 | Advanced Python parity | Deferred | cron, heartbeat, dream, unified session, MCP, subagents |
 
 ## Next Targets
