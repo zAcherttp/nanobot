@@ -9,23 +9,5 @@ Priority: user corrections and preferences > solutions > decisions > events > en
 
 Skip: code patterns derivable from source, git history, or anything already captured in existing memory.
 
-Return a single JSON object with this shape:
-{
-  "content": "- concise bullet\n- concise bullet",
-  "signals": {}
-}
-
-Rules for the JSON:
-- `content` must be a single string containing concise bullet points, one fact per line
-- No preamble, no commentary, no markdown fences
-- If nothing noteworthy happened, use `"content": "(nothing)"`
-
-Additionally, extract a `signals` object and include it in the JSON entry. Infer:
-- `affect`: the user's apparent emotional state (one of: neutral, curious, frustrated, anxious, energized)
-- `energy`: apparent energy level (one of: high, medium, low). Infer from language pace, complaint words, brevity.
-- `work_hour`: wall-clock hour of the conversation in HH:MM format (24h)
-- `stress_markers`: array of short quoted phrases from the conversation that signal pressure or fatigue. Empty array if none.
-- `calendar_adjacent`: array of deadlines, meetings, or plans the user mentioned. Empty array if none.
-
-If you cannot infer a field with reasonable confidence, omit it from the signals object rather than guessing.
-If no signals can be inferred, use `"signals": {}`.
+Output as concise bullet points, one fact per line. No preamble, no commentary.
+If nothing noteworthy happened, output: (nothing)

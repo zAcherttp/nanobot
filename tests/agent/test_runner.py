@@ -10,12 +10,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from nanobot.config.schema import AgentDefaults
 from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.registry import ToolRegistry
-from nanobot.config.schema import AgentDefaults
 from nanobot.providers.base import LLMResponse, ToolCallRequest
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
+
+
+def _make_injection_callback(queue: asyncio.Queue):
+    """Return an async callback that drains *queue* into a list of dicts."""
+    async def inject_cb():
+        items = []
+        while not queue.empty():
+            items.append(await queue.get())
+        return items
+    return inject_cb
 
 
 def _make_loop(tmp_path):
@@ -28,15 +38,15 @@ def _make_loop(tmp_path):
 
     with patch("nanobot.agent.loop.ContextBuilder"), \
          patch("nanobot.agent.loop.SessionManager"), \
-         patch("nanobot.agent.loop.SubagentManager") as mock_sub_mgr:
-        mock_sub_mgr.return_value.cancel_by_session = AsyncMock(return_value=0)
+         patch("nanobot.agent.loop.SubagentManager") as MockSubMgr:
+        MockSubMgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
     return loop
 
 
 @pytest.mark.asyncio
 async def test_runner_preserves_reasoning_fields_and_tool_results():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -94,7 +104,7 @@ async def test_runner_preserves_reasoning_fields_and_tool_results():
 @pytest.mark.asyncio
 async def test_runner_calls_hooks_in_order():
     from nanobot.agent.hook import AgentHook, AgentHookContext
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -170,7 +180,7 @@ async def test_runner_calls_hooks_in_order():
 @pytest.mark.asyncio
 async def test_runner_streaming_hook_receives_deltas_and_end_signal():
     from nanobot.agent.hook import AgentHook, AgentHookContext
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     streamed: list[str] = []
@@ -214,7 +224,7 @@ async def test_runner_streaming_hook_receives_deltas_and_end_signal():
 
 @pytest.mark.asyncio
 async def test_runner_returns_max_iterations_fallback():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
@@ -244,7 +254,7 @@ async def test_runner_returns_max_iterations_fallback():
 
 @pytest.mark.asyncio
 async def test_runner_returns_structured_tool_error():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
@@ -275,7 +285,7 @@ async def test_runner_returns_structured_tool_error():
 
 @pytest.mark.asyncio
 async def test_runner_persists_large_tool_results_for_follow_up_calls(tmp_path):
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -388,7 +398,7 @@ def test_persist_tool_result_logs_cleanup_failures(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_runner_replaces_empty_tool_result_with_marker():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -426,7 +436,7 @@ async def test_runner_replaces_empty_tool_result_with_marker():
 
 @pytest.mark.asyncio
 async def test_runner_uses_raw_messages_when_context_governance_fails():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -460,7 +470,7 @@ async def test_runner_uses_raw_messages_when_context_governance_fails():
 @pytest.mark.asyncio
 async def test_runner_retries_empty_final_response_with_summary_prompt():
     """Empty responses get 2 silent retries before finalization kicks in."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     calls: list[dict] = []
@@ -505,7 +515,7 @@ async def test_runner_retries_empty_final_response_with_summary_prompt():
 @pytest.mark.asyncio
 async def test_runner_uses_specific_message_after_empty_finalization_retry():
     """After silent retries + finalization all return empty, stop_reason is empty_final_response."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 
     provider = MagicMock()
@@ -537,7 +547,7 @@ async def test_runner_empty_response_does_not_break_tool_chain():
     Sequence: tool_call → empty → tool_call → final text.
     The runner should recover via silent retry and complete normally.
     """
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = 0
@@ -591,7 +601,7 @@ async def test_runner_empty_response_does_not_break_tool_chain():
 
 
 def test_snip_history_drops_orphaned_tool_results_from_trimmed_slice(monkeypatch):
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     tools = MagicMock()
@@ -633,15 +643,16 @@ def test_snip_history_drops_orphaned_tool_results_from_trimmed_slice(monkeypatch
 
     trimmed = runner._snip_history(spec, messages)
 
-    assert trimmed == [
-        {"role": "system", "content": "system"},
-        {"role": "assistant", "content": "after tool"},
-    ]
+    # After the fix, the user message is recovered so the sequence is valid
+    # for providers that require system → user (e.g. GLM error 1214).
+    assert trimmed[0]["role"] == "system"
+    non_system = [m for m in trimmed if m["role"] != "system"]
+    assert non_system[0]["role"] == "user", f"Expected user after system, got {non_system[0]['role']}"
 
 
 @pytest.mark.asyncio
 async def test_runner_keeps_going_when_tool_result_persistence_fails():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -679,11 +690,20 @@ async def test_runner_keeps_going_when_tool_result_persistence_fails():
 
 
 class _DelayTool(Tool):
-    def __init__(self, name: str, *, delay: float, read_only: bool, shared_events: list[str]):
+    def __init__(
+        self,
+        name: str,
+        *,
+        delay: float,
+        read_only: bool,
+        shared_events: list[str],
+        exclusive: bool = False,
+    ):
         self._name = name
         self._delay = delay
         self._read_only = read_only
         self._shared_events = shared_events
+        self._exclusive = exclusive
 
     @property
     def name(self) -> str:
@@ -701,6 +721,10 @@ class _DelayTool(Tool):
     def read_only(self) -> bool:
         return self._read_only
 
+    @property
+    def exclusive(self) -> bool:
+        return self._exclusive
+
     async def execute(self, **kwargs):
         self._shared_events.append(f"start:{self._name}")
         await asyncio.sleep(self._delay)
@@ -710,7 +734,7 @@ class _DelayTool(Tool):
 
 @pytest.mark.asyncio
 async def test_runner_batches_read_only_tools_before_exclusive_work():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     tools = ToolRegistry()
     shared_events: list[str] = []
@@ -747,8 +771,50 @@ async def test_runner_batches_read_only_tools_before_exclusive_work():
 
 
 @pytest.mark.asyncio
+async def test_runner_does_not_batch_exclusive_read_only_tools():
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    tools = ToolRegistry()
+    shared_events: list[str] = []
+    read_a = _DelayTool("read_a", delay=0.03, read_only=True, shared_events=shared_events)
+    read_b = _DelayTool("read_b", delay=0.03, read_only=True, shared_events=shared_events)
+    ddg_like = _DelayTool(
+        "ddg_like",
+        delay=0.01,
+        read_only=True,
+        shared_events=shared_events,
+        exclusive=True,
+    )
+    tools.register(read_a)
+    tools.register(ddg_like)
+    tools.register(read_b)
+
+    runner = AgentRunner(MagicMock())
+    await runner._execute_tools(
+        AgentRunSpec(
+            initial_messages=[],
+            tools=tools,
+            model="test-model",
+            max_iterations=1,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+            concurrent_tools=True,
+        ),
+        [
+            ToolCallRequest(id="ro1", name="read_a", arguments={}),
+            ToolCallRequest(id="ddg1", name="ddg_like", arguments={}),
+            ToolCallRequest(id="ro2", name="read_b", arguments={}),
+        ],
+        {},
+    )
+
+    assert shared_events[0] == "start:read_a"
+    assert shared_events.index("end:read_a") < shared_events.index("start:ddg_like")
+    assert shared_events.index("end:ddg_like") < shared_events.index("start:read_b")
+
+
+@pytest.mark.asyncio
 async def test_runner_blocks_repeated_external_fetches():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_final_call: list[dict] = []
@@ -861,9 +927,9 @@ async def test_llm_error_not_appended_to_session_messages():
     """When LLM returns finish_reason='error', the error content must NOT be
     appended to the messages list (prevents polluting session history)."""
     from nanobot.agent.runner import (
-        _PERSISTED_MODEL_ERROR_PLACEHOLDER,
-        AgentRunner,
         AgentRunSpec,
+        AgentRunner,
+        _PERSISTED_MODEL_ERROR_PLACEHOLDER,
     )
 
     provider = MagicMock()
@@ -976,7 +1042,7 @@ async def test_next_turn_after_llm_error_keeps_turn_boundary(tmp_path):
 
 @pytest.mark.asyncio
 async def test_runner_tool_error_sets_final_content():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
 
@@ -1008,7 +1074,7 @@ async def test_runner_tool_error_sets_final_content():
 
 @pytest.mark.asyncio
 async def test_subagent_max_iterations_announces_existing_fallback(tmp_path, monkeypatch):
-    from nanobot.agent.subagent import SubagentManager
+    from nanobot.agent.subagent import SubagentManager, SubagentStatus
     from nanobot.bus.queue import MessageBus
 
     bus = MessageBus()
@@ -1031,7 +1097,8 @@ async def test_subagent_max_iterations_announces_existing_fallback(tmp_path, mon
 
     monkeypatch.setattr("nanobot.agent.tools.filesystem.ListDirTool.execute", fake_execute)
 
-    await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"})
+    status = SubagentStatus(task_id="sub-1", label="label", task_description="do task", started_at=time.monotonic())
+    await mgr._run_subagent("sub-1", "do task", "label", {"channel": "test", "chat_id": "c1"}, status)
 
     mgr._announce_result.assert_awaited_once()
     args = mgr._announce_result.await_args.args
@@ -1043,7 +1110,7 @@ async def test_subagent_max_iterations_announces_existing_fallback(tmp_path, mon
 async def test_runner_accumulates_usage_and_preserves_cached_tokens():
     """Runner should accumulate prompt/completion tokens across iterations
     and preserve cached_tokens from provider responses."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -1086,7 +1153,7 @@ async def test_runner_accumulates_usage_and_preserves_cached_tokens():
 async def test_runner_passes_cached_tokens_to_hook_context():
     """Hook context.usage should contain cached_tokens."""
     from nanobot.agent.hook import AgentHook, AgentHookContext
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_usage: list[dict] = []
@@ -1129,7 +1196,7 @@ async def test_runner_passes_cached_tokens_to_hook_context():
 async def test_length_recovery_continues_from_truncated_output():
     """When finish_reason is 'length', runner should insert a continuation
     prompt and retry, stitching partial outputs into the final result."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -1169,7 +1236,7 @@ async def test_length_recovery_streaming_calls_on_stream_end_with_resuming():
     """During length recovery with streaming, on_stream_end should be called
     with resuming=True so the hook knows the conversation is continuing."""
     from nanobot.agent.hook import AgentHook, AgentHookContext
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -1213,7 +1280,7 @@ async def test_length_recovery_streaming_calls_on_stream_end_with_resuming():
 @pytest.mark.asyncio
 async def test_length_recovery_gives_up_after_max_retries():
     """After _MAX_LENGTH_RECOVERIES attempts the runner should stop retrying."""
-    from nanobot.agent.runner import _MAX_LENGTH_RECOVERIES, AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _MAX_LENGTH_RECOVERIES
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -1251,7 +1318,7 @@ async def test_length_recovery_gives_up_after_max_retries():
 @pytest.mark.asyncio
 async def test_backfill_missing_tool_results_inserts_error():
     """Orphaned tool_use (no matching tool_result) should get a synthetic error."""
-    from nanobot.agent.runner import _BACKFILL_CONTENT, AgentRunner
+    from nanobot.agent.runner import AgentRunner, _BACKFILL_CONTENT
 
     messages = [
         {"role": "user", "content": "hi"},
@@ -1332,7 +1399,7 @@ async def test_backfill_noop_when_complete():
 
 @pytest.mark.asyncio
 async def test_runner_drops_orphan_tool_results_before_model_request():
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -1457,7 +1524,7 @@ async def test_backfill_repairs_model_context_without_shifting_save_turn_boundar
 @pytest.mark.asyncio
 async def test_runner_backfill_only_mutates_model_context_not_returned_messages():
     """Runner should repair orphaned tool calls for the model without rewriting result.messages."""
-    from nanobot.agent.runner import _BACKFILL_CONTENT, AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _BACKFILL_CONTENT
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -1540,7 +1607,7 @@ async def test_runner_backfill_only_mutates_model_context_not_returned_messages(
 @pytest.mark.asyncio
 async def test_microcompact_replaces_old_tool_results():
     """Tool results beyond _MICROCOMPACT_KEEP_RECENT should be summarized."""
-    from nanobot.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+    from nanobot.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     long_content = "x" * 600
@@ -1568,7 +1635,7 @@ async def test_microcompact_replaces_old_tool_results():
 @pytest.mark.asyncio
 async def test_microcompact_preserves_short_results():
     """Short tool results (< _MICROCOMPACT_MIN_CHARS) should not be replaced."""
-    from nanobot.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+    from nanobot.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     messages: list[dict] = []
@@ -1590,7 +1657,7 @@ async def test_microcompact_preserves_short_results():
 @pytest.mark.asyncio
 async def test_microcompact_skips_non_compactable_tools():
     """Non-compactable tools (e.g. 'message') should never be replaced."""
-    from nanobot.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
+    from nanobot.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     long_content = "y" * 1000
@@ -1614,7 +1681,7 @@ async def test_microcompact_skips_non_compactable_tools():
 async def test_runner_tool_error_preserves_tool_results_in_messages():
     """When a tool raises a fatal error, its results must still be appended
     to messages so the session never contains orphan tool_calls (#2943)."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
 
@@ -1676,6 +1743,17 @@ def test_governance_repairs_orphans_after_snip():
     _drop_orphan_tool_results pass must clean up the resulting orphans."""
     from nanobot.agent.runner import AgentRunner
 
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old msg"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "tc_old", "type": "function",
+                         "function": {"name": "search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "tc_old", "name": "search",
+         "content": "old result"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "new msg"},
+    ]
 
     # Simulate snipping that keeps only the tail: drop the assistant with
     # tool_calls but keep its tool result (orphan).
@@ -1718,7 +1796,7 @@ def test_governance_fallback_still_repairs_orphans():
 @pytest.mark.asyncio
 async def test_drain_injections_returns_empty_when_no_callback():
     """No injection_callback → empty list."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     runner = AgentRunner(provider)
@@ -1736,7 +1814,7 @@ async def test_drain_injections_returns_empty_when_no_callback():
 @pytest.mark.asyncio
 async def test_drain_injections_extracts_content_from_inbound_messages():
     """Should extract .content from InboundMessage objects."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1767,7 +1845,7 @@ async def test_drain_injections_extracts_content_from_inbound_messages():
 @pytest.mark.asyncio
 async def test_drain_injections_passes_limit_to_callback_when_supported():
     """Limit-aware callbacks can preserve overflow in their own queue."""
-    from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTIONS_PER_TURN
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1802,7 +1880,7 @@ async def test_drain_injections_passes_limit_to_callback_when_supported():
 @pytest.mark.asyncio
 async def test_drain_injections_skips_empty_content():
     """Messages with blank content should be filtered out."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1831,7 +1909,7 @@ async def test_drain_injections_skips_empty_content():
 @pytest.mark.asyncio
 async def test_drain_injections_handles_callback_exception():
     """If the callback raises, return empty list (error is logged)."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     runner = AgentRunner(provider)
@@ -1853,7 +1931,7 @@ async def test_drain_injections_handles_callback_exception():
 @pytest.mark.asyncio
 async def test_checkpoint1_injects_after_tool_execution():
     """Follow-up messages are injected after tool execution, before next LLM call."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1877,12 +1955,7 @@ async def test_checkpoint1_injects_after_tool_execution():
     tools.execute = AsyncMock(return_value="file content")
 
     injection_queue = asyncio.Queue()
-
-    async def inject_cb():
-        items = []
-        while not injection_queue.empty():
-            items.append(await injection_queue.get())
-        return items
+    inject_cb = _make_injection_callback(injection_queue)
 
     # Put a follow-up message in the queue before the run starts
     await injection_queue.put(
@@ -1911,8 +1984,8 @@ async def test_checkpoint1_injects_after_tool_execution():
 @pytest.mark.asyncio
 async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
     """After final response, if injections exist, stream_end should get resuming=True."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.agent.hook import AgentHook, AgentHookContext
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1940,12 +2013,7 @@ async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
     tools.get_definitions.return_value = []
 
     injection_queue = asyncio.Queue()
-
-    async def inject_cb():
-        items = []
-        while not injection_queue.empty():
-            items.append(await injection_queue.get())
-        return items
+    inject_cb = _make_injection_callback(injection_queue)
 
     # Inject a follow-up that arrives during the first response
     await injection_queue.put(
@@ -1975,7 +2043,7 @@ async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
 @pytest.mark.asyncio
 async def test_checkpoint2_preserves_final_response_in_history_before_followup():
     """A follow-up injected after a final answer must still see that answer in history."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -1994,12 +2062,7 @@ async def test_checkpoint2_preserves_final_response_in_history_before_followup()
     tools.get_definitions.return_value = []
 
     injection_queue = asyncio.Queue()
-
-    async def inject_cb():
-        items = []
-        while not injection_queue.empty():
-            items.append(await injection_queue.get())
-        return items
+    inject_cb = _make_injection_callback(injection_queue)
 
     await injection_queue.put(
         InboundMessage(channel="cli", sender_id="u", chat_id="c", content="follow-up question")
@@ -2095,7 +2158,7 @@ async def test_loop_injected_followup_preserves_image_media(tmp_path):
 @pytest.mark.asyncio
 async def test_runner_merges_multiple_injected_user_messages_without_losing_media():
     """Multiple injected follow-ups should not create lossy consecutive user messages."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -2158,7 +2221,7 @@ async def test_runner_merges_multiple_injected_user_messages_without_losing_medi
 @pytest.mark.asyncio
 async def test_injection_cycles_capped_at_max():
     """Injection cycles should be capped at _MAX_INJECTION_CYCLES."""
-    from nanobot.agent.runner import _MAX_INJECTION_CYCLES, AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTION_CYCLES
     from nanobot.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -2199,7 +2262,7 @@ async def test_injection_cycles_capped_at_max():
 @pytest.mark.asyncio
 async def test_no_injections_flag_is_false_by_default():
     """had_injections should be False when no injection callback or no messages."""
-    from nanobot.agent.runner import AgentRunner, AgentRunSpec
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
 
     provider = MagicMock()
 
@@ -2279,9 +2342,9 @@ async def test_followup_routed_to_pending_queue(tmp_path):
 async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_path):
     """Pending queue should leave overflow messages queued for later drains."""
     from nanobot.agent.loop import AgentLoop
-    from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN
     from nanobot.bus.events import InboundMessage
     from nanobot.bus.queue import MessageBus
+    from nanobot.agent.runner import _MAX_INJECTIONS_PER_TURN
 
     bus = MessageBus()
     provider = MagicMock()
@@ -2400,3 +2463,500 @@ async def test_dispatch_republishes_leftover_queue_messages(tmp_path):
     assert "leftover-1" in contents
     assert "leftover-2" in contents
 
+
+@pytest.mark.asyncio
+async def test_drain_injections_on_fatal_tool_error():
+    """Pending injections should be drained even when a fatal tool error occurs."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="c1", name="exec", arguments={"cmd": "bad"})],
+                usage={},
+            )
+        # Second call: respond normally to the injected follow-up
+        return LLMResponse(content="reply to follow-up", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(side_effect=RuntimeError("tool exploded"))
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+
+    await injection_queue.put(
+        InboundMessage(channel="cli", sender_id="u", chat_id="c", content="follow-up after error")
+    )
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hello"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=5,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        fail_on_tool_error=True,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.had_injections is True
+    assert result.final_content == "reply to follow-up"
+    # The injection should be in the messages history
+    injected = [
+        m for m in result.messages
+        if m.get("role") == "user" and m.get("content") == "follow-up after error"
+    ]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_injections_on_llm_error():
+    """Pending injections should be drained when the LLM returns an error finish_reason."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[],
+                finish_reason="error",
+                usage={},
+            )
+        # Second call: respond normally to the injected follow-up
+        return LLMResponse(content="recovered answer", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+
+    await injection_queue.put(
+        InboundMessage(channel="cli", sender_id="u", chat_id="c", content="follow-up after LLM error")
+    )
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "previous response"},
+            {"role": "user", "content": "trigger error"},
+        ],
+        tools=tools,
+        model="test-model",
+        max_iterations=5,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.had_injections is True
+    assert result.final_content == "recovered answer"
+    injected = [
+        m for m in result.messages
+        if m.get("role") == "user" and "follow-up after LLM error" in str(m.get("content", ""))
+    ]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_injections_on_empty_final_response():
+    """Pending injections should be drained when the runner exits due to empty response."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _MAX_EMPTY_RETRIES
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] <= _MAX_EMPTY_RETRIES + 1:
+            return LLMResponse(content="", tool_calls=[], usage={})
+        # After retries exhausted + injection drain, respond normally
+        return LLMResponse(content="answer after empty", tool_calls=[], usage={})
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+
+    await injection_queue.put(
+        InboundMessage(channel="cli", sender_id="u", chat_id="c", content="follow-up after empty")
+    )
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "previous response"},
+            {"role": "user", "content": "trigger empty"},
+        ],
+        tools=tools,
+        model="test-model",
+        max_iterations=10,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.had_injections is True
+    assert result.final_content == "answer after empty"
+    injected = [
+        m for m in result.messages
+        if m.get("role") == "user" and "follow-up after empty" in str(m.get("content", ""))
+    ]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_injections_on_max_iterations():
+    """Pending injections should be drained when the runner hits max_iterations.
+
+    Unlike other error paths, max_iterations cannot continue the loop, so
+    injections are appended to messages but not processed by the LLM.
+    The key point is they are consumed from the queue to prevent re-publish.
+    """
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id=f"c{call_count['n']}", name="read_file", arguments={"path": "x"})],
+            usage={},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="file content")
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+
+    await injection_queue.put(
+        InboundMessage(channel="cli", sender_id="u", chat_id="c", content="follow-up after max iters")
+    )
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hello"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.stop_reason == "max_iterations"
+    assert result.had_injections is True
+    # The injection was consumed from the queue (preventing re-publish)
+    assert injection_queue.empty()
+    # The injection message is appended to conversation history
+    injected = [
+        m for m in result.messages
+        if m.get("role") == "user" and m.get("content") == "follow-up after max iters"
+    ]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_injections_set_flag_when_followup_arrives_after_last_iteration():
+    """Late follow-ups drained in max_iterations should still flip had_injections."""
+    from nanobot.agent.hook import AgentHook
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id=f"c{call_count['n']}", name="read_file", arguments={"path": "x"})],
+            usage={},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    tools.execute = AsyncMock(return_value="file content")
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+
+    class InjectOnLastAfterIterationHook(AgentHook):
+        def __init__(self) -> None:
+            self.after_iteration_calls = 0
+
+        async def after_iteration(self, context) -> None:
+            self.after_iteration_calls += 1
+            if self.after_iteration_calls == 2:
+                await injection_queue.put(
+                    InboundMessage(
+                        channel="cli",
+                        sender_id="u",
+                        chat_id="c",
+                        content="late follow-up after max iters",
+                    )
+                )
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[{"role": "user", "content": "hello"}],
+        tools=tools,
+        model="test-model",
+        max_iterations=2,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+        hook=InjectOnLastAfterIterationHook(),
+    ))
+
+    assert result.stop_reason == "max_iterations"
+    assert result.had_injections is True
+    assert injection_queue.empty()
+    injected = [
+        m for m in result.messages
+        if m.get("role") == "user" and m.get("content") == "late follow-up after max iters"
+    ]
+    assert len(injected) == 1
+
+
+@pytest.mark.asyncio
+async def test_injection_cycle_cap_on_error_path():
+    """Injection cycles should be capped even when every iteration hits an LLM error."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTION_CYCLES
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        return LLMResponse(
+            content=None,
+            tool_calls=[],
+            finish_reason="error",
+            usage={},
+        )
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    drain_count = {"n": 0}
+
+    async def inject_cb():
+        drain_count["n"] += 1
+        if drain_count["n"] <= _MAX_INJECTION_CYCLES:
+            return [InboundMessage(channel="cli", sender_id="u", chat_id="c", content=f"msg-{drain_count['n']}")]
+        return []
+
+    runner = AgentRunner(provider)
+    result = await runner.run(AgentRunSpec(
+        initial_messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "previous"},
+            {"role": "user", "content": "trigger error"},
+        ],
+        tools=tools,
+        model="test-model",
+        max_iterations=20,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        injection_callback=inject_cb,
+    ))
+
+    assert result.had_injections is True
+    # Should cap: _MAX_INJECTION_CYCLES drained rounds + 1 final round that breaks
+    assert call_count["n"] == _MAX_INJECTION_CYCLES + 1
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for GLM-1214: _snip_history must preserve a user message
+# ---------------------------------------------------------------------------
+
+
+def test_snip_history_preserves_user_message_after_truncation(monkeypatch):
+    """When _snip_history truncates messages and the only user message ends up
+    outside the kept window, the method must recover the nearest user message
+    so the resulting sequence is valid for providers like GLM (which reject
+    system→assistant with error 1214).
+
+    This reproduces the exact scenario from the bug report:
+    - Normal interaction: user asks, assistant calls tool, tool returns,
+      assistant replies.
+    - Injection adds a phantom user message, triggering more tool calls.
+    - _snip_history activates, keeping only recent assistant/tool pairs.
+    - The injected user message is in the truncated prefix and gets lost.
+    """
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    provider = MagicMock()
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    runner = AgentRunner(provider)
+
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "assistant", "content": "previous reply"},
+        {"role": "user", "content": ".nanobot的同目录"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "tc_1", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "tc_1", "content": "tool output 1"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "tc_2", "type": "function", "function": {"name": "exec", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "tc_2", "content": "tool output 2"},
+    ]
+
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=2000,
+        context_block_limit=100,
+    )
+
+    # Make estimate_prompt_tokens_chain report above budget so _snip_history activates.
+    monkeypatch.setattr("nanobot.agent.runner.estimate_prompt_tokens_chain", lambda *_a, **_kw: (500, None))
+    # Make kept window small: only the last 2 messages fit the budget.
+    token_sizes = {
+        "system": 0,
+        "previous reply": 200,
+        ".nanobot的同目录": 80,
+        "tool output 1": 80,
+        "tool output 2": 80,
+    }
+    monkeypatch.setattr(
+        "nanobot.agent.runner.estimate_message_tokens",
+        lambda msg: token_sizes.get(str(msg.get("content")), 100),
+    )
+
+    trimmed = runner._snip_history(spec, messages)
+
+    # The first non-system message MUST be user (not assistant).
+    non_system = [m for m in trimmed if m.get("role") != "system"]
+    assert non_system, "trimmed should contain at least one non-system message"
+    assert non_system[0]["role"] == "user", (
+        f"First non-system message must be 'user', got '{non_system[0]['role']}'. "
+        f"Roles: {[m['role'] for m in trimmed]}"
+    )
+
+
+def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
+    """Edge case: if non_system has zero user messages, _snip_history should
+    still return a valid sequence (not crash or produce system→assistant)."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    provider = MagicMock()
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+    runner = AgentRunner(provider)
+
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "assistant", "content": "reply"},
+        {"role": "tool", "tool_call_id": "tc_1", "content": "result"},
+        {"role": "assistant", "content": "reply 2"},
+        {"role": "tool", "tool_call_id": "tc_2", "content": "result 2"},
+    ]
+
+    spec = AgentRunSpec(
+        initial_messages=messages,
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        context_window_tokens=2000,
+        context_block_limit=100,
+    )
+
+    monkeypatch.setattr("nanobot.agent.runner.estimate_prompt_tokens_chain", lambda *_a, **_kw: (500, None))
+    monkeypatch.setattr(
+        "nanobot.agent.runner.estimate_message_tokens",
+        lambda msg: 100,
+    )
+
+    trimmed = runner._snip_history(spec, messages)
+
+    # Should not crash.  The result should still be a valid list.
+    assert isinstance(trimmed, list)
+    # Must have at least system.
+    assert any(m.get("role") == "system" for m in trimmed)
+    # The _enforce_role_alternation safety net must be able to fix whatever
+    # _snip_history returns here — verify it produces a valid sequence.
+    from nanobot.providers.base import LLMProvider
+    fixed = LLMProvider._enforce_role_alternation(trimmed)
+    non_system = [m for m in fixed if m["role"] != "system"]
+    if non_system:
+        assert non_system[0]["role"] in ("user", "tool"), (
+            f"Safety net should ensure first non-system is user/tool, got {non_system[0]['role']}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_runner_binds_on_retry_wait_to_retry_callback_not_progress():
+    """Regression: provider retry heartbeats must route through
+    ``retry_wait_callback``, not ``progress_callback``. Binding them to
+    the progress callback (as an earlier runtime refactor did) caused
+    internal retry diagnostics like "Model request failed, retry in 1s"
+    to leak to end-user channels as normal progress updates.
+    """
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+
+    captured: dict = {}
+
+    async def chat_with_retry(**kwargs):
+        captured.update(kwargs)
+        return LLMResponse(content="done", tool_calls=[], usage={})
+
+    provider = MagicMock()
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    progress_cb = AsyncMock()
+    retry_wait_cb = AsyncMock()
+
+    runner = AgentRunner(provider)
+    await runner.run(AgentRunSpec(
+        initial_messages=[
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "hi"},
+        ],
+        tools=tools,
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+        progress_callback=progress_cb,
+        retry_wait_callback=retry_wait_cb,
+    ))
+
+    assert captured["on_retry_wait"] is retry_wait_cb
+    assert captured["on_retry_wait"] is not progress_cb

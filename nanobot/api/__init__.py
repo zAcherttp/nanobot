@@ -1,1 +1,1 @@
-"""API package reserved for future use."""
+"""OpenAI-compatible HTTP API for nanobot."""

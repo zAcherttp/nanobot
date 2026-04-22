@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -23,7 +24,7 @@ async def test_read_interactive_input_async_returns_input(mock_prompt_session):
     mock_prompt_session.prompt_async.return_value = "hello world"
 
     result = await commands._read_interactive_input_async()
-
+    
     assert result == "hello world"
     mock_prompt_session.prompt_async.assert_called_once()
     args, _ = mock_prompt_session.prompt_async.call_args
@@ -43,18 +44,18 @@ def test_init_prompt_session_creates_session():
     """Test that _init_prompt_session initializes the global session."""
     # Ensure global is None before test
     commands._PROMPT_SESSION = None
-
-    with patch("nanobot.cli.commands.PromptSession") as mock_session_cls, \
-         patch("nanobot.cli.commands.FileHistory"), \
+    
+    with patch("nanobot.cli.commands.PromptSession") as MockSession, \
+         patch("nanobot.cli.commands.FileHistory") as MockHistory, \
          patch("pathlib.Path.home") as mock_home:
-
+        
         mock_home.return_value = MagicMock()
-
+        
         commands._init_prompt_session()
-
+        
         assert commands._PROMPT_SESSION is not None
-        mock_session_cls.assert_called_once()
-        _, kwargs = mock_session_cls.call_args
+        MockSession.assert_called_once()
+        _, kwargs = MockSession.call_args
         assert kwargs["multiline"] is False
         assert kwargs["enable_open_in_editor"] is False
 
@@ -155,19 +156,49 @@ def test_stream_renderer_stop_for_input_stops_spinner():
     # Create renderer with mocked console
     with patch.object(stream_mod, "_make_console", return_value=mock_console):
         renderer = stream_mod.StreamRenderer(show_spinner=True)
-
+        
         # Verify spinner started
         spinner.start.assert_called_once()
-
+        
         # Stop for input
         renderer.stop_for_input()
-
+        
         # Verify spinner stopped
         spinner.stop.assert_called_once()
 
 
-def test_make_console_uses_force_terminal():
-    """Console should be created with force_terminal=True for proper ANSI handling."""
-    console = stream_mod._make_console()
-    assert console._force_terminal is True
+def test_make_console_force_terminal_when_stdout_is_tty():
+    """Console should set force_terminal=True when stdout is a TTY (rich output)."""
+    import sys
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        console = stream_mod._make_console()
+        assert console._force_terminal is True
 
+
+def test_make_console_force_terminal_false_when_stdout_is_not_tty():
+    """Console should set force_terminal=False when stdout is not a TTY so that
+    ANSI escape codes (cursor visibility, braille spinner frames) don't pollute
+    piped output such as `docker exec -i` (#3265)."""
+    import sys
+    with patch.object(sys.stdout, "isatty", return_value=False):
+        console = stream_mod._make_console()
+        assert console._force_terminal is False
+
+
+def test_render_interactive_ansi_force_terminal_follows_isatty():
+    """Mirror of _make_console: the capture console used to produce ANSI for
+    prompt_toolkit must also defer to sys.stdout.isatty(), otherwise cursor
+    escapes and spinner frames leak into piped output (#3265, #3370)."""
+    import sys
+    captured: dict = {}
+
+    def render_fn(c):
+        captured["console"] = c
+
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        commands._render_interactive_ansi(render_fn)
+        assert captured["console"]._force_terminal is True
+
+    with patch.object(sys.stdout, "isatty", return_value=False):
+        commands._render_interactive_ansi(render_fn)
+        assert captured["console"]._force_terminal is False

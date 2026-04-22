@@ -1,8 +1,8 @@
-"""Tests for the lightweight Consolidator — append-only to history.jsonl."""
-
-from unittest.mock import AsyncMock, MagicMock
+"""Tests for the lightweight Consolidator — append-only to HISTORY.md."""
 
 import pytest
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from nanobot.agent.memory import Consolidator, MemoryStore
 
@@ -37,7 +37,7 @@ def consolidator(store, mock_provider):
 
 class TestConsolidatorSummarize:
     async def test_summarize_appends_to_history(self, consolidator, mock_provider, store):
-        """Consolidator should call LLM to summarize, then append to history.jsonl."""
+        """Consolidator should call LLM to summarize, then append to HISTORY.md."""
         mock_provider.chat_with_retry.return_value = MagicMock(
             content="User fixed a bug in the auth module."
         )
@@ -49,22 +49,9 @@ class TestConsolidatorSummarize:
         assert result == "User fixed a bug in the auth module."
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
-        assert entries[0]["signals"] == {}
-
-    async def test_summarize_parses_json_content_and_signals(self, consolidator, mock_provider, store):
-        mock_provider.chat_with_retry.return_value = MagicMock(
-            content='{"content":"- User fixed auth bug","signals":{"affect":"energized","energy":"high"}}'
-        )
-        messages = [{"role": "user", "content": "fixed it"}]
-
-        result = await consolidator.archive(messages)
-
-        assert result == "- User fixed auth bug"
-        entries = store.read_unprocessed_history(since_cursor=0)
-        assert entries[0]["signals"] == {"affect": "energized", "energy": "high"}
 
     async def test_summarize_raw_dumps_on_llm_failure(self, consolidator, mock_provider, store):
-        """On LLM failure, raw-dump messages to history.jsonl."""
+        """On LLM failure, raw-dump messages to HISTORY.md."""
         mock_provider.chat_with_retry.side_effect = Exception("API error")
         messages = [{"role": "user", "content": "hello"}]
         result = await consolidator.archive(messages)
@@ -72,11 +59,50 @@ class TestConsolidatorSummarize:
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
         assert "[RAW]" in entries[0]["content"]
-        assert entries[0]["signals"] == {}
 
     async def test_summarize_skips_empty_messages(self, consolidator):
         result = await consolidator.archive([])
         assert result is None
+
+
+class TestConsolidatorArchiveErrorHandling:
+    """archive() must fall back to raw_archive when the LLM returns an error
+    response (finish_reason == 'error'), e.g. overloaded / quota exceeded.
+    See https://github.com/HKUDS/nanobot/issues/3244
+    """
+
+    async def test_archive_falls_back_on_error_finish_reason(self, consolidator, mock_provider, store):
+        """LLM returning finish_reason='error' should trigger raw_archive, not write error text."""
+        mock_provider.chat_with_retry.return_value = MagicMock(
+            content="Error: {'type': 'error', 'error': {'type': 'overloaded_error', 'message': 'overloaded_error (529)'}}",
+            finish_reason="error",
+        )
+        messages = [
+            {"role": "user", "content": "fix the auth bug"},
+            {"role": "assistant", "content": "Done, fixed the race condition."},
+        ]
+        result = await consolidator.archive(messages)
+        assert result is None
+        entries = store.read_unprocessed_history(since_cursor=0)
+        assert len(entries) == 1
+        assert "[RAW]" in entries[0]["content"]
+        assert "Error:" not in entries[0]["content"]
+
+    async def test_archive_preserves_summary_on_success(self, consolidator, mock_provider, store):
+        """Normal LLM response should still produce a proper summary entry."""
+        mock_provider.chat_with_retry.return_value = MagicMock(
+            content="User fixed a bug in the auth module.",
+            finish_reason="stop",
+        )
+        messages = [
+            {"role": "user", "content": "fix the auth bug"},
+            {"role": "assistant", "content": "Done."},
+        ]
+        result = await consolidator.archive(messages)
+        assert result == "User fixed a bug in the auth module."
+        entries = store.read_unprocessed_history(since_cursor=0)
+        assert len(entries) == 1
+        assert "[RAW]" not in entries[0]["content"]
 
 
 class TestConsolidatorTokenBudget:

@@ -44,14 +44,6 @@ Information about the user to help personalize interactions.
 
 (Any specific instructions for how the assistant should behave)
 
-## Behavioral observations
-<!-- Dream writes low-confidence patterns here first.
-     Format: - <observation> · confidence: low|medium|high · seen: Nx -->
-
-## Confirmed behavioral heuristics
-<!-- Dream promotes observations here only when confidence reaches: high.
-     Only lines in this section are loaded into the scheduling gatekeeper. -->
-
 ---
 
 *Edit this file to customize nanobot's behavior for your needs.*

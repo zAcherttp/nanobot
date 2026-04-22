@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from nanobot.providers.base import LLMResponse, ToolCallRequest
 from nanobot.providers.openai_responses.converters import (
     convert_messages,
     convert_tools,
@@ -15,6 +16,7 @@ from nanobot.providers.openai_responses.parsing import (
     map_finish_reason,
     parse_response_output,
 )
+
 
 # ======================================================================
 # converters - split_tool_call_id

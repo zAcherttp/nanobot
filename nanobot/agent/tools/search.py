@@ -77,11 +77,6 @@ def _pagination_note(limit: int | None, offset: int, truncated: bool) -> str | N
     return None
 
 
-def _recent_first_sort_key(name: str, mtime: int) -> tuple[int, str]:
-    """Deterministic recent-first ordering with stable path tiebreaker."""
-    return (mtime, name)
-
-
 def _matches_type(name: str, file_type: str | None) -> bool:
     if not file_type:
         return True
@@ -234,15 +229,15 @@ class GlobTool(_SearchTool):
                     if entry.is_dir():
                         display += "/"
                     try:
-                        mtime = int(entry.stat().st_mtime)
+                        mtime = entry.stat().st_mtime
                     except OSError:
-                        mtime = 0
+                        mtime = 0.0
                     matches.append((display, mtime))
 
             if not matches:
                 return f"No paths matched pattern '{pattern}' in {path}"
 
-            matches.sort(key=lambda item: _recent_first_sort_key(item[0], item[1]), reverse=True)
+            matches.sort(key=lambda item: (-item[1], item[0]))
             ordered = [name for name, _ in matches]
             paged, truncated = _paginate(ordered, limit, offset)
             result = "\n".join(paged)
@@ -447,9 +442,9 @@ class GrepTool(_SearchTool):
                     skipped_binary += 1
                     continue
                 try:
-                    mtime = int(file_path.stat().st_mtime)
+                    mtime = file_path.stat().st_mtime
                 except OSError:
-                    mtime = 0
+                    mtime = 0.0
                 try:
                     content = raw.decode("utf-8")
                 except UnicodeDecodeError:
@@ -507,8 +502,7 @@ class GrepTool(_SearchTool):
                 else:
                     ordered_files = sorted(
                         matching_files,
-                        key=lambda name: _recent_first_sort_key(name, file_mtimes.get(name, 0)),
-                        reverse=True,
+                        key=lambda name: (-file_mtimes.get(name, 0.0), name),
                     )
                     paged, truncated = _paginate(ordered_files, limit, offset)
                     result = "\n".join(paged)
@@ -518,8 +512,7 @@ class GrepTool(_SearchTool):
                 else:
                     ordered_files = sorted(
                         matching_files,
-                        key=lambda name: _recent_first_sort_key(name, file_mtimes.get(name, 0)),
-                        reverse=True,
+                        key=lambda name: (-file_mtimes.get(name, 0.0), name),
                     )
                     ordered, truncated = _paginate(ordered_files, limit, offset)
                     lines = [f"{name}: {counts[name]}" for name in ordered]

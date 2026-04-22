@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from nanobot.providers.openai_compat_provider import OpenAICompatProvider
 
+
 # ── _parse: non-streaming ─────────────────────────────────────────────────
 
 

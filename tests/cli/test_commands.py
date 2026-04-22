@@ -13,6 +13,7 @@ from nanobot.cli.commands import _make_provider, app
 from nanobot.config.schema import Config
 from nanobot.cron.types import CronJob, CronPayload
 from nanobot.providers.openai_codex_provider import _strip_model_prefix
+from nanobot.providers.registry import find_by_name
 
 runner = CliRunner()
 
@@ -195,18 +196,18 @@ def test_onboard_wizard_preserves_explicit_config_in_next_steps(tmp_path, monkey
     assert f"nanobot gateway --config {resolved_config}" in compact_output
 
 
-# def test_config_matches_github_copilot_codex_with_hyphen_prefix():
-#     config = Config()
-#     config.agents.defaults.model = "github-copilot/gpt-5.3-codex"
+def test_config_matches_github_copilot_codex_with_hyphen_prefix():
+    config = Config()
+    config.agents.defaults.model = "github-copilot/gpt-5.3-codex"
 
-#     assert config.get_provider_name() == "github_copilot"
+    assert config.get_provider_name() == "github_copilot"
 
 
-# def test_config_matches_openai_codex_with_hyphen_prefix():
-#     config = Config()
-#     config.agents.defaults.model = "openai-codex/gpt-5.1-codex"
+def test_config_matches_openai_codex_with_hyphen_prefix():
+    config = Config()
+    config.agents.defaults.model = "openai-codex/gpt-5.1-codex"
 
-#     assert config.get_provider_name() == "openai_codex"
+    assert config.get_provider_name() == "openai_codex"
 
 
 def test_config_dump_excludes_oauth_provider_blocks():
@@ -235,32 +236,87 @@ def test_config_explicit_ollama_provider_uses_default_localhost_api_base():
     assert config.get_api_base() == "http://localhost:11434/v1"
 
 
-# def test_config_accepts_camel_case_explicit_provider_name_for_coding_plan():
-#     config = Config.model_validate(
-#         {
-#             "agents": {
-#                 "defaults": {
-#                     "provider": "volcengineCodingPlan",
-#                     "model": "doubao-1-5-pro",
-#                 }
-#             },
-#             "providers": {
-#                 "volcengineCodingPlan": {
-#                     "apiKey": "test-key",
-#                 }
-#             },
-#         }
-#     )
+def test_config_accepts_camel_case_explicit_provider_name_for_coding_plan():
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "provider": "volcengineCodingPlan",
+                    "model": "doubao-1-5-pro",
+                }
+            },
+            "providers": {
+                "volcengineCodingPlan": {
+                    "apiKey": "test-key",
+                }
+            },
+        }
+    )
 
-#     assert config.get_provider_name() == "volcengine_coding_plan"
-#     assert config.get_api_base() == "https://ark.cn-beijing.volces.com/api/coding/v3"
+    assert config.get_provider_name() == "volcengine_coding_plan"
+    assert config.get_api_base() == "https://ark.cn-beijing.volces.com/api/coding/v3"
 
 
-# def test_find_by_name_accepts_camel_case_and_hyphen_aliases():
-#     assert find_by_name("volcengineCodingPlan") is not None
-#     assert find_by_name("volcengineCodingPlan").name == "volcengine_coding_plan"
-#     assert find_by_name("github-copilot") is not None
-#     assert find_by_name("github-copilot").name == "github_copilot"
+def test_config_accepts_lm_studio_without_api_key_and_uses_default_localhost_api_base():
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "provider": "lm_studio",
+                    "model": "local-model",
+                }
+            },
+            "providers": {
+                "lmStudio": {
+                    "apiKey": None,
+                }
+            },
+        }
+    )
+
+    assert config.get_provider_name() == "lm_studio"
+    assert config.get_api_key() is None
+    assert config.get_api_base() == "http://localhost:1234/v1"
+
+
+def test_find_by_name_accepts_camel_case_and_hyphen_aliases():
+    assert find_by_name("volcengineCodingPlan") is not None
+    assert find_by_name("volcengineCodingPlan").name == "volcengine_coding_plan"
+    assert find_by_name("github-copilot") is not None
+    assert find_by_name("github-copilot").name == "github_copilot"
+
+
+def test_config_explicit_xiaomi_mimo_provider_uses_default_api_base():
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "provider": "xiaomi_mimo",
+                    "model": "MiniMax-M1-80k",
+                }
+            },
+            "providers": {
+                "xiaomiMimo": {
+                    "apiKey": "test-key",
+                }
+            },
+        }
+    )
+
+    assert config.get_provider_name() == "xiaomi_mimo"
+    assert config.get_api_base() == "https://api.xiaomimimo.com/v1"
+
+
+def test_config_auto_detects_xiaomi_mimo_from_model_keyword():
+    config = Config.model_validate(
+        {
+            "agents": {"defaults": {"provider": "auto", "model": "mimo/MiniMax-M1-80k"}},
+            "providers": {"xiaomiMimo": {"apiKey": "test-key"}},
+        }
+    )
+
+    assert config.get_provider_name() == "xiaomi_mimo"
+    assert config.get_api_base() == "https://api.xiaomimimo.com/v1"
 
 
 def test_config_auto_detects_ollama_from_local_api_base():
@@ -313,44 +369,44 @@ def test_openai_compat_provider_passes_model_through():
     assert provider.get_default_model() == "github-copilot/gpt-5.3-codex"
 
 
-# def test_make_provider_uses_github_copilot_backend():
-#     from nanobot.cli.commands import _make_provider
-#     from nanobot.config.schema import Config
+def test_make_provider_uses_github_copilot_backend():
+    from nanobot.cli.commands import _make_provider
+    from nanobot.config.schema import Config
 
-#     config = Config.model_validate(
-#         {
-#             "agents": {
-#                 "defaults": {
-#                     "provider": "github-copilot",
-#                     "model": "github-copilot/gpt-4.1",
-#                 }
-#             }
-#         }
-#     )
+    config = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "provider": "github-copilot",
+                    "model": "github-copilot/gpt-4.1",
+                }
+            }
+        }
+    )
 
-#     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
-#         provider = _make_provider(config)
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = _make_provider(config)
 
-#     assert provider.__class__.__name__ == "GitHubCopilotProvider"
+    assert provider.__class__.__name__ == "GitHubCopilotProvider"
 
 
-# def test_github_copilot_provider_strips_prefixed_model_name():
-#     from nanobot.providers.github_copilot_provider import GitHubCopilotProvider
+def test_github_copilot_provider_strips_prefixed_model_name():
+    from nanobot.providers.github_copilot_provider import GitHubCopilotProvider
 
-#     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
-#         provider = GitHubCopilotProvider(default_model="github-copilot/gpt-5.1")
+    with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI"):
+        provider = GitHubCopilotProvider(default_model="github-copilot/gpt-5.1")
 
-#     kwargs = provider._build_kwargs(
-#         messages=[{"role": "user", "content": "hi"}],
-#         tools=None,
-#         model="github-copilot/gpt-5.1",
-#         max_tokens=16,
-#         temperature=0.1,
-#         reasoning_effort=None,
-#         tool_choice=None,
-#     )
+    kwargs = provider._build_kwargs(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        model="github-copilot/gpt-5.1",
+        max_tokens=16,
+        temperature=0.1,
+        reasoning_effort=None,
+        tool_choice=None,
+    )
 
-#     assert kwargs["model"] == "gpt-5.1"
+    assert kwargs["model"] == "gpt-5.1"
 
 
 @pytest.mark.asyncio
@@ -365,13 +421,13 @@ async def test_github_copilot_provider_refreshes_client_api_key_before_chat():
     })
 
     with patch("nanobot.providers.openai_compat_provider.AsyncOpenAI", return_value=mock_client):
-        provider = GitHubCopilotProvider(default_model="github-copilot/gpt-5.1")
+        provider = GitHubCopilotProvider(default_model="github-copilot/gpt-4")
 
     provider._get_copilot_access_token = AsyncMock(return_value="copilot-access-token")
 
     response = await provider.chat(
         messages=[{"role": "user", "content": "hi"}],
-        model="github-copilot/gpt-5.1",
+        model="github-copilot/gpt-4",
         max_tokens=16,
         temperature=0.1,
     )
@@ -757,6 +813,46 @@ def _patch_cli_command_runtime(
         monkeypatch.setattr("nanobot.config.paths.get_cron_dir", get_cron_dir)
 
 
+def _patch_serve_runtime(monkeypatch, config: Config, seen: dict[str, object]) -> None:
+    pytest.importorskip("aiohttp")
+
+    class _FakeApiApp:
+        def __init__(self) -> None:
+            self.on_startup: list[object] = []
+            self.on_cleanup: list[object] = []
+
+    class _FakeAgentLoop:
+        def __init__(self, **kwargs) -> None:
+            seen["workspace"] = kwargs["workspace"]
+
+        async def _connect_mcp(self) -> None:
+            return None
+
+        async def close_mcp(self) -> None:
+            return None
+
+    def _fake_create_app(agent_loop, model_name: str, request_timeout: float):
+        seen["agent_loop"] = agent_loop
+        seen["model_name"] = model_name
+        seen["request_timeout"] = request_timeout
+        return _FakeApiApp()
+
+    def _fake_run_app(api_app, host: str, port: int, print):
+        seen["api_app"] = api_app
+        seen["host"] = host
+        seen["port"] = port
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: object(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.api.server.create_app", _fake_create_app)
+    monkeypatch.setattr("aiohttp.web.run_app", _fake_run_app)
+
+
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
     config_file = _write_instance_config(tmp_path)
     config = Config()
@@ -936,6 +1032,97 @@ def test_gateway_cron_evaluator_receives_scheduled_reminder_context(
     )
 
 
+def test_gateway_cron_job_suppresses_intermediate_progress(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Cron jobs must pass on_progress=_silent to process_direct so that
+    tool hints and streaming deltas are never leaked to the user channel
+    before evaluate_response decides whether to deliver."""
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    bus = MagicMock()
+    bus.publish_outbound = AsyncMock()
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr("nanobot.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("nanobot.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("nanobot.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("nanobot.cli.commands._make_provider", lambda _config: object())
+    monkeypatch.setattr("nanobot.bus.queue.MessageBus", lambda: bus)
+    monkeypatch.setattr("nanobot.session.manager.SessionManager", lambda _workspace: object())
+
+    class _FakeCron:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+            seen["cron"] = self
+
+    class _FakeAgentLoop:
+        def __init__(self, *args, **kwargs) -> None:
+            self.model = "test-model"
+            self.tools = {}
+
+        async def process_direct(self, *_args, on_progress=None, **_kwargs):
+            seen["on_progress"] = on_progress
+            return OutboundMessage(
+                channel="telegram",
+                chat_id="user-1",
+                content="Done.",
+            )
+
+        async def close_mcp(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _StopAfterCronSetup:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _always_reject(*_args, **_kwargs) -> bool:
+        return False
+
+    monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCron)
+    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _StopAfterCronSetup)
+    monkeypatch.setattr(
+        "nanobot.utils.evaluator.evaluate_response",
+        _always_reject,
+    )
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGatewayError)
+
+    cron = seen["cron"]
+    job = CronJob(
+        id="cron-silent-test",
+        name="test-silent",
+        payload=CronPayload(
+            message="Run something.",
+            deliver=True,
+            channel="telegram",
+            to="user-1",
+        ),
+    )
+    response = asyncio.run(cron.on_job(job))
+
+    assert response == "Done."
+    # on_progress must be a callable (the _silent noop), not None and not bus_progress
+    assert seen["on_progress"] is not None
+    assert callable(seen["on_progress"])
+    # Verify it actually swallows calls (no side effects)
+    asyncio.run(seen["on_progress"]("tool_hint", "🔧 $ echo test"))
+    # Nothing published to bus since evaluator rejected
+    bus.publish_outbound.assert_not_awaited()
+
+
 def test_gateway_workspace_override_does_not_migrate_legacy_cron(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1083,6 +1270,215 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
 
     assert isinstance(result.exception, _StopGatewayError)
     assert "port 18792" in result.stdout
+
+
+def test_gateway_health_endpoint_binds_and_serves_expected_responses(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.gateway.port = 18791
+    captured: dict[str, object] = {}
+
+    class _FakeDream:
+        model = None
+        max_batch_size = 0
+        max_iterations = 0
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeSessionManager:
+        def flush_all(self) -> int:
+            return 0
+
+    class _FakeAgentLoop:
+        def __init__(self, **_kwargs) -> None:
+            self.model = "test-model"
+            self.dream = _FakeDream()
+            self.sessions = _FakeSessionManager()
+
+        async def run(self) -> None:
+            await asyncio.Event().wait()
+
+        async def close_mcp(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus, **_kwargs) -> None:
+            self.enabled_channels = ["telegram", "discord"]
+
+        async def start_all(self) -> None:
+            await asyncio.Event().wait()
+
+        async def stop_all(self) -> None:
+            return None
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+        def register_system_job(self, _job) -> None:
+            return None
+
+    class _FakeHeartbeatService:
+        def __init__(self, **_kwargs) -> None:
+            return None
+
+        async def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+    class _FakeServer:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        async def serve_forever(self) -> None:
+            raise _StopGatewayError("stop")
+
+    async def _fake_start_server(handler, host: str, port: int):
+        captured["handler"] = handler
+        captured["host"] = host
+        captured["port"] = port
+        return _FakeServer()
+
+    class _FakeReader:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+
+        async def read(self, _size: int) -> bytes:
+            return self.payload
+
+    class _FakeWriter:
+        def __init__(self) -> None:
+            self.output = b""
+            self.closed = False
+
+        def write(self, data: bytes) -> None:
+            self.output += data
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    _patch_cli_command_runtime(
+        monkeypatch,
+        config,
+        message_bus=lambda: object(),
+        session_manager=lambda _workspace: object(),
+    )
+    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("nanobot.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("nanobot.heartbeat.service.HeartbeatService", _FakeHeartbeatService)
+    monkeypatch.setattr("asyncio.start_server", _fake_start_server)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 18791
+    assert "Health endpoint: http://127.0.0.1:18791/health" in result.stdout
+
+    def _call_handler(path: str) -> tuple[str, _FakeWriter]:
+        request = f"GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
+        writer = _FakeWriter()
+        handler = captured["handler"]
+        assert callable(handler)
+        asyncio.run(handler(_FakeReader(request), writer))
+        return writer.output.decode(), writer
+
+    root_response, root_writer = _call_handler("/")
+    assert root_writer.closed is True
+    assert "HTTP/1.0 404 Not Found" in root_response
+    assert root_response.endswith("\r\n\r\nNot Found")
+
+    health_response, health_writer = _call_handler("/health")
+    assert health_writer.closed is True
+    assert "HTTP/1.0 200 OK" in health_response
+    health_body = json.loads(health_response.split("\r\n\r\n", 1)[1])
+    assert health_body == {"status": "ok"}
+
+    missing_response, missing_writer = _call_handler("/missing")
+    assert missing_writer.closed is True
+    assert "HTTP/1.0 404 Not Found" in missing_response
+    assert missing_response.endswith("\r\n\r\nNot Found")
+
+
+def test_serve_uses_api_config_defaults_and_workspace_override(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "config-workspace")
+    config.api.host = "127.0.0.2"
+    config.api.port = 18900
+    config.api.timeout = 45.0
+    override_workspace = tmp_path / "override-workspace"
+    seen: dict[str, object] = {}
+
+    _patch_serve_runtime(monkeypatch, config, seen)
+
+    result = runner.invoke(
+        app,
+        ["serve", "--config", str(config_file), "--workspace", str(override_workspace)],
+    )
+
+    assert result.exit_code == 0
+    assert seen["workspace"] == override_workspace
+    assert seen["host"] == "127.0.0.2"
+    assert seen["port"] == 18900
+    assert seen["request_timeout"] == 45.0
+
+
+def test_serve_cli_options_override_api_config(monkeypatch, tmp_path: Path) -> None:
+    config_file = _write_instance_config(tmp_path)
+    config = Config()
+    config.api.host = "127.0.0.2"
+    config.api.port = 18900
+    config.api.timeout = 45.0
+    seen: dict[str, object] = {}
+
+    _patch_serve_runtime(monkeypatch, config, seen)
+
+    result = runner.invoke(
+        app,
+        [
+            "serve",
+            "--config",
+            str(config_file),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18901",
+            "--timeout",
+            "46",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen["host"] == "127.0.0.1"
+    assert seen["port"] == 18901
+    assert seen["request_timeout"] == 46.0
 
 
 def test_channels_login_requires_channel_name() -> None:
