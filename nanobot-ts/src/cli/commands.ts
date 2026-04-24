@@ -23,6 +23,7 @@ import {
 	pickRecentChannelTarget,
 } from "../background/index.js";
 import { ChannelManager } from "../channels/manager.js";
+import type { ChannelSnapshot } from "../channels/types.js";
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from "../config/loader.js";
 import {
 	resolveConfigPath,
@@ -74,6 +75,7 @@ interface CommonOptions {
 interface GatewayOptions extends CommonOptions {
 	port?: number;
 	verbose?: boolean;
+	quiet?: boolean;
 }
 
 interface AgentOptions extends CommonOptions {
@@ -133,6 +135,7 @@ export function createCli(programName = "nanobot-ts"): Command {
 		.option("-p, --port <port>", "Gateway port", parseInteger)
 		.option("-w, --workspace <workspace>", "Workspace directory")
 		.option("-v, --verbose", "Verbose output")
+		.option("--quiet", "Suppress gateway console log streaming")
 		.option("-c, --config <config>", "Path to config file")
 		.action(async (options: GatewayOptions) => {
 			await runGateway(programName, options);
@@ -416,22 +419,40 @@ async function runGateway(
 	const port = options.port ?? config.gateway.port;
 
 	await ensureWorkspace(config.workspace.path);
-	await syncWorkspaceTemplates(config.workspace.path);
-
-	const level: LogLevel = options.verbose ? "debug" : config.logging.level;
-	const { logger } = createRuntimeLogger(config, configPath, {
-		level,
-		console: options.verbose || config.logging.console,
+	const loggerSettings = resolveGatewayLoggerSettings(config, options);
+	const { logger, store } = createRuntimeLogger(config, configPath, {
+		level: loggerSettings.level,
+		console: loggerSettings.console,
 		component: "gateway",
+	});
+	logger.debug("Gateway workspace ready", {
+		component: "gateway",
+		event: "workspace_ready",
+		workspacePath: config.workspace.path,
+		configPath,
+	});
+	await syncWorkspaceTemplates(config.workspace.path);
+	logger.debug("Gateway workspace templates synced", {
+		component: "gateway",
+		event: "workspace_templates_synced",
+		workspacePath: config.workspace.path,
 	});
 	logger.info("Gateway starting", {
 		component: "gateway",
 		event: "start",
 		port,
 		workspacePath: config.workspace.path,
+		logPath: store.logFilePath,
 	});
 	const manager = new ChannelManager(config, logger);
 	const agentConfig = resolveAgentRuntimeConfig(config);
+	logger.info("Gateway provider resolved", {
+		component: "gateway",
+		event: "provider_resolved",
+		provider: agentConfig.provider,
+		modelId: agentConfig.modelId,
+		providerAuthSource: agentConfig.providerAuthSource,
+	});
 	const dreamService = createDreamService(config, logger, agentConfig);
 	const cronService = createCronService(config, logger, {
 		manager,
@@ -439,6 +460,11 @@ async function runGateway(
 		dreamService,
 	});
 	await registerDreamCronJob(config, cronService);
+	logger.debug("Gateway dream cron registration checked", {
+		component: "gateway",
+		event: "dream_cron_registered",
+		intervalHours: config.agent.dream.intervalHours,
+	});
 	const runtimeSessionStore = createRuntimeSessionStore(agentConfig);
 	let runtime!: GatewayRuntime;
 	let heartbeatService!: HeartbeatService;
@@ -448,6 +474,7 @@ async function runGateway(
 		consolidator: createRuntimeConsolidator({
 			config: agentConfig,
 			sessionStore: runtimeSessionStore,
+			logger,
 		}),
 		logger,
 		isSessionActive: (sessionKey) =>
@@ -486,20 +513,90 @@ async function runGateway(
 		);
 	}
 
+	const configuredTools = getRuntimeTools(config, { cronService });
+	logger.debug("Gateway runtime tools configured", {
+		component: "gateway",
+		event: "tools_configured",
+		tools: configuredTools.map((tool) => tool.name),
+	});
+	logger.debug("Gateway runtime services created", {
+		component: "gateway",
+		event: "services_created",
+		channels: manager.getSnapshots(),
+		cronEnabled: config.cron.enabled,
+		heartbeatEnabled: config.gateway.heartbeat.enabled,
+		autoCompactEnabled: config.agent.idleCompactAfterMinutes > 0,
+	});
+
 	printSection(
 		`Starting ${programName} gateway version ${CLI_VERSION} on port ${port}...`,
 	);
-	printKeyValue("Workspace", accentPath(config.workspace.path));
+	const cronJobs = await cronService.listJobs(true);
+	for (const line of renderGatewayBootSummary({
+		programName,
+		version: CLI_VERSION,
+		port,
+		configPath,
+		workspacePath: config.workspace.path,
+		logPath: store.logFilePath,
+		channelSnapshots: manager.getSnapshots(),
+		cronEnabled: config.cron.enabled,
+		cronJobCount: cronJobs.length,
+		heartbeatEnabled: config.gateway.heartbeat.enabled,
+		heartbeatIntervalSeconds: config.gateway.heartbeat.intervalSeconds,
+		dreamIntervalHours: config.agent.dream.intervalHours,
+		autoCompactAfterMinutes: config.agent.idleCompactAfterMinutes,
+		provider: String(agentConfig.provider),
+		modelId: agentConfig.modelId,
+	})) {
+		printInfo(line);
+	}
 
+	logger.info("Gateway service start sequence started", {
+		component: "gateway",
+		event: "services_start",
+	});
+	logger.info("Starting channel manager", {
+		component: "channel",
+		event: "manager_starting",
+	});
 	await manager.start();
+	logger.info("Starting gateway runtime", {
+		component: "gateway",
+		event: "runtime_starting",
+	});
 	await runtime.start();
 	if (config.cron.enabled) {
+		logger.info("Starting cron service", {
+			component: "cron",
+			event: "start_requested",
+		});
 		await cronService.start();
+	} else {
+		logger.debug("Cron service disabled", {
+			component: "cron",
+			event: "disabled",
+		});
 	}
 	if (config.gateway.heartbeat.enabled) {
+		logger.info("Starting heartbeat service", {
+			component: "heartbeat",
+			event: "start_requested",
+		});
 		await heartbeatService.start();
+	} else {
+		logger.debug("Heartbeat service disabled", {
+			component: "heartbeat",
+			event: "disabled",
+		});
 	}
 	await autoCompactor.start();
+	if (config.agent.idleCompactAfterMinutes <= 0) {
+		logger.debug("Auto-compact service disabled", {
+			component: "autoCompact",
+			event: "disabled",
+		});
+	}
 	printInfo("Gateway is running. Press Ctrl+C to stop.");
 
 	await waitForShutdown(async (signal) => {
@@ -508,6 +605,10 @@ async function runGateway(
 			component: "gateway",
 			event: "stop",
 			signal,
+		});
+		logger.info("Gateway service stop sequence started", {
+			component: "gateway",
+			event: "services_stop",
 		});
 		await autoCompactor.stop();
 		await heartbeatService.stop();
@@ -1157,6 +1258,75 @@ function createRuntimeLogger(
 		maxPreviewChars: config.logging.maxPreviewChars,
 	});
 	return { logger, store };
+}
+
+export function resolveGatewayLoggerSettings(
+	config: AppConfig,
+	options: { quiet?: boolean; verbose?: boolean } = {},
+): { level: LogLevel; console: boolean } {
+	if (options.quiet) {
+		return {
+			level: config.logging.level,
+			console: config.logging.console,
+		};
+	}
+
+	if (options.verbose) {
+		return {
+			level: "debug",
+			console: true,
+		};
+	}
+
+	return {
+		level: config.logging.level,
+		console: true,
+	};
+}
+
+export interface GatewayBootSummaryOptions {
+	programName: string;
+	version: string;
+	port: number;
+	configPath: string;
+	workspacePath: string;
+	logPath: string;
+	channelSnapshots: ChannelSnapshot[];
+	cronEnabled: boolean;
+	cronJobCount: number;
+	heartbeatEnabled: boolean;
+	heartbeatIntervalSeconds: number;
+	dreamIntervalHours: number;
+	autoCompactAfterMinutes: number;
+	provider: string;
+	modelId: string;
+}
+
+export function renderGatewayBootSummary(
+	options: GatewayBootSummaryOptions,
+): string[] {
+	const enabledChannels = options.channelSnapshots
+		.filter((snapshot) => snapshot.enabled)
+		.map((snapshot) => snapshot.name);
+	const disabledChannels = options.channelSnapshots
+		.filter((snapshot) => !snapshot.enabled)
+		.map((snapshot) => snapshot.name);
+
+	return [
+		`Config: ${options.configPath}`,
+		`Workspace: ${options.workspacePath}`,
+		`Logs: ${options.logPath}`,
+		`Model: ${options.provider}/${options.modelId}`,
+		`Channels enabled: ${enabledChannels.length > 0 ? enabledChannels.join(", ") : "none"}`,
+		...(disabledChannels.length > 0
+			? [`Channels disabled: ${disabledChannels.join(", ")}`]
+			: []),
+		`Cron: ${options.cronEnabled ? `${options.cronJobCount} scheduled job${options.cronJobCount === 1 ? "" : "s"}` : "disabled"}`,
+		`Heartbeat: ${options.heartbeatEnabled ? `every ${options.heartbeatIntervalSeconds}s` : "disabled"}`,
+		`Dream: every ${options.dreamIntervalHours}h`,
+		`Auto-compact: ${options.autoCompactAfterMinutes > 0 ? `after ${options.autoCompactAfterMinutes}m idle` : "disabled"}`,
+		`Health endpoint: http://0.0.0.0:${options.port}/health`,
+	];
 }
 
 function subscribeAgentLogs(

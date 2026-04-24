@@ -79,6 +79,7 @@ export interface CreateSessionAgentOptions {
 	thinkingBudgets?: AgentOptions["thinkingBudgets"];
 	consolidator?: Consolidator;
 	autoCompactor?: AutoCompactor;
+	logger?: Logger;
 }
 
 export const DEFAULT_SESSION_KEY = "sdk:default";
@@ -152,6 +153,7 @@ export async function createSessionAgent(
 			config: options.config,
 			sessionStore,
 			getTools: async () => options.tools ?? [],
+			...(options.logger ? { logger: options.logger } : {}),
 		});
 	const autoCompactor =
 		options.autoCompactor ??
@@ -159,6 +161,7 @@ export async function createSessionAgent(
 			config: options.config,
 			sessionStore,
 			consolidator,
+			...(options.logger ? { logger: options.logger } : {}),
 		});
 	const systemPrompt = await buildSystemPrompt({
 		workspacePath: options.config.workspacePath,
@@ -290,7 +293,14 @@ export async function createSessionAgent(
 			if (consolidated) {
 				persistedSession = consolidated;
 			}
-		} catch {
+		} catch (error) {
+			options.logger?.warn("Token consolidation failed after agent turn", {
+				component: "consolidator",
+				event: "token_error",
+				sessionKey,
+				channel: options.channel,
+				error,
+			});
 			// Consolidation failures should not break a completed agent turn.
 		}
 	});
@@ -327,6 +337,12 @@ export async function createSessionAgent(
 			createEmptySessionRecord(sessionKey, createdAt);
 		if (prepared?.summaryContext) {
 			pendingSummaryContext = prepared.summaryContext;
+			options.logger?.debug("Idle session summary context restored", {
+				component: "session",
+				event: "summary_restore",
+				sessionKey,
+				contentPreview: prepared.summaryContext,
+			});
 		}
 		createdAt = loaded.createdAt;
 		const restored = restoreRuntimeCheckpoint(loaded);
@@ -349,6 +365,12 @@ export async function createSessionAgent(
 				messages: persistedMessages,
 				metadata: sessionMetadata,
 			});
+			options.logger?.info("Session runtime checkpoint restored", {
+				component: "session",
+				event: "checkpoint_restore",
+				sessionKey,
+				messageCount: persistedMessages.length,
+			});
 		}
 		agent.state.messages = structuredClone(persistedMessages);
 	}
@@ -369,6 +391,13 @@ export async function createSessionAgent(
 				runtimeCheckpoint: currentCheckpoint,
 			},
 		});
+		options.logger?.debug("Session runtime checkpoint saved", {
+			component: "session",
+			event: "checkpoint_save",
+			sessionKey,
+			completedToolResults: currentCheckpoint.completedToolResults.length,
+			pendingToolCalls: currentCheckpoint.pendingToolCalls.length,
+		});
 	}
 }
 
@@ -376,6 +405,7 @@ export function createRuntimeConsolidator(options: {
 	config: ResolvedAgentRuntimeConfig;
 	sessionStore: SessionStore;
 	getTools?: () => AgentTool[] | Promise<AgentTool[]>;
+	logger?: Logger;
 }): Consolidator {
 	return new Consolidator({
 		memoryStore: new MemoryStore(options.config.workspacePath),
@@ -383,6 +413,7 @@ export function createRuntimeConsolidator(options: {
 		config: options.config,
 		buildSystemPrompt,
 		...(options.getTools ? { getTools: options.getTools } : {}),
+		...(options.logger ? { logger: options.logger } : {}),
 	});
 }
 

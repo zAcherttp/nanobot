@@ -125,6 +125,7 @@ export class GatewayRuntime {
 					...(options.autoCompactor
 						? { autoCompactor: options.autoCompactor }
 						: {}),
+					logger: options.logger,
 				}));
 		this.commandRouter = options.commandRouter ?? createDefaultCommandRouter();
 	}
@@ -195,6 +196,14 @@ export class GatewayRuntime {
 	private enqueue(message: InboundChannelMessage): Promise<void> {
 		const sessionKey = resolveChannelSessionKey(message);
 		const previous = this.sessionChains.get(sessionKey) ?? Promise.resolve();
+		this.options.logger.debug("Gateway session queued", {
+			component: "gateway",
+			event: "session_queue",
+			channel: message.channel,
+			chatId: message.chatId,
+			sessionKey,
+			alreadyQueued: this.sessionChains.has(sessionKey),
+		});
 		const current = previous
 			.catch(() => undefined)
 			.then(async () => {
@@ -302,11 +311,25 @@ export class GatewayRuntime {
 
 			const latestAssistant = getLatestAssistantMessage(agent.state.messages);
 			if (!latestAssistant || latestAssistant === previousAssistant) {
+				this.options.logger.debug("Gateway agent turn produced no reply", {
+					component: "agent",
+					event: "no_reply",
+					channel: message.channel,
+					chatId: message.chatId,
+					sessionKey,
+				});
 				return;
 			}
 
 			const reply = getLatestAssistantText(agent.state.messages).trim();
 			if (!reply) {
+				this.options.logger.debug("Gateway agent turn produced empty reply", {
+					component: "agent",
+					event: "empty_reply",
+					channel: message.channel,
+					chatId: message.chatId,
+					sessionKey,
+				});
 				return;
 			}
 
@@ -405,9 +428,23 @@ export class GatewayRuntime {
 	): Promise<GatewayRuntimeAgent> {
 		const existing = this.agents.get(sessionKey);
 		if (existing) {
+			this.options.logger.debug("Gateway session agent reused", {
+				component: "gateway",
+				event: "agent_reuse",
+				sessionKey,
+				channel: message.channel,
+				chatId: message.chatId,
+			});
 			return existing;
 		}
 
+		this.options.logger.debug("Gateway session agent creating", {
+			component: "gateway",
+			event: "agent_create",
+			sessionKey,
+			channel: message.channel,
+			chatId: message.chatId,
+		});
 		const created = Promise.resolve(
 			this.getTools
 				? this.getTools({
@@ -415,16 +452,24 @@ export class GatewayRuntime {
 						message,
 					})
 				: this.tools,
-		).then((tools) =>
-			this.createAgent({
+		).then((tools) => {
+			this.options.logger.debug("Gateway tools resolved for session", {
+				component: "gateway",
+				event: "tools_resolved",
+				sessionKey,
+				channel: message.channel,
+				chatId: message.chatId,
+				tools: tools.map((tool) => tool.name),
+			});
+			return this.createAgent({
 				config: this.options.config,
 				sessionKey,
 				...(message.channel ? { channel: message.channel } : {}),
 				sessionStore: this.options.sessionStore,
 				tools,
 				consolidator: this.createConsolidator(async () => tools),
-			}),
-		);
+			});
+		});
 		void created.catch(() => {
 			if (this.agents.get(sessionKey) === created) {
 				this.agents.delete(sessionKey);
@@ -670,6 +715,7 @@ export class GatewayRuntime {
 				config: this.options.config,
 				sessionStore: this.options.sessionStore,
 				...(getTools ? { getTools } : {}),
+				logger: this.options.logger,
 			})
 		);
 	}
@@ -685,9 +731,26 @@ export class GatewayRuntime {
 
 			if (!streamState.activeStreamId) {
 				streamState.activeStreamId = this.createStreamId(streamState);
+				this.options.logger.debug("Gateway stream started", {
+					component: "agent",
+					event: "stream_start",
+					sessionKey: streamState.sessionKey,
+					channel: streamState.message.channel,
+					chatId: streamState.message.chatId,
+					streamId: streamState.activeStreamId,
+				});
 			}
 
 			streamState.sawAnyTextDelta = true;
+			this.options.logger.trace("Gateway stream delta", {
+				component: "agent",
+				event: "stream_delta",
+				sessionKey: streamState.sessionKey,
+				channel: streamState.message.channel,
+				chatId: streamState.message.chatId,
+				streamId: streamState.activeStreamId,
+				contentPreview: event.assistantMessageEvent.delta,
+			});
 			await this.options.bus.publishOutbound({
 				channel: streamState.message.channel,
 				chatId: streamState.message.chatId,
@@ -776,6 +839,14 @@ export class GatewayRuntime {
 		}
 
 		delete streamState.activeStreamId;
+		this.options.logger.debug("Gateway stream ended", {
+			component: "agent",
+			event: "stream_end",
+			sessionKey: streamState.sessionKey,
+			channel: streamState.message.channel,
+			chatId: streamState.message.chatId,
+			streamId,
+		});
 		await this.options.bus.publishOutbound({
 			channel: streamState.message.channel,
 			chatId: streamState.message.chatId,

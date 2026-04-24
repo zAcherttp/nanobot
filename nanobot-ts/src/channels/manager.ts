@@ -24,6 +24,7 @@ export interface ChannelManagerOptions {
 const DEFAULT_CHANNEL_FACTORIES: ChannelFactory[] = [
 	createTelegramChannelFactory(),
 ];
+const OUTBOUND_RETRY_DELAYS_MS = [0, 100, 500] as const;
 
 export class ChannelManager {
 	private readonly bus: MessageBus;
@@ -31,7 +32,10 @@ export class ChannelManager {
 	private readonly factories: ChannelFactory[];
 	private readonly factoryByName: Map<string, ChannelFactory>;
 	private readonly bufferedStreams = new Map<string, BufferedStreamState>();
+	private readonly outboundQueue: OutboundChannelMessage[] = [];
 	private unsubscribeOutbound: (() => void) | undefined;
+	private outboundDrainTimer: ReturnType<typeof setTimeout> | undefined;
+	private outboundDrainPromise: Promise<void> | undefined;
 	private started = false;
 
 	constructor(
@@ -92,23 +96,22 @@ export class ChannelManager {
 			component: "channel",
 			event: "manager_start",
 			channels: Array.from(this.channels.keys()),
+			snapshots: this.getSnapshots(),
 		});
-		this.unsubscribeOutbound = this.bus.subscribeOutbound(async (message) => {
-			try {
-				await this.dispatchOutbound(message);
-			} catch (error) {
-				this.logger.error("Channel outbound dispatch failed", {
-					component: "channel",
-					event: "outbound_error",
-					channel: message.channel,
-					chatId: message.chatId,
-					error,
-				});
-				throw error;
-			}
+		this.unsubscribeOutbound = this.bus.subscribeOutbound((message) => {
+			this.enqueueOutbound(message);
+		});
+		this.logger.info("Channel outbound dispatcher started", {
+			component: "channel",
+			event: "outbound_dispatcher_start",
 		});
 
 		for (const channel of this.channels.values()) {
+			this.logger.info("Starting channel", {
+				component: "channel",
+				event: "start_requested",
+				channel: channel.name,
+			});
 			await channel.start();
 			this.logger.info("Channel started", {
 				component: "channel",
@@ -123,9 +126,14 @@ export class ChannelManager {
 			return;
 		}
 
-		this.started = false;
 		this.unsubscribeOutbound?.();
 		this.unsubscribeOutbound = undefined;
+		await this.flushOutboundQueue();
+		this.started = false;
+		this.logger.info("Channel outbound dispatcher stopped", {
+			component: "channel",
+			event: "outbound_dispatcher_stop",
+		});
 
 		const activeChannels = Array.from(this.channels.values()).reverse();
 		for (const channel of activeChannels) {
@@ -169,6 +177,14 @@ export class ChannelManager {
 		message: OutboundChannelMessage,
 	): Promise<number> {
 		const channel = this.getChannelForMessage(message);
+		this.logger.debug("Channel outbound dispatch", {
+			component: "channel",
+			event: "outbound_dispatch",
+			channel: message.channel,
+			chatId: message.chatId,
+			streaming: hasStreamingMetadata(message),
+			contentPreview: message.content,
+		});
 		if (hasStreamingMetadata(message) && !channel.supportsStreaming(message)) {
 			return this.dispatchBufferedStream(channel, message);
 		}
@@ -178,6 +194,166 @@ export class ChannelManager {
 	private async sendDirect(message: OutboundChannelMessage): Promise<number> {
 		const channel = this.getChannelForMessage(message);
 		return channel.send(message);
+	}
+
+	private enqueueOutbound(message: OutboundChannelMessage): void {
+		if (!this.started) {
+			this.logger.debug("Channel outbound message ignored while stopped", {
+				component: "channel",
+				event: "outbound_ignored",
+				channel: message.channel,
+				chatId: message.chatId,
+			});
+			return;
+		}
+
+		this.outboundQueue.push(message);
+		this.scheduleOutboundDrain();
+	}
+
+	private scheduleOutboundDrain(): void {
+		if (this.outboundDrainTimer || this.outboundDrainPromise) {
+			return;
+		}
+
+		this.outboundDrainTimer = setTimeout(() => {
+			this.outboundDrainTimer = undefined;
+			this.outboundDrainPromise = this.drainOutboundQueue().finally(() => {
+				this.outboundDrainPromise = undefined;
+				if (this.started && this.outboundQueue.length > 0) {
+					this.scheduleOutboundDrain();
+				}
+			});
+		}, 0);
+	}
+
+	private async flushOutboundQueue(): Promise<void> {
+		if (this.outboundDrainTimer) {
+			clearTimeout(this.outboundDrainTimer);
+			this.outboundDrainTimer = undefined;
+		}
+
+		if (this.outboundDrainPromise) {
+			await this.outboundDrainPromise;
+		}
+
+		if (this.outboundQueue.length > 0) {
+			await this.drainOutboundQueue();
+		}
+	}
+
+	private async drainOutboundQueue(): Promise<void> {
+		while (this.started && this.outboundQueue.length > 0) {
+			const nextMessage = this.outboundQueue.shift();
+			if (!nextMessage) {
+				continue;
+			}
+			const message = this.coalesceOutboundMessage(nextMessage);
+			if (this.shouldSuppressOutbound(message)) {
+				continue;
+			}
+
+			await this.dispatchOutboundWithRetry(message);
+		}
+	}
+
+	private coalesceOutboundMessage(
+		message: OutboundChannelMessage,
+	): OutboundChannelMessage {
+		if (message.metadata?._stream_delta !== true) {
+			return message;
+		}
+
+		let coalesced: OutboundChannelMessage | undefined;
+		while (this.outboundQueue.length > 0) {
+			const next = this.outboundQueue[0];
+			if (!canCoalesceStreamDelta(message, next)) {
+				break;
+			}
+			this.outboundQueue.shift();
+			coalesced ??= { ...message };
+			coalesced.content += next?.content ?? "";
+		}
+
+		return coalesced ?? message;
+	}
+
+	private shouldSuppressOutbound(message: OutboundChannelMessage): boolean {
+		if (message.metadata?._retry_wait === true) {
+			return true;
+		}
+
+		if (message.metadata?._progress !== true) {
+			return false;
+		}
+
+		if (message.metadata?._tool_hint === true) {
+			if (!this.config.channels.sendToolHints) {
+				this.logger.debug("Channel tool hint suppressed", {
+					component: "channel",
+					event: "tool_hint_suppressed",
+					channel: message.channel,
+					chatId: message.chatId,
+					contentPreview: message.content,
+				});
+				return true;
+			}
+			return false;
+		}
+
+		if (!this.config.channels.sendProgress) {
+			this.logger.debug("Channel progress suppressed", {
+				component: "channel",
+				event: "progress_suppressed",
+				channel: message.channel,
+				chatId: message.chatId,
+				contentPreview: message.content,
+			});
+			return true;
+		}
+
+		return false;
+	}
+
+	private async dispatchOutboundWithRetry(
+		message: OutboundChannelMessage,
+	): Promise<number> {
+		const maxAttempts = Math.max(this.config.channels.sendMaxRetries, 1);
+		let lastError: unknown;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				return await this.dispatchOutbound(message);
+			} catch (error) {
+				lastError = error;
+				if (attempt >= maxAttempts) {
+					break;
+				}
+
+				const delayMs = getRetryDelayMs(attempt - 1);
+				this.logger.warn("Channel outbound dispatch retry scheduled", {
+					component: "channel",
+					event: "outbound_retry",
+					channel: message.channel,
+					chatId: message.chatId,
+					attempt,
+					nextAttempt: attempt + 1,
+					maxAttempts,
+					delayMs,
+					error,
+				});
+				await sleep(delayMs);
+			}
+		}
+
+		this.logger.error("Channel outbound dispatch failed", {
+			component: "channel",
+			event: "outbound_error",
+			channel: message.channel,
+			chatId: message.chatId,
+			error: lastError,
+		});
+		return 0;
 	}
 
 	private getChannelForMessage(
@@ -276,10 +452,39 @@ function getStreamId(message: OutboundChannelMessage): string | null {
 	return typeof streamId === "string" && streamId ? streamId : null;
 }
 
+function canCoalesceStreamDelta(
+	first: OutboundChannelMessage,
+	next: OutboundChannelMessage | undefined,
+): boolean {
+	return (
+		next?.metadata?._stream_delta === true &&
+		next.channel === first.channel &&
+		next.chatId === first.chatId &&
+		getStreamId(next) === getStreamId(first)
+	);
+}
+
 function getBufferedStreamKey(
 	channel: string,
 	chatId: string,
 	streamId: string,
 ): string {
 	return `${channel}:${chatId}:${streamId}`;
+}
+
+function getRetryDelayMs(failedAttemptIndex: number): number {
+	return (
+		OUTBOUND_RETRY_DELAYS_MS[
+			Math.min(failedAttemptIndex, OUTBOUND_RETRY_DELAYS_MS.length - 1)
+		] ?? 0
+	);
+}
+
+function sleep(delayMs: number): Promise<void> {
+	if (delayMs <= 0) {
+		return Promise.resolve();
+	}
+	return new Promise((resolve) => {
+		setTimeout(resolve, delayMs);
+	});
 }

@@ -1,5 +1,6 @@
 import { Bot, type Context } from "grammy";
 
+import { isSenderAllowed } from "../config/loader.js";
 import type { AppConfig, TelegramConfig } from "../config/schema.js";
 import type { Logger } from "../utils/logging.js";
 import { BaseChannel, type BaseChannelOptions } from "./base.js";
@@ -11,9 +12,11 @@ export const TELEGRAM_CHANNEL_NAME = "telegram";
 export const SYSTEM_ROLE = "system";
 export const START_MESSAGE = "nanobot-ts is running.";
 export const UNSUPPORTED_MESSAGE = "Text only for now.";
-const STREAM_EDIT_INTERVAL_MS = 300;
+const TELEGRAM_MESSAGE_MAX_CHARS = 4000;
+const TELEGRAM_SAFE_MESSAGE_CHARS = 3900;
 
 export interface TelegramBotDeps {
+	logger?: Logger;
 	onError?: (error: unknown) => void;
 	sendMessage?: (chatId: string, text: string) => Promise<unknown>;
 	editMessage?: (
@@ -26,7 +29,7 @@ export interface TelegramBotDeps {
 
 export interface TelegramReplyContext {
 	chat?: { id: string | number; type?: string };
-	from?: { id: string | number };
+	from?: { id: string | number; username?: string };
 	message?: { text?: string; photo?: unknown[] };
 	reply: (text: string) => Promise<unknown>;
 }
@@ -62,6 +65,13 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		}
 
 		this.setStatus("starting");
+		this.deps.logger?.info("Starting Telegram bot (polling mode)", {
+			component: "telegram",
+			event: "polling_start",
+			streaming: this.config.streaming,
+			allowFrom: this.config.allowFrom,
+			chatIds: this.config.chatIds.length,
+		});
 		const bot = createTelegramBot(this.config, this, this.deps);
 		this.bot = bot;
 		this.setStatus("running");
@@ -71,9 +81,18 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 				if (this.currentStatus() !== "stopping") {
 					this.setStatus("idle");
 				}
+				this.deps.logger?.info("Telegram bot polling stopped", {
+					component: "telegram",
+					event: "polling_stop",
+				});
 			},
 			(error) => {
 				this.setStatus("error", getErrorMessage(error));
+				this.deps.logger?.error("Telegram bot polling failed", {
+					component: "telegram",
+					event: "polling_error",
+					error,
+				});
 			},
 		);
 	}
@@ -104,6 +123,17 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		const targetChatIds = message.chatId
 			? [message.chatId]
 			: this.config.chatIds;
+		this.deps.logger?.debug("Telegram outbound requested", {
+			component: "telegram",
+			event: "outbound",
+			chatId: message.chatId,
+			targets: targetChatIds.length,
+			role: message.role,
+			streaming: Boolean(
+				isStreamDeltaMessage(message) || isStreamEndMessage(message),
+			),
+			contentPreview: message.content,
+		});
 
 		if (targetChatIds.length === 0) {
 			throw new Error(
@@ -123,6 +153,12 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 			for (const chatId of targetChatIds) {
 				await this.sendMessage(chatId, message.content);
 			}
+			this.deps.logger?.debug("Telegram tool hint delivered", {
+				component: "telegram",
+				event: "tool_hint",
+				targets: targetChatIds.length,
+				contentPreview: message.content,
+			});
 			return targetChatIds.length;
 		}
 
@@ -132,29 +168,78 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		}
 
 		for (const chatId of targetChatIds) {
-			await this.sendMessage(chatId, formatOutboundMessage(message));
+			await this.sendTelegramChunks(chatId, formatOutboundMessage(message));
 		}
+		this.deps.logger?.info("Telegram outbound delivered", {
+			component: "telegram",
+			event: "outbound_delivered",
+			targets: targetChatIds.length,
+			role: message.role,
+			contentPreview: message.content,
+		});
 
 		return targetChatIds.length;
 	}
 
 	async receiveTextMessage(ctx: TelegramReplyContext): Promise<void> {
 		if (!isPrivateChat(ctx)) {
+			this.deps.logger?.debug(
+				"Telegram message ignored from non-private chat",
+				{
+					component: "telegram",
+					event: "inbound_ignored",
+					reason: "non_private_chat",
+					chatType: ctx.chat?.type ?? "unknown",
+				},
+			);
 			return;
 		}
 
 		const senderId = getSenderId(ctx);
 		if (!senderId) {
+			this.deps.logger?.debug("Telegram message ignored without sender id", {
+				component: "telegram",
+				event: "inbound_ignored",
+				reason: "missing_sender",
+			});
 			return;
 		}
 
 		const chatId = getChatId(ctx);
 		const text = normalizeTelegramCommandText(ctx.message?.text?.trim() ?? "");
 		if (!chatId || !text) {
+			this.deps.logger?.debug(
+				"Telegram message ignored without text or chat id",
+				{
+					component: "telegram",
+					event: "inbound_ignored",
+					reason: "missing_text_or_chat",
+					senderId,
+				},
+			);
 			return;
 		}
 
-		await this.publishInbound({
+		this.deps.logger?.debug("Telegram message received", {
+			component: "telegram",
+			event: "inbound",
+			chatId,
+			senderId,
+			username: getSenderUsername(ctx),
+			contentPreview: text,
+		});
+		if (!this.canAcceptTelegramSender(ctx)) {
+			this.deps.logger?.debug("Telegram message blocked by allowlist", {
+				component: "telegram",
+				event: "inbound_blocked",
+				chatId,
+				senderId,
+				username: getSenderUsername(ctx),
+			});
+			return;
+		}
+
+		await this.publishAcceptedInbound({
 			senderId,
 			chatId,
 			content: text,
@@ -162,12 +247,22 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 			sessionKeyOverride: `${TELEGRAM_CHANNEL_NAME}:${chatId}`,
 			metadata: {
 				chatType: ctx.chat?.type ?? "unknown",
+				...(getSenderUsername(ctx) ? { username: getSenderUsername(ctx) } : {}),
 			},
 		});
 	}
 
 	async receiveUnsupportedMessage(ctx: TelegramReplyContext): Promise<void> {
 		if (!isPrivateChat(ctx)) {
+			this.deps.logger?.debug(
+				"Telegram unsupported message ignored from non-private chat",
+				{
+					component: "telegram",
+					event: "unsupported_ignored",
+					reason: "non_private_chat",
+					chatType: ctx.chat?.type ?? "unknown",
+				},
+			);
 			return;
 		}
 
@@ -176,11 +271,35 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		}
 
 		const senderId = getSenderId(ctx);
-		if (!senderId || !this.canAcceptSender(senderId)) {
+		if (!senderId || !this.canAcceptTelegramSender(ctx)) {
+			this.deps.logger?.debug("Telegram unsupported message blocked", {
+				component: "telegram",
+				event: "unsupported_blocked",
+				senderId,
+				username: getSenderUsername(ctx),
+			});
 			return;
 		}
 
 		await ctx.reply(UNSUPPORTED_MESSAGE);
+		this.deps.logger?.debug("Telegram unsupported message reply sent", {
+			component: "telegram",
+			event: "unsupported",
+			senderId,
+			username: getSenderUsername(ctx),
+		});
+	}
+
+	private canAcceptTelegramSender(ctx: TelegramReplyContext): boolean {
+		const senderId = getSenderId(ctx);
+		if (!senderId) {
+			return false;
+		}
+		return isTelegramSenderAllowed(
+			this.config.allowFrom,
+			senderId,
+			getSenderUsername(ctx),
+		);
 	}
 
 	private async sendMessage(chatId: string, text: string): Promise<unknown> {
@@ -226,31 +345,50 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		for (const chatId of targetChatIds) {
 			const buffer = this.getOrCreateStreamBuffer(chatId, streamId);
 			buffer.text += message.content;
+			const renderedText = formatTelegramStreamText(buffer.text);
 
-			if (!buffer.text.trim()) {
+			if (!renderedText.trim()) {
 				continue;
 			}
 
 			if (buffer.messageId === undefined) {
-				const sent = await this.sendMessage(chatId, buffer.text);
+				const sent = await this.sendMessage(
+					chatId,
+					firstTelegramChunk(renderedText),
+				);
 				const messageId = getTelegramMessageId(sent);
 				if (messageId !== undefined) {
 					buffer.messageId = messageId;
 				}
-				buffer.renderedText = buffer.text;
+				buffer.renderedText = firstTelegramChunk(renderedText);
 				buffer.lastEditedAt = this.deps.now?.().getTime() ?? Date.now();
 				delivered += 1;
+				this.deps.logger?.debug("Telegram stream message sent", {
+					component: "telegram",
+					event: "stream_start",
+					chatId,
+					streamId,
+					contentPreview: renderedText,
+				});
 				continue;
 			}
 
 			const now = this.deps.now?.().getTime() ?? Date.now();
 			if (
-				buffer.text !== buffer.renderedText &&
-				now - buffer.lastEditedAt >= STREAM_EDIT_INTERVAL_MS
+				renderedText !== buffer.renderedText &&
+				now - buffer.lastEditedAt >= this.config.streamEditIntervalMs
 			) {
-				await this.editMessage(chatId, buffer.messageId, buffer.text);
-				buffer.renderedText = buffer.text;
-				buffer.lastEditedAt = now;
+				const edited = await this.tryEditStreamMessage(
+					chatId,
+					streamId,
+					buffer,
+					firstTelegramChunk(renderedText),
+					"stream_edit",
+					now,
+				);
+				if (!edited) {
+					buffer.lastEditedAt = now;
+				}
 			}
 			delivered += 1;
 		}
@@ -280,15 +418,63 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 				continue;
 			}
 
-			if (buffer.messageId === undefined) {
-				await this.sendMessage(chatId, buffer.text);
-				delivered += 1;
+			const finalText = formatTelegramStreamText(buffer.text);
+			const chunks = splitTelegramMessage(finalText);
+			if (chunks.length === 0) {
 				continue;
 			}
 
-			if (buffer.text !== buffer.renderedText) {
-				await this.editMessage(chatId, buffer.messageId, buffer.text);
+			if (buffer.messageId === undefined) {
+				await this.sendTelegramChunks(chatId, finalText);
+				delivered += 1;
+				this.deps.logger?.debug("Telegram stream finalized via send", {
+					component: "telegram",
+					event: "stream_end",
+					chatId,
+					streamId,
+					contentPreview: finalText,
+				});
+				continue;
 			}
+
+			const firstChunk = chunks[0] ?? "";
+			if (firstChunk && firstChunk !== buffer.renderedText) {
+				const edited = await this.tryEditStreamMessage(
+					chatId,
+					streamId,
+					buffer,
+					firstChunk,
+					"stream_end",
+					this.deps.now?.().getTime() ?? Date.now(),
+				);
+				if (!edited) {
+					await this.sendTelegramChunks(chatId, finalText);
+					this.deps.logger?.warn(
+						"Telegram stream final edit failed; sent final text as a new message",
+						{
+							component: "telegram",
+							event: "stream_final_fallback",
+							chatId,
+							streamId,
+							contentPreview: finalText,
+						},
+					);
+				} else if (chunks.length > 1) {
+					for (const chunk of chunks.slice(1)) {
+						await this.sendMessage(chatId, chunk);
+					}
+				}
+			} else if (chunks.length > 1) {
+				for (const chunk of chunks.slice(1)) {
+					await this.sendMessage(chatId, chunk);
+				}
+			}
+			this.deps.logger?.debug("Telegram stream finalized", {
+				component: "telegram",
+				event: "stream_end",
+				chatId,
+				streamId,
+			});
 			delivered += 1;
 		}
 
@@ -311,6 +497,66 @@ export class TelegramChannel extends BaseChannel<TelegramConfig> {
 		}
 		return buffer;
 	}
+
+	private async tryEditStreamMessage(
+		chatId: string,
+		streamId: string,
+		buffer: TelegramStreamBuffer,
+		text: string,
+		event: "stream_edit" | "stream_end",
+		now: number,
+	): Promise<boolean> {
+		if (buffer.messageId === undefined) {
+			return false;
+		}
+
+		try {
+			await this.editMessage(chatId, buffer.messageId, text);
+		} catch (error) {
+			if (isTelegramMessageNotModifiedError(error)) {
+				buffer.renderedText = text;
+				buffer.lastEditedAt = now;
+				this.deps.logger?.debug("Telegram stream edit was already current", {
+					component: "telegram",
+					event: "stream_edit_unchanged",
+					chatId,
+					streamId,
+				});
+				return true;
+			}
+
+			this.deps.logger?.warn("Telegram stream edit failed", {
+				component: "telegram",
+				event: "stream_edit_failed",
+				chatId,
+				streamId,
+				error,
+			});
+			return false;
+		}
+
+		buffer.renderedText = text;
+		buffer.lastEditedAt = now;
+		this.deps.logger?.debug("Telegram stream message edited", {
+			component: "telegram",
+			event,
+			chatId,
+			streamId,
+			contentPreview: text,
+		});
+		return true;
+	}
+
+	private async sendTelegramChunks(
+		chatId: string,
+		text: string,
+	): Promise<number> {
+		const chunks = splitTelegramMessage(text);
+		for (const chunk of chunks) {
+			await this.sendMessage(chatId, chunk);
+		}
+		return chunks.length;
+	}
 }
 
 export function createTelegramChannelFactory(
@@ -330,8 +576,13 @@ export function createTelegramChannelFactory(
 				},
 				{
 					...deps,
+					logger,
 					onError: (error) => {
-						logger.error("Telegram channel error", error);
+						logger.error("Telegram channel error", {
+							component: "telegram",
+							event: "error",
+							error,
+						});
 						deps.onError?.(error);
 					},
 				},
@@ -409,6 +660,37 @@ function getSenderId(
 	return ctx.from ? String(ctx.from.id) : null;
 }
 
+function getSenderUsername(
+	ctx: Pick<TelegramReplyContext, "from"> | Context,
+): string | null {
+	return ctx.from?.username ? String(ctx.from.username) : null;
+}
+
+function isTelegramSenderAllowed(
+	allowFrom: string[],
+	senderId: string,
+	username: string | null,
+): boolean {
+	if (isSenderAllowed(allowFrom, senderId)) {
+		return true;
+	}
+
+	const normalizedUsername = normalizeTelegramUsername(username);
+	if (!normalizedUsername) {
+		return false;
+	}
+
+	return allowFrom.some(
+		(entry) => normalizeTelegramUsername(entry) === normalizedUsername,
+	);
+}
+
+function normalizeTelegramUsername(
+	username: string | null | undefined,
+): string {
+	return username?.trim().replace(/^@/, "").toLowerCase() ?? "";
+}
+
 function getChatId(
 	ctx: Pick<TelegramReplyContext, "chat"> | Context,
 ): string | null {
@@ -478,4 +760,66 @@ function getTelegramMessageId(result: unknown): number | undefined {
 	}
 
 	return undefined;
+}
+
+function formatTelegramStreamText(text: string): string {
+	return stripTelegramMarkdown(text).trimEnd();
+}
+
+function stripTelegramMarkdown(text: string): string {
+	return text
+		.replace(/\r\n?/g, "\n")
+		.replace(/^```[a-zA-Z0-9_-]*\s*$/gm, "")
+		.replace(/```/g, "")
+		.replace(/`([^`\n]+)`/g, "$1")
+		.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+		.replace(/^\s{0,3}#{1,6}\s+/gm, "")
+		.replace(/^\s{0,3}>\s?/gm, "")
+		.replace(/\*\*([^*\n]+)\*\*/g, "$1")
+		.replace(/__([^_\n]+)__/g, "$1")
+		.replace(/~~([^~\n]+)~~/g, "$1")
+		.replace(/\*([^*\n]+)\*/g, "$1");
+}
+
+function firstTelegramChunk(text: string): string {
+	return splitTelegramMessage(text)[0] ?? "";
+}
+
+function splitTelegramMessage(text: string): string[] {
+	const trimmed = text.trim();
+	if (!trimmed) {
+		return [];
+	}
+
+	const chunks: string[] = [];
+	let remaining = trimmed;
+	while (remaining.length > TELEGRAM_SAFE_MESSAGE_CHARS) {
+		const cutAt = findTelegramSplitIndex(remaining);
+		chunks.push(remaining.slice(0, cutAt).trimEnd());
+		remaining = remaining.slice(cutAt).trimStart();
+	}
+	if (remaining) {
+		chunks.push(remaining);
+	}
+	return chunks;
+}
+
+function findTelegramSplitIndex(text: string): number {
+	const newlineIndex = text.lastIndexOf("\n", TELEGRAM_SAFE_MESSAGE_CHARS);
+	if (newlineIndex >= TELEGRAM_SAFE_MESSAGE_CHARS / 2) {
+		return newlineIndex + 1;
+	}
+
+	const spaceIndex = text.lastIndexOf(" ", TELEGRAM_SAFE_MESSAGE_CHARS);
+	if (spaceIndex >= TELEGRAM_SAFE_MESSAGE_CHARS / 2) {
+		return spaceIndex + 1;
+	}
+
+	return Math.min(TELEGRAM_SAFE_MESSAGE_CHARS, TELEGRAM_MESSAGE_MAX_CHARS);
+}
+
+function isTelegramMessageNotModifiedError(error: unknown): boolean {
+	return getErrorMessage(error)
+		.toLowerCase()
+		.includes("message is not modified");
 }

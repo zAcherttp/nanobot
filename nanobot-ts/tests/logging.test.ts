@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	createLogger,
@@ -9,11 +9,25 @@ import {
 	sanitizeLogData,
 } from "../src/utils/logging.js";
 
+function stripAnsi(text: string): string {
+	const ansiEscape = String.fromCharCode(27);
+	return text.replace(new RegExp(`${ansiEscape}\\[[0-9;]*m`, "g"), "");
+}
+
 describe("runtime logging", () => {
 	let logDir: string;
+	let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+	let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(async () => {
 		logDir = await mkdtemp(path.join(os.tmpdir(), "nanobot-ts-logs-"));
+		consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		consoleLogSpy.mockRestore();
+		consoleErrorSpy.mockRestore();
 	});
 
 	it("appends structured JSONL entries and reloads recent logs", async () => {
@@ -117,5 +131,30 @@ describe("runtime logging", () => {
 			headers: "[REDACTED]",
 			token: "[REDACTED]",
 		});
+	});
+
+	it("prints live console events as component:event labels with messages", () => {
+		const logger = createLogger("debug", { console: true });
+
+		logger.debug("Gateway workspace ready", {
+			component: "gateway",
+			event: "workspace_ready",
+		});
+		logger.warn("Gateway runtime failed", {
+			component: "gateway",
+			event: "runtime_error",
+		});
+
+		const debugLine = String(consoleLogSpy.mock.calls[0]?.[0] ?? "");
+		const warnLine = String(consoleErrorSpy.mock.calls[0]?.[0] ?? "");
+
+		expect(debugLine).toContain("\u001B[36mDEBUG\u001B[0m");
+		expect(stripAnsi(debugLine)).toMatch(
+			/^\[[^\]]+\] DEBUG gateway:workspace_ready - Gateway workspace ready$/,
+		);
+		expect(warnLine).toContain("\u001B[33mWARN\u001B[0m");
+		expect(stripAnsi(warnLine)).toMatch(
+			/^\[[^\]]+\] WARN gateway:runtime_error - Gateway runtime failed$/,
+		);
 	});
 });

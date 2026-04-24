@@ -65,6 +65,17 @@ const LOGGER: Logger = {
 	fatal: vi.fn(),
 };
 
+function createMockLogger(): Logger {
+	return {
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+		debug: vi.fn(),
+		trace: vi.fn(),
+		fatal: vi.fn(),
+	};
+}
+
 function createConfig(): AppConfig {
 	return structuredClone(DEFAULT_CONFIG);
 }
@@ -213,7 +224,8 @@ describe("channel manager", () => {
 
 	it("dispatches outbound bus messages while running", async () => {
 		const channel = new FakeChannel("enabled");
-		const manager = new ChannelManager(createConfig(), LOGGER, {
+		const logger = createMockLogger();
+		const manager = new ChannelManager(createConfig(), logger, {
 			channelFactories: [
 				{
 					name: "enabled",
@@ -240,6 +252,203 @@ describe("channel manager", () => {
 				content: "hello from bus",
 			}),
 		]);
+		expect(logger.info).toHaveBeenCalledWith(
+			"Channel outbound dispatcher started",
+			expect.objectContaining({
+				component: "channel",
+				event: "outbound_dispatcher_start",
+			}),
+		);
+		expect(logger.info).toHaveBeenCalledWith(
+			"Channel outbound dispatcher stopped",
+			expect.objectContaining({
+				component: "channel",
+				event: "outbound_dispatcher_stop",
+			}),
+		);
+		expect(logger.debug).toHaveBeenCalledWith(
+			"Channel outbound dispatch",
+			expect.objectContaining({
+				component: "channel",
+				event: "outbound_dispatch",
+				channel: "enabled",
+				contentPreview: "hello from bus",
+			}),
+		);
+	});
+
+	it("logs outbound bus dispatch failures without rejecting publishers", async () => {
+		class FailingChannel extends FakeChannel {
+			override async send(_message: OutboundChannelMessage): Promise<number> {
+				throw new Error("telegram edit failed");
+			}
+		}
+
+		const channel = new FailingChannel("enabled");
+		const logger = createMockLogger();
+		const manager = new ChannelManager(createConfig(), logger, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await expect(
+			manager.getBus().publishOutbound({
+				channel: "enabled",
+				chatId: "room-1",
+				content: "hello from bus",
+				role: "assistant",
+			}),
+		).resolves.toBeUndefined();
+		await manager.stop();
+
+		expect(logger.error).toHaveBeenCalledWith(
+			"Channel outbound dispatch failed",
+			expect.objectContaining({
+				component: "channel",
+				event: "outbound_error",
+				channel: "enabled",
+				chatId: "room-1",
+			}),
+		);
+	});
+
+	it("coalesces queued stream deltas for the same target", async () => {
+		const channel = new FakeChannel("enabled", true);
+		const manager = new ChannelManager(createConfig(), LOGGER, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "hello",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: " world",
+			role: "assistant",
+			metadata: {
+				_stream_delta: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await manager.stop();
+
+		expect(channel.sentMessages).toEqual([
+			expect.objectContaining({
+				channel: "enabled",
+				chatId: "room-1",
+				content: "hello world",
+			}),
+		]);
+	});
+
+	it("suppresses tool hints unless channel delivery policy enables them", async () => {
+		const channel = new FakeChannel("enabled", true);
+		const logger = createMockLogger();
+		const manager = new ChannelManager(createConfig(), logger, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "read_file",
+			role: "assistant",
+			metadata: {
+				_progress: true,
+				_tool_hint: true,
+				_stream_id: "stream-1",
+			},
+		});
+		await manager.stop();
+
+		expect(channel.sentMessages).toEqual([]);
+		expect(logger.debug).toHaveBeenCalledWith(
+			"Channel tool hint suppressed",
+			expect.objectContaining({
+				component: "channel",
+				event: "tool_hint_suppressed",
+			}),
+		);
+	});
+
+	it("retries outbound bus dispatch failures before giving up", async () => {
+		class FlakyChannel extends FakeChannel {
+			attempts = 0;
+			override async send(message: OutboundChannelMessage): Promise<number> {
+				this.attempts += 1;
+				if (this.attempts === 1) {
+					throw new Error("temporary telegram failure");
+				}
+				return super.send(message);
+			}
+		}
+
+		const config = createConfig();
+		config.channels.sendMaxRetries = 2;
+		const channel = new FlakyChannel("enabled");
+		const logger = createMockLogger();
+		const manager = new ChannelManager(config, logger, {
+			channelFactories: [
+				{
+					name: "enabled",
+					displayName: "Enabled",
+					isEnabled: () => true,
+					createChannel: () => channel,
+				},
+			],
+		});
+
+		await manager.start();
+		await manager.getBus().publishOutbound({
+			channel: "enabled",
+			chatId: "room-1",
+			content: "hello",
+			role: "assistant",
+		});
+		await manager.stop();
+
+		expect(channel.attempts).toBe(2);
+		expect(channel.sentMessages).toHaveLength(1);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"Channel outbound dispatch retry scheduled",
+			expect.objectContaining({
+				component: "channel",
+				event: "outbound_retry",
+				attempt: 1,
+				nextAttempt: 2,
+			}),
+		);
 	});
 
 	it("buffers streamed outbound messages for non-streaming channels until the end marker", async () => {

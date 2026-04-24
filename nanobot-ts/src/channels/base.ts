@@ -86,16 +86,12 @@ export abstract class BaseChannel<TConfig> {
 		return isSenderAllowed(this.getAllowFrom(), senderId);
 	}
 
-	protected async publishInbound(
+	protected async publishAcceptedInbound(
 		message: Omit<InboundChannelMessage, "channel" | "timestamp" | "metadata"> &
 			Partial<
 				Pick<InboundChannelMessage, "channel" | "timestamp" | "metadata">
 			>,
-	): Promise<boolean> {
-		if (!this.canAcceptSender(message.senderId)) {
-			return false;
-		}
-
+	): Promise<void> {
 		const metadata = {
 			...this.getDefaultInboundMetadata(),
 			...(message.metadata ?? {}),
@@ -107,6 +103,19 @@ export abstract class BaseChannel<TConfig> {
 			timestamp: message.timestamp ?? new Date(),
 			metadata,
 		});
+	}
+
+	protected async publishInbound(
+		message: Omit<InboundChannelMessage, "channel" | "timestamp" | "metadata"> &
+			Partial<
+				Pick<InboundChannelMessage, "channel" | "timestamp" | "metadata">
+			>,
+	): Promise<boolean> {
+		if (!this.canAcceptSender(message.senderId)) {
+			return false;
+		}
+
+		await this.publishAcceptedInbound(message);
 		return true;
 	}
 }

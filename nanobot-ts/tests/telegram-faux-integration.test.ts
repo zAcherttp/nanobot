@@ -86,12 +86,15 @@ describe("telegram faux integration", () => {
 		const config: AppConfig = {
 			...structuredClone(DEFAULT_CONFIG),
 			channels: {
+				...DEFAULT_CONFIG.channels,
+				sendToolHints: true,
 				telegram: {
 					enabled: true,
 					token: "123:abc",
 					allowFrom: ["*"],
 					chatIds: [],
 					streaming: true,
+					streamEditIntervalMs: 1000,
 				},
 			},
 			agent: {

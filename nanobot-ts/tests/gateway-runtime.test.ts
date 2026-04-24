@@ -8,7 +8,7 @@ import {
 	registerFauxProvider,
 	streamSimple,
 } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	createSessionAgent,
@@ -40,6 +40,10 @@ const LOGGER: Logger = {
 	fatal: vi.fn(),
 };
 
+beforeEach(() => {
+	vi.clearAllMocks();
+});
+
 function createRuntimeConfig(sessionStorePath: string) {
 	return resolveAgentRuntimeConfig({
 		...DEFAULT_CONFIG,
@@ -53,6 +57,8 @@ function createRuntimeConfig(sessionStorePath: string) {
 		},
 		agent: {
 			...DEFAULT_CONFIG.agent,
+			provider: "anthropic",
+			modelId: "claude-opus-4-5",
 			sessionStore: {
 				...DEFAULT_CONFIG.agent.sessionStore,
 				type: "file",
@@ -256,6 +262,32 @@ describe("gateway runtime", () => {
 				role: "assistant",
 			}),
 		);
+		expect(LOGGER.info).toHaveBeenCalledWith(
+			"Gateway inbound message accepted",
+			expect.objectContaining({
+				component: "gateway",
+				event: "inbound",
+				sessionKey: "telegram:42",
+				contentPreview: "hello",
+			}),
+		);
+		expect(LOGGER.debug).toHaveBeenCalledWith(
+			"Gateway session queued",
+			expect.objectContaining({
+				component: "gateway",
+				event: "session_queue",
+				sessionKey: "telegram:42",
+			}),
+		);
+		expect(LOGGER.info).toHaveBeenCalledWith(
+			"Gateway agent turn completed",
+			expect.objectContaining({
+				component: "agent",
+				event: "turn_end",
+				sessionKey: "telegram:42",
+				contentPreview: "reply:hello",
+			}),
+		);
 	});
 
 	it("emits stream delta and end markers for native assistant text streaming", async () => {
@@ -373,6 +405,22 @@ describe("gateway runtime", () => {
 					_stream_end: true,
 					_streamed: true,
 				}),
+			}),
+		);
+		expect(LOGGER.debug).toHaveBeenCalledWith(
+			"Gateway stream started",
+			expect.objectContaining({
+				component: "agent",
+				event: "stream_start",
+				sessionKey: "telegram:42",
+			}),
+		);
+		expect(LOGGER.debug).toHaveBeenCalledWith(
+			"Gateway stream ended",
+			expect.objectContaining({
+				component: "agent",
+				event: "stream_end",
+				sessionKey: "telegram:42",
 			}),
 		);
 	});
@@ -802,6 +850,14 @@ describe("gateway runtime", () => {
 		await runtime.stop();
 
 		expect(published).toEqual([]);
+		expect(LOGGER.debug).toHaveBeenCalledWith(
+			"Gateway agent turn produced no reply",
+			expect.objectContaining({
+				component: "agent",
+				event: "no_reply",
+				sessionKey: "telegram:42",
+			}),
+		);
 	});
 
 	it("publishes a generic error reply when prompt execution fails", async () => {
@@ -841,6 +897,14 @@ describe("gateway runtime", () => {
 			expect(published).toEqual([GATEWAY_RUNTIME_ERROR_MESSAGE]);
 		});
 		await runtime.stop();
+		expect(LOGGER.error).toHaveBeenCalledWith(
+			"Gateway runtime failed to process message",
+			expect.objectContaining({
+				component: "agent",
+				event: "turn_error",
+				sessionKey: "telegram:42",
+			}),
+		);
 	});
 
 	it("runs the nanobot faux provider through streaming and tool hints", async () => {

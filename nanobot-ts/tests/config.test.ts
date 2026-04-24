@@ -95,7 +95,7 @@ describe("config", () => {
 		expect(loaded.config.channels.telegram.enabled).toBe(false);
 		expect(loaded.config.channels.telegram.streaming).toBe(true);
 		expect(loaded.config.agent.provider).toBe(DEFAULT_AGENT_PROVIDER);
-		expect(loaded.config.providers).toEqual({});
+		expect(loaded.config.providers).toEqual(DEFAULT_CONFIG.providers);
 		expect(loaded.config.agent.modelId).toBe(DEFAULT_AGENT_MODEL_ID);
 		expect("systemPrompt" in loaded.config.agent).toBe(false);
 		expect(loaded.config.agent.temperature).toBe(DEFAULT_AGENT_TEMPERATURE);

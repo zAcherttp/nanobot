@@ -4,6 +4,7 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { KnownProvider, Transport } from "@mariozechner/pi-ai";
 import type { NANOBOT_FAUX_PROVIDER } from "../providers/faux.js";
+import type { OLLAMA_PROVIDER } from "../providers/runtime.js";
 
 export type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
 
@@ -17,16 +18,21 @@ export interface TelegramConfig {
 	allowFrom: string[];
 	chatIds: string[];
 	streaming: boolean;
+	streamEditIntervalMs: number;
 }
 
 export interface ProviderOverrideConfig {
-	apiKey?: string;
-	apiBase?: string;
-	headers?: Record<string, string>;
+	apiKey?: string | null;
+	apiBase?: string | null;
+	headers?: Record<string, string> | null;
+	extraHeaders?: Record<string, string> | null;
 }
 
 export type ProvidersConfig = Record<string, ProviderOverrideConfig>;
-export type AppProvider = KnownProvider | typeof NANOBOT_FAUX_PROVIDER;
+export type AppProvider =
+	| KnownProvider
+	| typeof NANOBOT_FAUX_PROVIDER
+	| typeof OLLAMA_PROVIDER;
 
 export interface AgentConfig {
 	provider: AppProvider;
@@ -127,6 +133,9 @@ export interface AppConfig {
 	gateway: GatewayConfig;
 	cron: CronConfig;
 	channels: {
+		sendProgress: boolean;
+		sendToolHints: boolean;
+		sendMaxRetries: number;
 		telegram: TelegramConfig;
 	};
 	providers: ProvidersConfig;

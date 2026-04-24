@@ -14,6 +14,7 @@ import {
 import type { AppConfig } from "../config/schema.js";
 import { formatMessagesForHistory, type MemoryStore } from "../memory/index.js";
 import { renderTemplate } from "../templates/index.js";
+import type { Logger } from "../utils/logging.js";
 import {
 	findLegalMessageStart,
 	retainRecentLegalSuffix,
@@ -61,6 +62,7 @@ export interface ConsolidatorOptions {
 	config: ConsolidatorRuntimeConfig;
 	buildSystemPrompt: (context: ConsolidatorPromptContext) => Promise<string>;
 	getTools?: () => AgentTool[] | Promise<AgentTool[]>;
+	logger?: Logger;
 	complete?: (
 		model: Model<Api>,
 		context: Context,
@@ -166,16 +168,32 @@ export class Consolidator {
 	): Promise<ConsolidatorArchiveResult | null> {
 		await this.ensureReady();
 		if (messages.length === 0) {
+			this.options.logger?.debug("Consolidator archive skipped", {
+				component: "consolidator",
+				event: "archive_skip",
+				reason: "empty_messages",
+			});
 			return null;
 		}
 
 		const transcript = formatMessagesForHistory(messages);
 		if (!transcript.trim()) {
+			this.options.logger?.debug("Consolidator archive skipped", {
+				component: "consolidator",
+				event: "archive_skip",
+				reason: "empty_transcript",
+				messageCount: messages.length,
+			});
 			return null;
 		}
 
 		const systemPrompt = await renderTemplate("agent/consolidator_archive.md");
 		try {
+			this.options.logger?.info("Consolidator archive started", {
+				component: "consolidator",
+				event: "archive_start",
+				messageCount: messages.length,
+			});
 			const response = await this.complete(
 				this.options.config.model,
 				{
@@ -200,8 +218,24 @@ export class Consolidator {
 			);
 			const parsed = parseArchiveAssistantMessage(response);
 			await this.options.memoryStore.archiveSummary(parsed);
+			this.options.logger?.info("Consolidator archive completed", {
+				component: "consolidator",
+				event: "archive_end",
+				messageCount: messages.length,
+				contentPreview: parsed.content,
+				signals: Object.keys(parsed.signals),
+			});
 			return parsed;
-		} catch {
+		} catch (error) {
+			this.options.logger?.warn(
+				"Consolidator archive failed; using raw archive fallback",
+				{
+					component: "consolidator",
+					event: "archive_fallback",
+					error,
+					messageCount: messages.length,
+				},
+			);
 			await this.options.memoryStore.rawArchive(messages);
 			return null;
 		}
@@ -226,6 +260,17 @@ export class Consolidator {
 				const threshold =
 					this.options.config.contextWindowTokens - CONSOLIDATOR_SAFETY_BUFFER;
 				if (estimate <= threshold) {
+					this.options.logger?.debug("Token consolidation idle", {
+						component: "consolidator",
+						event: "token_idle",
+						sessionKey,
+						channel,
+						promptTokens: estimate,
+						contextWindowTokens: this.options.config.contextWindowTokens,
+						threshold,
+						messageCount: session.messages.length,
+						lastConsolidated: session.lastConsolidated,
+					});
 					break;
 				}
 
@@ -238,14 +283,49 @@ export class Consolidator {
 					session.messages.length,
 				);
 				if (boundary <= start) {
+					this.options.logger?.debug(
+						"Token consolidation skipped without safe boundary",
+						{
+							component: "consolidator",
+							event: "token_skip",
+							reason: "no_safe_boundary",
+							sessionKey,
+							channel,
+							promptTokens: estimate,
+							threshold,
+							start,
+							boundary,
+						},
+					);
 					break;
 				}
 
 				const chunk = session.messages.slice(start, boundary);
 				if (chunk.length === 0) {
+					this.options.logger?.debug("Token consolidation skipped", {
+						component: "consolidator",
+						event: "token_skip",
+						reason: "empty_chunk",
+						sessionKey,
+						channel,
+						start,
+						boundary,
+					});
 					break;
 				}
 
+				this.options.logger?.info("Token consolidation archiving chunk", {
+					component: "consolidator",
+					event: "token_archive",
+					sessionKey,
+					channel,
+					round: round + 1,
+					start,
+					boundary,
+					messageCount: chunk.length,
+					promptTokens: estimate,
+					threshold,
+				});
 				await this.archive(chunk);
 				session = {
 					...session,

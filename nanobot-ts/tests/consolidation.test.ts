@@ -168,6 +168,7 @@ function createConsolidator(
 			options?: SimpleStreamOptions,
 		) => Promise<AssistantMessage>;
 		getTools: () => AgentTool[] | Promise<AgentTool[]>;
+		logger: Logger;
 	}> = {},
 ): Consolidator {
 	const config = {
@@ -184,6 +185,7 @@ function createConsolidator(
 		buildSystemPrompt: async () => "system prompt",
 		...(overrides.complete ? { complete: overrides.complete } : {}),
 		...(overrides.getTools ? { getTools: overrides.getTools } : {}),
+		...(overrides.logger ? { logger: overrides.logger } : {}),
 	});
 }
 
@@ -336,15 +338,33 @@ describe("consolidator - threshold and chunking", () => {
 		const archiveSpy = vi.fn(async () =>
 			createAssistantReply("should not run"),
 		);
+		const logger: Logger = {
+			info: vi.fn(),
+			warn: vi.fn(),
+			error: vi.fn(),
+			debug: vi.fn(),
+			trace: vi.fn(),
+			fatal: vi.fn(),
+		};
 		const consolidator = createConsolidator(workspace, sessionStore, {
 			contextWindowTokens: 10_000,
 			complete: archiveSpy,
+			logger,
 		});
 
 		await consolidator.maybeConsolidateByTokens("telegram:42", "telegram");
 
 		expect(archiveSpy).not.toHaveBeenCalled();
 		expect((await sessionStore.load("telegram:42"))?.lastConsolidated).toBe(0);
+		expect(logger.debug).toHaveBeenCalledWith(
+			"Token consolidation idle",
+			expect.objectContaining({
+				component: "consolidator",
+				event: "token_idle",
+				sessionKey: "telegram:42",
+				channel: "telegram",
+			}),
+		);
 	});
 
 	it("chunk cap preserves user turn boundary", async () => {

@@ -57,6 +57,27 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	trace: 10,
 };
 
+const ANSI = {
+	reset: "\u001B[0m",
+	dim: "\u001B[2m",
+	gray: "\u001B[90m",
+	blue: "\u001B[94m",
+	cyan: "\u001B[36m",
+	brightCyan: "\u001B[96m",
+	yellow: "\u001B[33m",
+	red: "\u001B[31m",
+	magenta: "\u001B[35m",
+} as const;
+
+const LEVEL_COLOR: Record<LogLevel, string> = {
+	trace: ANSI.gray,
+	debug: ANSI.cyan,
+	info: ANSI.blue,
+	warn: ANSI.yellow,
+	error: ANSI.red,
+	fatal: ANSI.magenta,
+};
+
 export class LogStore {
 	private readonly entries: LogEntry[] = [];
 	private readonly listeners = new Set<() => void>();
@@ -397,16 +418,48 @@ function writeConsoleLog(
 		maxPreviewChars,
 	});
 	const stamp = new Date(entry.timestamp).toISOString();
-	const context = [entry.component, entry.event, entry.sessionKey, entry.jobId]
-		.filter(Boolean)
-		.join(" ");
-	const suffix = context ? ` ${context}` : "";
-	const line = `[${stamp}] ${level.toUpperCase()}${suffix} ${entry.message}`;
+	const label = formatConsoleLogLabel(entry);
+	const line = formatConsoleLogLine({
+		stamp,
+		level,
+		label,
+		message: entry.message,
+	});
 	if (level === "error" || level === "fatal" || level === "warn") {
 		console.error(line);
 		return;
 	}
 	console.log(line);
+}
+
+function formatConsoleLogLabel(entry: LogEntry): string {
+	const primary =
+		entry.component && entry.event
+			? `${entry.component}:${entry.event}`
+			: (entry.component ?? entry.event ?? "");
+	return [
+		primary,
+		entry.sessionKey,
+		entry.channel && !entry.sessionKey ? entry.channel : undefined,
+		entry.chatId && !entry.sessionKey ? entry.chatId : undefined,
+		entry.jobId,
+		entry.turnId,
+	]
+		.filter(Boolean)
+		.join(" ");
+}
+
+function formatConsoleLogLine(options: {
+	stamp: string;
+	level: LogLevel;
+	label: string;
+	message: string;
+}): string {
+	const levelText = options.level.toUpperCase();
+	const levelColor = LEVEL_COLOR[options.level];
+	const label = options.label ? ` ${options.label}` : "";
+	const message = options.message ? ` - ${options.message}` : "";
+	return `${ANSI.gray}[${options.stamp}]${ANSI.reset} ${levelColor}${levelText}${ANSI.reset}${ANSI.cyan}${label}${ANSI.reset}${ANSI.brightCyan}${message}${ANSI.reset}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

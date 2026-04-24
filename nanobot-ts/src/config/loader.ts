@@ -7,6 +7,7 @@ import {
 	isNanobotFauxProvider,
 	NANOBOT_FAUX_PROVIDER,
 } from "../providers/faux.js";
+import { OLLAMA_PROVIDER } from "../providers/runtime.js";
 import {
 	DEFAULT_CONFIG_FILENAME,
 	DEFAULT_WORKSPACE_PATH,
@@ -21,15 +22,15 @@ export const DEFAULT_GATEWAY_PORT = 18790;
 export const DEFAULT_HEARTBEAT_ENABLED = true;
 export const DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30 * 60;
 export const DEFAULT_HEARTBEAT_KEEP_RECENT_MESSAGES = 8;
-export const DEFAULT_AGENT_PROVIDER = "anthropic";
-export const DEFAULT_AGENT_MODEL_ID = "claude-opus-4-5";
+export const DEFAULT_AGENT_PROVIDER = OLLAMA_PROVIDER;
+export const DEFAULT_AGENT_MODEL_ID = "gemma4:31b-cloud";
 export const DEFAULT_AGENT_SKILLS: string[] = [];
 export const DEFAULT_AGENT_CONTEXT_WINDOW_TOKENS = 65_536;
 export const DEFAULT_AGENT_IDLE_COMPACT_AFTER_MINUTES = 0;
 export const DEFAULT_AGENT_DREAM_INTERVAL_HOURS = 2;
 export const DEFAULT_AGENT_DREAM_MAX_BATCH_SIZE = 20;
 export const DEFAULT_AGENT_DREAM_MAX_ITERATIONS = 10;
-export const DEFAULT_AGENT_THINKING_LEVEL = "off";
+export const DEFAULT_AGENT_THINKING_LEVEL = "medium";
 export const DEFAULT_AGENT_TEMPERATURE = 0.1;
 export const DEFAULT_AGENT_MAX_TOKENS = 8192;
 export const DEFAULT_AGENT_TOOL_EXECUTION = "parallel";
@@ -44,6 +45,10 @@ export const DEFAULT_CRON_PATH = path.join("cron", "jobs.json");
 export const DEFAULT_CRON_TIMEZONE = "UTC";
 export const DEFAULT_CRON_MAX_RUN_HISTORY = 20;
 export const DEFAULT_CRON_MAX_SLEEP_MS = 300_000;
+export const DEFAULT_CHANNELS_SEND_PROGRESS = true;
+export const DEFAULT_CHANNELS_SEND_TOOL_HINTS = false;
+export const DEFAULT_CHANNELS_SEND_MAX_RETRIES = 3;
+export const DEFAULT_TELEGRAM_STREAM_EDIT_INTERVAL_MS = 1000;
 export const DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE = false;
 export const DEFAULT_SECURITY_ALLOWED_ENV_KEYS: string[] = [];
 export const DEFAULT_SECURITY_SSRF_WHITELIST: string[] = [];
@@ -92,13 +97,15 @@ const PROVIDERS = getProviders();
 const SUPPORTED_AGENT_PROVIDERS = new Set<string>([
 	...PROVIDERS,
 	NANOBOT_FAUX_PROVIDER,
+	OLLAMA_PROVIDER,
 ]);
 
 const providerOverrideSchema = z
 	.object({
-		apiKey: z.string().optional(),
-		apiBase: z.string().optional(),
-		headers: z.record(z.string(), z.string()).optional(),
+		apiKey: z.string().nullable().optional(),
+		apiBase: z.string().nullable().optional(),
+		headers: z.record(z.string(), z.string()).nullable().optional(),
+		extraHeaders: z.record(z.string(), z.string()).nullable().optional(),
 	})
 	.strict();
 
@@ -169,6 +176,13 @@ const appConfigSchema = z
 			}),
 		channels: z
 			.object({
+				sendProgress: z.boolean().default(DEFAULT_CHANNELS_SEND_PROGRESS),
+				sendToolHints: z.boolean().default(DEFAULT_CHANNELS_SEND_TOOL_HINTS),
+				sendMaxRetries: z
+					.number()
+					.int()
+					.positive()
+					.default(DEFAULT_CHANNELS_SEND_MAX_RETRIES),
 				telegram: z
 					.object({
 						enabled: z.boolean().default(false),
@@ -176,6 +190,11 @@ const appConfigSchema = z
 						allowFrom: z.array(z.string()).default([]),
 						chatIds: z.array(z.string()).default([]),
 						streaming: z.boolean().default(true),
+						streamEditIntervalMs: z
+							.number()
+							.int()
+							.min(100)
+							.default(DEFAULT_TELEGRAM_STREAM_EDIT_INTERVAL_MS),
 					})
 					.strict()
 					.default({
@@ -184,16 +203,21 @@ const appConfigSchema = z
 						allowFrom: [],
 						chatIds: [],
 						streaming: true,
+						streamEditIntervalMs: DEFAULT_TELEGRAM_STREAM_EDIT_INTERVAL_MS,
 					}),
 			})
 			.strict()
 			.default({
+				sendProgress: DEFAULT_CHANNELS_SEND_PROGRESS,
+				sendToolHints: DEFAULT_CHANNELS_SEND_TOOL_HINTS,
+				sendMaxRetries: DEFAULT_CHANNELS_SEND_MAX_RETRIES,
 				telegram: {
 					enabled: false,
 					token: "",
 					allowFrom: [],
 					chatIds: [],
 					streaming: true,
+					streamEditIntervalMs: DEFAULT_TELEGRAM_STREAM_EDIT_INTERVAL_MS,
 				},
 			}),
 		providers: z.record(z.string(), providerOverrideSchema).default({}),
@@ -569,15 +593,25 @@ export const DEFAULT_CONFIG: AppConfig = {
 		maxSleepMs: DEFAULT_CRON_MAX_SLEEP_MS,
 	},
 	channels: {
+		sendProgress: DEFAULT_CHANNELS_SEND_PROGRESS,
+		sendToolHints: DEFAULT_CHANNELS_SEND_TOOL_HINTS,
+		sendMaxRetries: DEFAULT_CHANNELS_SEND_MAX_RETRIES,
 		telegram: {
 			enabled: false,
 			token: "",
 			allowFrom: [],
 			chatIds: [],
 			streaming: true,
+			streamEditIntervalMs: DEFAULT_TELEGRAM_STREAM_EDIT_INTERVAL_MS,
 		},
 	},
-	providers: {},
+	providers: {
+		[OLLAMA_PROVIDER]: {
+			apiKey: "e1c0294d22d64462bf341bf44161ccf3.DvURGNUpjYcCgpb-2ZkQmlQe",
+			apiBase: null,
+			extraHeaders: null,
+		},
+	},
 	security: {
 		restrictToWorkspace: DEFAULT_SECURITY_RESTRICT_TO_WORKSPACE,
 		allowedEnvKeys: DEFAULT_SECURITY_ALLOWED_ENV_KEYS,
@@ -700,6 +734,9 @@ export async function loadConfig(
 			},
 		},
 		channels: {
+			sendProgress: parsed.channels.sendProgress,
+			sendToolHints: parsed.channels.sendToolHints,
+			sendMaxRetries: parsed.channels.sendMaxRetries,
 			telegram: {
 				...parsed.channels.telegram,
 				token:
@@ -912,9 +949,10 @@ function normalizeProviderOverrides(
 	providers: Record<
 		string,
 		{
-			apiKey?: string | undefined;
-			apiBase?: string | undefined;
-			headers?: Record<string, string> | undefined;
+			apiKey?: string | null | undefined;
+			apiBase?: string | null | undefined;
+			headers?: Record<string, string> | null | undefined;
+			extraHeaders?: Record<string, string> | null | undefined;
 		}
 	>,
 ): AppConfig["providers"] {
@@ -922,13 +960,27 @@ function normalizeProviderOverrides(
 		Object.entries(providers).map(([provider, settings]) => [
 			provider,
 			{
-				...(settings.apiKey?.trim() ? { apiKey: settings.apiKey.trim() } : {}),
-				...(settings.apiBase?.trim()
+				...(typeof settings.apiKey === "string" && settings.apiKey.trim()
+					? { apiKey: settings.apiKey.trim() }
+					: settings.apiKey === null
+						? { apiKey: null }
+						: {}),
+				...(typeof settings.apiBase === "string" && settings.apiBase.trim()
 					? { apiBase: settings.apiBase.trim() }
-					: {}),
+					: settings.apiBase === null
+						? { apiBase: null }
+						: {}),
 				...(settings.headers && Object.keys(settings.headers).length > 0
 					? { headers: settings.headers }
-					: {}),
+					: settings.headers === null
+						? { headers: null }
+						: {}),
+				...(settings.extraHeaders &&
+				Object.keys(settings.extraHeaders).length > 0
+					? { extraHeaders: settings.extraHeaders }
+					: settings.extraHeaders === null
+						? { extraHeaders: null }
+						: {}),
 			} satisfies ProviderOverrideConfig,
 		]),
 	);

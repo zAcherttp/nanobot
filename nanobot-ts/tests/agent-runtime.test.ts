@@ -19,7 +19,11 @@ import {
 	sanitizeMessagesForPersistence,
 } from "../src/agent/loop.js";
 import { FileSessionStore } from "../src/agent/session-store.js";
-import { DEFAULT_CONFIG } from "../src/config/loader.js";
+import {
+	DEFAULT_AGENT_MODEL_ID,
+	DEFAULT_AGENT_PROVIDER,
+	DEFAULT_CONFIG,
+} from "../src/config/loader.js";
 import {
 	getNanobotFauxTools,
 	NANOBOT_FAUX_MODEL_ID,
@@ -30,10 +34,11 @@ describe("agent runtime", () => {
 	it("resolves provider and modelId into a pi-ai model", () => {
 		const resolved = resolveAgentRuntimeConfig(DEFAULT_CONFIG);
 
-		expect(resolved.provider).toBe("anthropic");
-		expect(resolved.modelId).toBe("claude-opus-4-5");
-		expect(resolved.model.provider).toBe("anthropic");
-		expect(resolved.model.id).toBe("claude-opus-4-5");
+		expect(resolved.provider).toBe(DEFAULT_AGENT_PROVIDER);
+		expect(resolved.modelId).toBe(DEFAULT_AGENT_MODEL_ID);
+		expect(resolved.model.provider).toBe(DEFAULT_AGENT_PROVIDER);
+		expect(resolved.model.id).toBe(DEFAULT_AGENT_MODEL_ID);
+		expect(resolved.providerAuthSource).toBe("config");
 		expect(resolved.sessionStore.maxMessages).toBe(500);
 		expect(resolved.sessionStore.maxPersistedTextChars).toBe(16_000);
 		expect(resolved.sessionStore.quarantineCorruptFiles).toBe(true);
@@ -53,6 +58,11 @@ describe("agent runtime", () => {
 					},
 				},
 			},
+			agent: {
+				...DEFAULT_CONFIG.agent,
+				provider: "anthropic",
+				modelId: "claude-opus-4-5",
+			},
 		});
 
 		expect(resolved.apiKey).toBe("config-key");
@@ -65,7 +75,15 @@ describe("agent runtime", () => {
 	it("falls back to the provider env variable when config omits apiKey", () => {
 		process.env.ANTHROPIC_API_KEY = "env-key";
 
-		const resolved = resolveAgentRuntimeConfig(DEFAULT_CONFIG);
+		const resolved = resolveAgentRuntimeConfig({
+			...DEFAULT_CONFIG,
+			providers: {},
+			agent: {
+				...DEFAULT_CONFIG.agent,
+				provider: "anthropic",
+				modelId: "claude-opus-4-5",
+			},
+		});
 
 		expect(resolved.apiKey).toBe("env-key");
 	});
@@ -75,6 +93,7 @@ describe("agent runtime", () => {
 			...DEFAULT_CONFIG,
 			agent: {
 				...DEFAULT_CONFIG.agent,
+				provider: "anthropic",
 				modelId: "not-a-real-model",
 			},
 		};
@@ -148,7 +167,7 @@ describe("agent runtime", () => {
 						temperature: options?.temperature,
 						maxTokens: options?.maxTokens,
 					});
-					expect(model.id).toBe("claude-opus-4-5");
+					expect(model.id).toBe(DEFAULT_AGENT_MODEL_ID);
 					return streamSimple(registration.getModel(), context, options);
 				},
 			});
