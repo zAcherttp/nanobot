@@ -30,3 +30,23 @@ export class ConfigValidationError extends MiniclawError {
     super(`Configuration validation failed:\n${summary}`);
   }
 }
+
+// ─── Thread Errors ────────────────────────────────────
+
+export class ThreadNotFoundError extends MiniclawError {
+  constructor(threadId: string) {
+    super(`Thread not found: ${threadId}`);
+  }
+}
+
+export class ThreadCorruptedError extends MiniclawError {
+  constructor(threadId: string, cause?: unknown) {
+    super(`Thread data corrupted: ${threadId}`, { cause });
+  }
+}
+
+export class ThreadWriteError extends MiniclawError {
+  constructor(threadId: string, cause?: unknown) {
+    super(`Failed to write to thread: ${threadId}`, { cause });
+  }
+}

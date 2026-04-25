@@ -28,6 +28,7 @@ graph TD
         OnboardSvc["OnboardService"]
         ConfigSvc["ConfigService<br/>(Zod + Validation)"]
         FileSystemSvc["FileSystemService<br/>(Cross-Platform)"]
+        ThreadSvc["ThreadStorageService<br/>(JSONL + Compaction)"]
         
         GatewayCmd -->|"Instantiates"| GatewaySvc
         OnboardCmd -->|"Instantiates"| OnboardSvc
@@ -36,6 +37,8 @@ graph TD
         OnboardSvc -->|"Uses"| ConfigSvc
         OnboardSvc -->|"Uses"| FileSystemSvc
         ConfigSvc -->|"Uses"| FileSystemSvc
+        ThreadSvc -->|"Uses"| FileSystemSvc
+        ThreadSvc -->|"Uses"| ConfigSvc
     end
 
     %% =============================================
@@ -80,6 +83,7 @@ graph TD
         ConfigSvc <-->|"Read/Write"| ConfigJSON
         OnboardSvc -->|"Scaffolds"| ThreadsDir
         OnboardSvc -->|"Scaffolds"| WorkspaceDir
+        ThreadSvc <-->|"JSONL Read/Append"| ThreadsDir
     end
 
     %% =============== Styling ===================
@@ -90,7 +94,7 @@ graph TD
     classDef fs fill:#44403c, color:#f5f5f4, stroke:#d6d3d1, stroke-width:3px;
 
     class Index,GatewayCmd,OnboardCmd,GlobalErr cli;
-    class GatewaySvc,OnboardSvc,ConfigSvc,FileSystemSvc svc;
+    class GatewaySvc,OnboardSvc,ConfigSvc,FileSystemSvc,ThreadSvc svc;
     class Bus,Logger core;
     class HonoApp,SSE,Health api;
     class MiniclawDir,ConfigJSON,ThreadsDir,WorkspaceDir fs;
@@ -100,17 +104,20 @@ graph TD
 
 - **CLI Shell**: `commander` router with globally abstracted error handling.
 - **Build System**: `tsdown` (Rolldown/Vite) outputting an ultra-fast, extensionless native `.mjs` ESM bundle.
-- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, and `ConfigService`.
+- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, `ConfigService`, and `ThreadStorageService`.
 - **Cross-Platform FS**: `FileSystemService` with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
 - **Intelligent Config**: Automatic relative path resolution bound natively to the dynamic `.`+`appName` working directory, validated via `zod`.
-- **Logging**: Asynchronous-blocking `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
-- **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) ready to sync the Gateway API and the background Agent loop.
+- **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with tool-call-pending deferral.
+- **Logging**: Synchronous `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
+- **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) with `ThreadMessage` types aligned to pi-agent-core.
 - **API Server**: Fast `hono/node-server` exposing a REST health check and an SSE (Server-Sent Events) event stream.
 
 ## Upcoming Milestones
 
 *(To be mapped into the architecture diagram as they are built)*
 
+- [x] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers.
+- [ ] **Channel Registry**: Formalized channel adapters (Telegram, SSE, REST) with ingress/egress event routing.
 - [ ] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenRouter, local models).
-- [ ] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers, persisting the `MessageBus` to `.miniclaw/threads/`.
+- [ ] **Compaction Service**: LLM-powered summarization for conversation thread compaction.
 - [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.

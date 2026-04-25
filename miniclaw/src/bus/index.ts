@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { BusMessage, StreamDelta } from "./types";
+import type { ThreadMessage, StreamDelta } from "./types";
 
 export class MessageBus extends EventEmitter {
   constructor() {
@@ -7,12 +7,12 @@ export class MessageBus extends EventEmitter {
   }
 
   // Frontend to Agent
-  publishInbound(message: BusMessage): void {
+  publishInbound(message: ThreadMessage): void {
     this.emit("inbound", message);
   }
 
   // Agent to Frontend (final message)
-  publishOutbound(message: BusMessage): void {
+  publishOutbound(message: ThreadMessage): void {
     this.emit("outbound", message);
   }
 
@@ -21,12 +21,12 @@ export class MessageBus extends EventEmitter {
     this.emit("stream_delta", delta);
   }
 
-  subscribeInbound(handler: (message: BusMessage) => void): () => void {
+  subscribeInbound(handler: (message: ThreadMessage) => void): () => void {
     this.on("inbound", handler);
     return () => this.off("inbound", handler);
   }
 
-  subscribeOutbound(handler: (message: BusMessage) => void): () => void {
+  subscribeOutbound(handler: (message: ThreadMessage) => void): () => void {
     this.on("outbound", handler);
     return () => this.off("outbound", handler);
   }

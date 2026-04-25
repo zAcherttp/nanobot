@@ -1,12 +1,9 @@
-export type MessageRole = "system" | "user" | "assistant" | "toolResult";
-
-export interface BusMessage {
-  id: string;
-  role: MessageRole;
-  content: string;
-  timestamp: number;
-  metadata?: Record<string, unknown>;
-}
+export type {
+  MessageRole,
+  ThreadMessage,
+  ToolCall,
+  ContentBlock,
+} from "@/thread/schema";
 
 export interface StreamDelta {
   id: string;
