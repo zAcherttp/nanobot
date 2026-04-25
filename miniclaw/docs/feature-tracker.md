@@ -108,5 +108,5 @@ graph TD
 *(To be mapped into the architecture diagram as they are built)*
 
 - [ ] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenRouter, local models).
-- [ ] **Persistence Layer**: SQLite schema + Drizzle ORM to persist the `MessageBus` to `.miniclaw/threads/`.
+- [ ] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers, persisting the `MessageBus` to `.miniclaw/threads/`.
 - [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.

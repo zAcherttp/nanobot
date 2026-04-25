@@ -3,17 +3,18 @@ import { promises as fs } from "node:fs";
 import { confirm } from "@inquirer/prompts";
 import chalk from "chalk";
 import { ConfigService } from "./config";
+import { FileSystemService } from "./fs";
 import { logger } from "../utils/logger";
 
 export class OnboardService {
   constructor(
     private readonly configService: ConfigService,
-    private readonly cwd: string = process.cwd(),
+    private readonly fsService: FileSystemService,
   ) {}
 
   public async execute(): Promise<void> {
-    const miniclawDir = path.resolve(this.cwd, ".miniclaw");
-    const configPath = path.resolve(miniclawDir, "config.json");
+    const miniclawDir = this.fsService.getRootPath();
+    const configPath = this.fsService.getConfigPath();
 
     const shouldCreate = await this.checkAndConfirmOverwrite(configPath);
     if (!shouldCreate) {

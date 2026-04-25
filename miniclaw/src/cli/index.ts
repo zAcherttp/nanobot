@@ -1,31 +1,8 @@
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import { gatewayCommand } from "./commands/gateway";
 import { onboardCommand } from "./commands/onboard";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-let pkgVersion = "0.0.0-fallback";
-let pkgName = "miniclaw";
-let pkgDescription = "Next generation core of nanobot";
-try {
-  const pkgPath = resolve(__dirname, "../../package.json");
-  const pkgData = JSON.parse(readFileSync(pkgPath, "utf-8"));
-  if (pkgData.version) {
-    pkgVersion = pkgData.version;
-  }
-  if (pkgData.name) {
-    pkgName = pkgData.name;
-  }
-  if (pkgData.description) {
-    pkgDescription = pkgData.description;
-  }
-} catch (e) {
-  // Fallback remains
-}
+import { pkgName, pkgDescription, pkgVersion } from "@/utils/pkg";
 
 export const program = new Command();
 

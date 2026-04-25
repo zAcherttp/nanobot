@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ConfigService } from "../../src/services/config";
+import { ConfigService } from "@/services/config";
+import { FileSystemService } from "@/services/fs";
 import { promises as fs } from "node:fs";
-import { ConfigLoadError, ConfigValidationError } from "../../src/errors/base";
-import path from "node:path";
+import { ConfigLoadError, ConfigValidationError } from "@/errors/base";
 
 vi.mock("node:fs", () => ({
   promises: {
@@ -13,10 +13,12 @@ vi.mock("node:fs", () => ({
 
 describe("ConfigService", () => {
   let configService: ConfigService;
+  let fsService: FileSystemService;
 
   beforeEach(() => {
     vi.resetAllMocks();
-    configService = new ConfigService();
+    fsService = new FileSystemService("miniclaw");
+    configService = new ConfigService(fsService);
   });
 
   it("should load default config when file is missing and not explicitly provided", async () => {
