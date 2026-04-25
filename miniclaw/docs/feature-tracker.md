@@ -6,74 +6,85 @@ This document provides a high-level, progressively updated architecture map of t
 
 ```mermaid
 graph TD
+    %% =============================================
     %% CLI Layer
-    subgraph CLI ["CLI Interface (Commander)"]
-        Index["miniclaw binary (tsdown)"]
+    %% =============================================
+    subgraph CLI ["🖥️ CLI Interface (Commander)"]
+        Index["miniclaw CLI (tsdown)"]
         GlobalErr["Global Error Handler"]
         
-        Index --> GatewayCmd["'gateway' command"]
-        Index --> OnboardCmd["'onboard' command"]
+        Index --> GatewayCmd["gateway command"]
+        Index --> OnboardCmd["onboard command"]
         
-        GatewayCmd -.->|"Catches Throws"| GlobalErr
-        OnboardCmd -.->|"Catches Throws"| GlobalErr
+        GatewayCmd -.->|"Catches & Handles"| GlobalErr
+        OnboardCmd -.->|"Catches & Handles"| GlobalErr
     end
 
+    %% =============================================
     %% Services Layer
-    subgraph Services ["Service Layer (Pure Business Logic)"]
+    %% =============================================
+    subgraph Services ["⚙️ Service Layer (Business Logic)"]
         GatewaySvc["GatewayService"]
         OnboardSvc["OnboardService"]
-        ConfigSvc["ConfigService (Zod Validated)"]
+        ConfigSvc["ConfigService<br/>(Zod + Validation)"]
         
         GatewayCmd -->|"Instantiates"| GatewaySvc
         OnboardCmd -->|"Instantiates"| OnboardSvc
         
-        GatewaySvc -->|"Loads"| ConfigSvc
-        OnboardSvc -->|"Inits/Validates"| ConfigSvc
+        GatewaySvc -->|"Uses"| ConfigSvc
+        OnboardSvc -->|"Uses"| ConfigSvc
     end
 
+    %% =============================================
     %% Core Infrastructure
-    subgraph Core ["Core Infrastructure"]
-        Bus["MessageBus (EventEmitter)"]
-        Logger["Logger (Pino Synchronous stream)"]
+    %% =============================================
+    subgraph Core ["🔧 Core Infrastructure"]
+        Bus["MessageBus<br/>(EventEmitter)"]
+        Logger["Logger (Pino + pino-pretty)"]
         
-        GatewaySvc -->|"Creates"| Bus
-        Services -.->|"Logs"| Logger
+        GatewaySvc -->|"Initializes"| Bus
+        Services -.->|"All services log to"| Logger
     end
 
+    %% =============================================
     %% Gateway & API Layer
-    subgraph API ["API Runtime (Hono Node Server)"]
-        HonoApp["Hono Gateway Server"]
-        SSE["SSE Broadcaster (/stream)"]
-        Health["Health Check (/api/health)"]
+    %% =============================================
+    subgraph API ["🌐 API Runtime (Hono)"]
+        HonoApp["Hono Server"]
+        SSE["SSE Broadcaster<br/>(/stream)"]
+        Health["Health Check<br/>(/api/health)"]
         
         GatewaySvc -->|"Boots"| HonoApp
         HonoApp --> SSE
         HonoApp --> Health
         
-        HonoApp <-->|"Pub/Sub"| Bus
+        HonoApp <-->|"Pub/Sub Events"| Bus
     end
 
+    %% =============================================
     %% File System Layer
-    subgraph FS ["File System Isolation"]
-        MiniclawDir["./.miniclaw/"]
-        ConfigJSON["config.json (Overrides & Defaults)"]
-        ThreadsDir["/threads/ (Agent History)"]
-        WorkspaceDir["/workspace/ (Tooling Sandbox)"]
+    %% =============================================
+    subgraph FS ["📁 File System (.miniclaw)"]
+        MiniclawDir[".miniclaw/ (Root)"]
+        ConfigJSON["config.json"]
+        ThreadsDir["threads/ (History)"]
+        WorkspaceDir["workspace/ (Sandbox)"]
         
         MiniclawDir --- ConfigJSON
         MiniclawDir --- ThreadsDir
         MiniclawDir --- WorkspaceDir
         
-        ConfigSvc <-->|"Reads/Writes"| ConfigJSON
+        ConfigSvc <-->|"Read/Write"| ConfigJSON
         OnboardSvc -->|"Scaffolds"| ThreadsDir
         OnboardSvc -->|"Scaffolds"| WorkspaceDir
     end
 
-    classDef cli fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef svc fill:#bbf,stroke:#333,stroke-width:2px;
-    classDef core fill:#bfb,stroke:#333,stroke-width:2px;
-    classDef api fill:#fbf,stroke:#333,stroke-width:2px;
-    classDef fs fill:#ddd,stroke:#333,stroke-width:2px;
+    %% =============== Styling ===================
+    classDef cli fill:#1e3a8a, color:#fff, stroke:#60a5fa, stroke-width:3px, font-weight:bold;
+    classDef svc fill:#166534, color:#fff, stroke:#4ade80, stroke-width:3px;
+    classDef core fill:#4338ca, color:#fff, stroke:#818cf8, stroke-width:3px;
+    classDef api fill:#9f1239, color:#fff, stroke:#fb7185, stroke-width:3px;
+    classDef fs fill:#44403c, color:#f5f5f4, stroke:#d6d3d1, stroke-width:3px;
 
     class Index,GatewayCmd,OnboardCmd,GlobalErr cli;
     class GatewaySvc,OnboardSvc,ConfigSvc svc;
@@ -93,7 +104,9 @@ graph TD
 - **API Server**: Fast `hono/node-server` exposing a REST health check and an SSE (Server-Sent Events) event stream.
 
 ## Upcoming Milestones
+
 *(To be mapped into the architecture diagram as they are built)*
+
 - [ ] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenRouter, local models).
 - [ ] **Persistence Layer**: SQLite schema + Drizzle ORM to persist the `MessageBus` to `.miniclaw/threads/`.
 - [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.
