@@ -1,32 +1,32 @@
 import { ZodIssue } from "zod";
 
 export class MiniclawError extends Error {
-	constructor(message: string, options?: { cause?: unknown }) {
-		super(message, options);
-		this.name = this.constructor.name;
-		Error.captureStackTrace(this, this.constructor);
-	}
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = this.constructor.name;
+    Error.captureStackTrace(this, this.constructor);
+  }
 }
 
 export class ConfigLoadError extends MiniclawError {
-	constructor(
-		public readonly path: string,
-		public readonly cause: unknown,
-	) {
-		const causeMsg = cause instanceof Error ? cause.message : String(cause);
-		super(`Failed to load config at ${path}: ${causeMsg}`, { cause });
-	}
+  constructor(
+    public readonly path: string,
+    public readonly cause: unknown,
+  ) {
+    const causeMsg = cause instanceof Error ? cause.message : String(cause);
+    super(`Failed to load config at ${path}: ${causeMsg}`, { cause });
+  }
 }
 
 export class ConfigValidationError extends MiniclawError {
-	constructor(
-		public readonly issues: ZodIssue[],
-		public readonly path?: string,
-	) {
-		const summary = issues
-			.map((issue, i) => `${i + 1}. ${issue.path.join(".")}: ${issue.message}`)
-			.join("\n");
+  constructor(
+    public readonly issues: ZodIssue[],
+    public readonly path?: string,
+  ) {
+    const summary = issues
+      .map((issue, i) => `${i + 1}. ${issue.path.join(".")}: ${issue.message}`)
+      .join("\n");
 
-		super(`Configuration validation failed:\n${summary}`);
-	}
+    super(`Configuration validation failed:\n${summary}`);
+  }
 }

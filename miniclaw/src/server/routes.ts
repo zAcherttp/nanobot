@@ -4,34 +4,34 @@ import { BusMessage } from "../bus/types.js";
 import { randomUUID } from "node:crypto";
 
 export function createApiRouter(bus: MessageBus): Hono {
-	const app = new Hono();
+  const app = new Hono();
 
-	app.get("/health", (c) => {
-		return c.json({ status: "ok", timestamp: Date.now() });
-	});
+  app.get("/health", (c) => {
+    return c.json({ status: "ok", timestamp: Date.now() });
+  });
 
-	app.post("/messages", async (c) => {
-		try {
-			const body = await c.req.json();
+  app.post("/messages", async (c) => {
+    try {
+      const body = await c.req.json();
 
-			if (!body.content || typeof body.content !== "string") {
-				return c.json({ error: "Invalid content" }, 400);
-			}
+      if (!body.content || typeof body.content !== "string") {
+        return c.json({ error: "Invalid content" }, 400);
+      }
 
-			const message: BusMessage = {
-				id: randomUUID(),
-				role: "user",
-				content: body.content,
-				timestamp: Date.now(),
-			};
+      const message: BusMessage = {
+        id: randomUUID(),
+        role: "user",
+        content: body.content,
+        timestamp: Date.now(),
+      };
 
-			bus.publishInbound(message);
+      bus.publishInbound(message);
 
-			return c.json({ status: "received", messageId: message.id });
-		} catch (e) {
-			return c.json({ error: "Invalid payload" }, 400);
-		}
-	});
+      return c.json({ status: "received", messageId: message.id });
+    } catch (e) {
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+  });
 
-	return app;
+  return app;
 }

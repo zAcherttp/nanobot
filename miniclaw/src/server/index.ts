@@ -6,22 +6,22 @@ import { createApiRouter } from "./routes.js";
 import { createSSERouter } from "./sse.js";
 
 export function createServer(bus: MessageBus): Hono {
-	const app = new Hono();
+  const app = new Hono();
 
-	// Open CORS as requested for local WebUI development
-	app.use(
-		"*",
-		cors({
-			origin: "*",
-		}),
-	);
-	app.use("*", logger());
+  // Open CORS as requested for local WebUI development
+  app.use(
+    "*",
+    cors({
+      origin: "*",
+    }),
+  );
+  app.use("*", logger());
 
-	const apiRouter = createApiRouter(bus);
-	const sseRouter = createSSERouter(bus);
+  const apiRouter = createApiRouter(bus);
+  const sseRouter = createSSERouter(bus);
 
-	app.route("/api", apiRouter);
-	app.route("/stream", sseRouter);
+  app.route("/api", apiRouter);
+  app.route("/stream", sseRouter);
 
-	return app;
+  return app;
 }
