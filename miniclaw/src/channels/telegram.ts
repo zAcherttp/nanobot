@@ -1,7 +1,7 @@
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { ThreadMessage, StreamDelta } from "@/bus/types";
+import type { StreamDelta, OutboundBusEvent } from "@/bus/types";
 import { logger } from "@/utils/logger";
 import { ulid } from "ulid";
 
@@ -48,10 +48,11 @@ export class TelegramChannel implements Channel {
       const userId = ctx.from.id.toString();
 
       this.bus.publishInbound({
-        id: ulid(),
-        role: "user",
-        content: text,
-        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: text,
+          timestamp: Date.now(),
+        },
         channel: this.name,
         userId: userId,
       });
@@ -90,15 +91,15 @@ export class TelegramChannel implements Channel {
     this.activeStreams.clear();
   }
 
-  public async handleOutbound(message: ThreadMessage): Promise<void> {
-    if (!this.bot || !message.userId) return;
+  public async handleOutbound(event: OutboundBusEvent): Promise<void> {
+    if (!this.bot || !event.userId) return;
 
-    const chatId = message.userId;
+    const chatId = event.userId;
     const content =
-      typeof message.content === "string"
-        ? message.content
-        : message.content
-            .map((c) => (c.type === "text" ? c.text : "[Media]"))
+      typeof event.message.content === "string"
+        ? event.message.content
+        : event.message.content
+            .map((c: any) => (c.type === "text" ? c.text : "[Media]"))
             .join("\n");
 
     const stream = this.activeStreams.get(chatId);

@@ -1,9 +1,18 @@
-export type {
-  MessageRole,
-  ThreadMessage,
-  ToolCall,
-  ContentBlock,
-} from "@/thread/schema";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+
+export type { AgentMessage };
+
+export interface InboundBusEvent {
+  message: AgentMessage;
+  channel?: string;
+  userId?: string;
+}
+
+export interface OutboundBusEvent {
+  message: AgentMessage;
+  channel?: string;
+  userId?: string;
+}
 
 export interface StreamDelta {
   id: string;

@@ -2,7 +2,7 @@ import { input } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { ThreadMessage, StreamDelta } from "@/bus/types";
+import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
 import { logger } from "@/utils/logger";
 import { ulid } from "ulid";
 
@@ -46,10 +46,11 @@ export class CliChannel implements Channel {
 
         // We send it to the bus
         this.bus.publishInbound({
-          id: ulid(),
-          role: "user",
-          content: text.trim(),
-          timestamp: new Date().toISOString(),
+          message: {
+            role: "user",
+            content: text.trim(),
+            timestamp: Date.now(),
+          },
           channel: this.name,
         });
 
@@ -77,14 +78,14 @@ export class CliChannel implements Channel {
     }
   }
 
-  public async handleOutbound(message: ThreadMessage): Promise<void> {
+  public async handleOutbound(event: OutboundBusEvent): Promise<void> {
     // If we weren't streaming, we just print the full message
     if (!this.isStreaming) {
       const content =
-        typeof message.content === "string"
-          ? message.content
-          : message.content
-              .map((c) => (c.type === "text" ? c.text : "[Image]"))
+        typeof event.message.content === "string"
+          ? event.message.content
+          : event.message.content
+              .map((c: any) => (c.type === "text" ? c.text : "[Image]"))
               .join("\n");
 
       process.stdout.write(chalk.green("miniclaw > ") + content + "\n");

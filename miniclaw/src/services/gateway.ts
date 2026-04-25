@@ -7,6 +7,9 @@ import chalk from "chalk";
 import { ChannelRegistry } from "../channels/base";
 import { SseChannel } from "../channels/sse";
 import { TelegramChannel } from "../channels/telegram";
+import { PersistenceService } from "./persistence";
+import { FileSystemService } from "./fs";
+import { AgentLoop } from "../agent/loop";
 
 export class GatewayService {
   constructor(private readonly configService: ConfigService) {}
@@ -17,6 +20,13 @@ export class GatewayService {
 
     logger.info(chalk.cyan("Initializing Message Bus..."));
     const bus = new MessageBus();
+
+    logger.info(chalk.cyan("Initializing Persistence..."));
+    const fsService = new FileSystemService();
+    const persistenceSvc = new PersistenceService(
+      fsService,
+      this.configService,
+    );
 
     logger.info(chalk.cyan("Initializing Channel Registry..."));
     const registry = new ChannelRegistry(bus, config);
@@ -39,6 +49,10 @@ export class GatewayService {
     }
 
     await registry.startAll();
+
+    // Start Agent Core
+    const loop = new AgentLoop(bus, persistenceSvc, config);
+    loop.start();
 
     const server = await startGateway(config, bus, sseChannel);
 

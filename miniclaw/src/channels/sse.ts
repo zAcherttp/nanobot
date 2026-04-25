@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { ThreadMessage, StreamDelta } from "@/bus/types";
+import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
 import { logger } from "@/utils/logger";
 
 export class SseChannel implements Channel {
@@ -39,10 +39,11 @@ export class SseChannel implements Channel {
         }
 
         this.bus.publishInbound({
-          id: Date.now().toString(), // Will be overwritten by ThreadStorage
-          role: "user",
-          content: body.content,
-          timestamp: new Date().toISOString(),
+          message: {
+            role: "user",
+            content: body.content,
+            timestamp: Date.now(),
+          },
           channel: this.name,
         });
 
@@ -57,12 +58,12 @@ export class SseChannel implements Channel {
     this.streams.clear();
   }
 
-  public async handleOutbound(message: ThreadMessage): Promise<void> {
+  public async handleOutbound(event: OutboundBusEvent): Promise<void> {
     const promises = Array.from(this.streams).map((stream) =>
       stream
         .writeSSE({
           event: "message",
-          data: JSON.stringify(message),
+          data: JSON.stringify(event),
         })
         .catch(() => {
           this.streams.delete(stream);

@@ -31,6 +31,12 @@ export const ThreadConfigSchema = z.object({
   idleCompactAfterMinutes: z.number().int().min(0).default(0),
   maxTokens: z.number().int().positive().default(8192),
   temperature: z.number().min(0).max(2).default(0.1),
+  apiKeys: z
+    .object({
+      openai: z.string().optional(),
+      anthropic: z.string().optional(),
+    })
+    .default({}),
   store: z
     .object({
       type: z.literal("file").default("file"),

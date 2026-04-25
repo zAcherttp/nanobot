@@ -2,8 +2,9 @@ import { ConfigService } from "./config";
 import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
 import { CliChannel } from "../channels/cli";
-import { ThreadStorageService } from "./thread";
+import { PersistenceService } from "./persistence";
 import { FileSystemService } from "./fs";
+import { AgentLoop } from "../agent/loop";
 import { logger } from "../utils/logger";
 import chalk from "chalk";
 
@@ -17,9 +18,12 @@ export class AgentService {
     logger.info(chalk.cyan("Initializing Message Bus..."));
     const bus = new MessageBus();
 
-    logger.info(chalk.cyan("Initializing Thread Storage..."));
+    logger.info(chalk.cyan("Initializing Persistence..."));
     const fsService = new FileSystemService();
-    const threadSvc = new ThreadStorageService(fsService, this.configService);
+    const persistenceSvc = new PersistenceService(
+      fsService,
+      this.configService,
+    );
 
     logger.info(chalk.cyan("Initializing Channel Registry - CLI ..."));
     const registry = new ChannelRegistry(bus, config);
@@ -29,42 +33,9 @@ export class AgentService {
 
     await registry.startAll();
 
-    // --- AGENT CORE STUB ---
-    // We wire up a temporary loop so the CLI doesn't exit and messages are saved.
-    bus.subscribeInbound(async (msg) => {
-      try {
-        const thread = await threadSvc.getConversationThread();
-
-        // Persist user message
-        await threadSvc.appendMessage(thread.id, {
-          role: "user",
-          content: msg.content,
-        });
-
-        // Fake Agent delay to simulate thinking
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
-        const response = "I am a stub agent. You said: " + msg.content;
-
-        // Persist agent message
-        await threadSvc.appendMessage(thread.id, {
-          role: "assistant",
-          content: response,
-        });
-
-        // Send back to channel
-        bus.publishOutbound({
-          id: "stub-" + Date.now(),
-          role: "assistant",
-          content: response,
-          timestamp: new Date().toISOString(),
-          channel: msg.channel,
-          userId: msg.userId,
-        });
-      } catch (err) {
-        logger.error({ err }, "Stub Agent encountered an error");
-      }
-    });
+    // Start Agent Core
+    const loop = new AgentLoop(bus, persistenceSvc, config);
+    loop.start();
 
     // Graceful shutdown
     process.on("SIGINT", async () => {

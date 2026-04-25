@@ -1,4 +1,4 @@
-import type { ThreadMessage, StreamDelta } from "@/bus/types";
+import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
 import type { MessageBus } from "@/bus/index";
 import { logger } from "@/utils/logger";
 import type { AppConfig } from "@/config/schema";
@@ -19,7 +19,7 @@ export interface Channel {
   /**
    * Handle an outgoing message from the Agent
    */
-  handleOutbound(message: ThreadMessage): Promise<void>;
+  handleOutbound(event: OutboundBusEvent): Promise<void>;
 
   /**
    * Handle streaming deltas from the Agent (optional)

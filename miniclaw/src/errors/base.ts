@@ -40,13 +40,20 @@ export class ThreadNotFoundError extends MiniclawError {
 }
 
 export class ThreadCorruptedError extends MiniclawError {
-  constructor(threadId: string, cause?: unknown) {
-    super(`Thread data corrupted: ${threadId}`, { cause });
+  constructor(
+    threadId: string,
+    details?: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `Thread data corrupted: ${threadId}${details ? ` - ${details}` : ""}`,
+      options,
+    );
   }
 }
 
 export class ThreadWriteError extends MiniclawError {
-  constructor(threadId: string, cause?: unknown) {
-    super(`Failed to write to thread: ${threadId}`, { cause });
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
   }
 }
