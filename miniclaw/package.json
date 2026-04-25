@@ -1,0 +1,27 @@
+{
+	"name": "miniclaw",
+	"version": "1.0.0",
+	"description": "Next generation core of nanobot",
+	"main": "dist/index.js",
+	"type": "module",
+	"scripts": {
+		"dev": "tsx src/index.ts",
+		"build": "tsc",
+		"test": "vitest run",
+		"check": "biome format --write ."
+	},
+	"dependencies": {
+		"@hono/node-server": "^2.0.0",
+		"citty": "^0.2.2",
+		"dotenv": "^16.6.1",
+		"hono": "^4.12.15",
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.13",
+		"@types/node": "^20.19.39",
+		"tsx": "^4.21.0",
+		"typescript": "^5.9.3",
+		"vitest": "^1.6.1"
+	}
+}
