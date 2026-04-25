@@ -27,12 +27,15 @@ graph TD
         GatewaySvc["GatewayService"]
         OnboardSvc["OnboardService"]
         ConfigSvc["ConfigService<br/>(Zod + Validation)"]
+        FileSystemSvc["FileSystemService<br/>(Cross-Platform)"]
         
         GatewayCmd -->|"Instantiates"| GatewaySvc
         OnboardCmd -->|"Instantiates"| OnboardSvc
         
         GatewaySvc -->|"Uses"| ConfigSvc
         OnboardSvc -->|"Uses"| ConfigSvc
+        OnboardSvc -->|"Uses"| FileSystemSvc
+        ConfigSvc -->|"Uses"| FileSystemSvc
     end
 
     %% =============================================
@@ -87,7 +90,7 @@ graph TD
     classDef fs fill:#44403c, color:#f5f5f4, stroke:#d6d3d1, stroke-width:3px;
 
     class Index,GatewayCmd,OnboardCmd,GlobalErr cli;
-    class GatewaySvc,OnboardSvc,ConfigSvc svc;
+    class GatewaySvc,OnboardSvc,ConfigSvc,FileSystemSvc svc;
     class Bus,Logger core;
     class HonoApp,SSE,Health api;
     class MiniclawDir,ConfigJSON,ThreadsDir,WorkspaceDir fs;
@@ -98,7 +101,8 @@ graph TD
 - **CLI Shell**: `commander` router with globally abstracted error handling.
 - **Build System**: `tsdown` (Rolldown/Vite) outputting an ultra-fast, extensionless native `.mjs` ESM bundle.
 - **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, and `ConfigService`.
-- **Intelligent Config**: Automatic relative path resolution bound natively to the `.miniclaw/` working directory, validated via `zod`.
+- **Cross-Platform FS**: `FileSystemService` with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
+- **Intelligent Config**: Automatic relative path resolution bound natively to the dynamic `.`+`appName` working directory, validated via `zod`.
 - **Logging**: Asynchronous-blocking `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
 - **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) ready to sync the Gateway API and the background Agent loop.
 - **API Server**: Fast `hono/node-server` exposing a REST health check and an SSE (Server-Sent Events) event stream.
