@@ -3,9 +3,9 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { MessageBus } from "../bus/index";
 import { createApiRouter } from "./routes";
-import { createSSERouter } from "./sse";
+import type { SseChannel } from "../channels/sse";
 
-export function createServer(bus: MessageBus): Hono {
+export function createServer(bus: MessageBus, sseChannel?: SseChannel): Hono {
   const app = new Hono();
 
   // Open CORS as requested for local WebUI development
@@ -18,10 +18,11 @@ export function createServer(bus: MessageBus): Hono {
   app.use("*", logger());
 
   const apiRouter = createApiRouter(bus);
-  const sseRouter = createSSERouter(bus);
-
   app.route("/api", apiRouter);
-  app.route("/stream", sseRouter);
+
+  if (sseChannel) {
+    app.route("/api/sse", sseChannel.router);
+  }
 
   return app;
 }

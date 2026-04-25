@@ -15,9 +15,11 @@ graph TD
         
         Index --> GatewayCmd["gateway command"]
         Index --> OnboardCmd["onboard command"]
+        Index --> AgentCmd["agent command"]
         
         GatewayCmd -.->|"Catches & Handles"| GlobalErr
         OnboardCmd -.->|"Catches & Handles"| GlobalErr
+        AgentCmd -.->|"Catches & Handles"| GlobalErr
     end
 
     %% =============================================
@@ -26,14 +28,20 @@ graph TD
     subgraph Services ["⚙️ Service Layer (Business Logic)"]
         GatewaySvc["GatewayService"]
         OnboardSvc["OnboardService"]
+        AgentSvc["AgentService"]
         ConfigSvc["ConfigService<br/>(Zod + Validation)"]
         FileSystemSvc["FileSystemService<br/>(Cross-Platform)"]
         ThreadSvc["ThreadStorageService<br/>(JSONL + Compaction)"]
+        ChannelReg["ChannelRegistry<br/>(Adapter Router)"]
         
         GatewayCmd -->|"Instantiates"| GatewaySvc
         OnboardCmd -->|"Instantiates"| OnboardSvc
+        AgentCmd -->|"Instantiates"| AgentSvc
         
         GatewaySvc -->|"Uses"| ConfigSvc
+        GatewaySvc -->|"Uses"| ChannelReg
+        AgentSvc -->|"Uses"| ConfigSvc
+        AgentSvc -->|"Uses"| ChannelReg
         OnboardSvc -->|"Uses"| ConfigSvc
         OnboardSvc -->|"Uses"| FileSystemSvc
         ConfigSvc -->|"Uses"| FileSystemSvc
@@ -53,18 +61,28 @@ graph TD
     end
 
     %% =============================================
+    %% Channel Adapters Layer
+    %% =============================================
+    subgraph Channels ["📡 Channel Adapters"]
+        CliCh["CliChannel<br/>(readline)"]
+        SseCh["SseChannel<br/>(REST + SSE)"]
+        TgCh["TelegramChannel<br/>(Grammy)"]
+        
+        ChannelReg -->|"Registers"| CliCh & SseCh & TgCh
+        CliCh & SseCh & TgCh <-->|"Pub/Sub"| Bus
+    end
+
+    %% =============================================
     %% Gateway & API Layer
     %% =============================================
     subgraph API ["🌐 API Runtime (Hono)"]
         HonoApp["Hono Server"]
-        SSE["SSE Broadcaster<br/>(/stream)"]
         Health["Health Check<br/>(/api/health)"]
         
         GatewaySvc -->|"Boots"| HonoApp
-        HonoApp --> SSE
         HonoApp --> Health
         
-        HonoApp <-->|"Pub/Sub Events"| Bus
+        SseCh -->|"Mounts /stream, /chat"| HonoApp
     end
 
     %% =============================================
@@ -93,10 +111,13 @@ graph TD
     classDef api fill:#9f1239, color:#fff, stroke:#fb7185, stroke-width:3px;
     classDef fs fill:#44403c, color:#f5f5f4, stroke:#d6d3d1, stroke-width:3px;
 
-    class Index,GatewayCmd,OnboardCmd,GlobalErr cli;
-    class GatewaySvc,OnboardSvc,ConfigSvc,FileSystemSvc,ThreadSvc svc;
+    classDef ch fill:#9d174d, color:#fff, stroke:#f43f5e, stroke-width:3px;
+
+    class Index,GatewayCmd,OnboardCmd,AgentCmd,GlobalErr cli;
+    class GatewaySvc,OnboardSvc,AgentSvc,ConfigSvc,FileSystemSvc,ThreadSvc,ChannelReg svc;
     class Bus,Logger core;
-    class HonoApp,SSE,Health api;
+    class CliCh,SseCh,TgCh ch;
+    class HonoApp,Health api;
     class MiniclawDir,ConfigJSON,ThreadsDir,WorkspaceDir fs;
 ```
 
@@ -108,16 +129,17 @@ graph TD
 - **Cross-Platform FS**: `FileSystemService` with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
 - **Intelligent Config**: Automatic relative path resolution bound natively to the dynamic `.`+`appName` working directory, validated via `zod`.
 - **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with tool-call-pending deferral.
+- **Channel Registry**: Standardized `Channel` adapter interface with active implementations for CLI (`readline`), SSE (REST + Hono SSE stream), and Telegram (`grammy` with debounce streaming).
 - **Logging**: Synchronous `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
 - **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) with `ThreadMessage` types aligned to pi-agent-core.
-- **API Server**: Fast `hono/node-server` exposing a REST health check and an SSE (Server-Sent Events) event stream.
+- **API Server**: Fast `hono/node-server` exposing a REST health check and dynamic channel endpoints.
 
 ## Upcoming Milestones
 
 *(To be mapped into the architecture diagram as they are built)*
 
 - [x] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers.
-- [ ] **Channel Registry**: Formalized channel adapters (Telegram, SSE, REST) with ingress/egress event routing.
+- [x] **Channel Registry**: Formalized channel adapters (Telegram, SSE, CLI) with ingress/egress event routing.
 - [ ] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenRouter, local models).
 - [ ] **Compaction Service**: LLM-powered summarization for conversation thread compaction.
 - [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.

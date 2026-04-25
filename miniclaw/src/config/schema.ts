@@ -45,11 +45,34 @@ export const LoggingConfigSchema = z.object({
   console: z.boolean().default(false),
 });
 
+export const ChannelsConfigSchema = z
+  .object({
+    telegram: z
+      .object({
+        enabled: z.boolean().default(false),
+        botToken: z.string().optional(),
+        allowedUsers: z.array(z.string()).default([]),
+      })
+      .default({}),
+    cli: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
+    sse: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .default({}),
+  })
+  .default({});
+
 export const AppConfigSchema = z.object({
   workspace: WorkspaceConfigSchema.default({}),
   gateway: GatewayConfigSchema.default({}),
   thread: ThreadConfigSchema.default({}),
   logging: LoggingConfigSchema.default({}),
+  channels: ChannelsConfigSchema.default({}),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
