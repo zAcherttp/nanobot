@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { MessageBus } from "../bus/index.js";
-import { BusMessage } from "../bus/types.js";
+import { MessageBus } from "../bus/index";
+import { BusMessage } from "../bus/types";
 import { randomUUID } from "node:crypto";
 
 export function createApiRouter(bus: MessageBus): Hono {

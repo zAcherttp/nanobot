@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
-import { MessageBus } from "../bus/index.js";
+import { MessageBus } from "../bus/index";
 
 export function createSSERouter(bus: MessageBus): Hono {
   const app = new Hono();

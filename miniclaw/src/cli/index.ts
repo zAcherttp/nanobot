@@ -2,8 +2,9 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gatewayCommand } from "./commands/gateway.js";
-import { onboardCommand } from "./commands/onboard.js";
+import chalk from "chalk";
+import { gatewayCommand } from "./commands/gateway";
+import { onboardCommand } from "./commands/onboard";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +28,13 @@ try {
 }
 
 export const program = new Command();
+
+program.configureOutput({
+  writeErr: (str) => {
+    console.error(chalk.red(str.trim()));
+    console.info(chalk.yellow("Use --help for usage instructions!"));
+  },
+});
 
 program.name(pkgName).description(pkgDescription).version(pkgVersion);
 

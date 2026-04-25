@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { BusMessage, StreamDelta } from "./types.js";
+import { BusMessage, StreamDelta } from "./types";
 
 export class MessageBus extends EventEmitter {
   constructor() {

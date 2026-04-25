@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { MessageBus } from "../bus/index.js";
-import { createApiRouter } from "./routes.js";
-import { createSSERouter } from "./sse.js";
+import { MessageBus } from "../bus/index";
+import { createApiRouter } from "./routes";
+import { createSSERouter } from "./sse";
 
 export function createServer(bus: MessageBus): Hono {
   const app = new Hono();

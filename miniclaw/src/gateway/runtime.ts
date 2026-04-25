@@ -1,13 +1,15 @@
 import { serve } from "@hono/node-server";
-import { AppConfig } from "../config/schema.js";
-import { MessageBus } from "../bus/index.js";
-import { createServer } from "../server/index.js";
+import { AppConfig } from "../config/schema";
+import { MessageBus } from "../bus/index";
+import { createServer } from "../server/index";
+import { logger } from "../utils/logger";
+import chalk from "chalk";
 
 export async function startGateway(config: AppConfig, bus: MessageBus) {
   const app = createServer(bus);
   const port = config.gateway.port;
 
-  console.log(`Starting miniclaw unified gateway on port ${port}...`);
+  logger.info(`Starting miniclaw unified gateway on port ${port}...`);
 
   const server = serve({
     fetch: app.fetch,
@@ -15,9 +17,15 @@ export async function startGateway(config: AppConfig, bus: MessageBus) {
   });
 
   server.on("listening", () => {
-    console.log(`Server is running at http://localhost:${port}`);
-    console.log(`- Health check: http://localhost:${port}/api/health`);
-    console.log(`- SSE Stream:   http://localhost:${port}/stream`);
+    logger.info(
+      `Server is running at ${chalk.blue(`http://localhost:${port}`)}`,
+    );
+    logger.info(
+      `- Health check: ${chalk.cyan(`http://localhost:${port}/api/health`)}`,
+    );
+    logger.info(
+      `- SSE Stream:   ${chalk.cyan(`http://localhost:${port}/stream`)}`,
+    );
   });
 
   // Future Agent instantiation will be wired to the bus here
