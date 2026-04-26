@@ -33,8 +33,10 @@ export const ThreadConfigSchema = z.object({
   temperature: z.number().min(0).max(2).default(0.1),
   apiKeys: z
     .object({
-      openai: z.string().optional(),
-      anthropic: z.string().optional(),
+      openai: z.string().default(""),
+      anthropic: z.string().default(""),
+      ollama: z.string().default(""),
+      nvidia: z.string().default(""),
     })
     .default({}),
   store: z

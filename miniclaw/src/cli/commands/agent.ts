@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { AgentService } from "../../services/agent";
+import { CliAgentService } from "../../services/cli_agent";
 import { ConfigService } from "../../services/config";
 import { FileSystemService } from "../../services/fs";
 import { pkgName } from "@/utils/pkg";
@@ -11,7 +11,7 @@ export function agentCommand() {
     .action(async (options) => {
       const fsService = new FileSystemService(pkgName);
       const configService = new ConfigService(fsService);
-      const agentService = new AgentService(configService);
+      const agentService = new CliAgentService(configService);
 
       await agentService.execute(options.config);
     });

@@ -28,10 +28,10 @@ graph TD
     subgraph Services ["⚙️ Service Layer (Business Logic)"]
         GatewaySvc["GatewayService"]
         OnboardSvc["OnboardService"]
-        AgentSvc["AgentService"]
+        AgentSvc["CliAgentService"]
         ConfigSvc["ConfigService<br/>(Zod + Validation)"]
         FileSystemSvc["FileSystemService<br/>(Cross-Platform)"]
-        ThreadSvc["ThreadStorageService<br/>(JSONL + Compaction)"]
+        ThreadSvc["PersistenceService<br/>(JSONL + Compaction)"]
         ChannelReg["ChannelRegistry<br/>(Adapter Router)"]
         
         GatewayCmd -->|"Instantiates"| GatewaySvc
@@ -125,14 +125,22 @@ graph TD
 
 - **CLI Shell**: `commander` router with globally abstracted error handling.
 - **Build System**: `tsdown` (Rolldown/Vite) outputting an ultra-fast, extensionless native `.mjs` ESM bundle.
-- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, `ConfigService`, and `ThreadStorageService`.
+- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, `ConfigService`, `PersistenceService`, and `CliAgentService`.
 - **Cross-Platform FS**: `FileSystemService` with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
 - **Intelligent Config**: Automatic relative path resolution bound natively to the dynamic `.`+`appName` working directory, validated via `zod`.
-- **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with tool-call-pending deferral.
+- **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. Type-based folder naming (`conversation/`, `system/`), JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with tool-call-pending deferral.
 - **Channel Registry**: Standardized `Channel` adapter interface with active implementations for CLI (`readline`), SSE (REST + Hono SSE stream), and Telegram (`grammy` with debounce streaming).
 - **Logging**: Synchronous `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
 - **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) with `ThreadMessage` types aligned to pi-agent-core.
 - **API Server**: Fast `hono/node-server` exposing a REST health check and dynamic channel endpoints.
+- **LLM Provider Support**: Multi-provider support with OpenAI, Anthropic, Ollama, and NVIDIA APIs. Dictionary-based provider configuration for easy extensibility.
+- **Channel Controls**: Per-channel enable/disable configuration with proper validation and error messaging.
+
+## Recent Improvements
+
+- **Thread Naming**: Migrated from ULID-based thread IDs to type-based folder names (`conversation/`, `system/`) for clearer file system organization.
+- **Provider Configuration**: Refactored provider resolution to use dictionaries instead of if-else chains, making it easier to add new providers.
+- **CLI Channel Validation**: Added disabled check for CLI channel with clear error messaging when attempting to use disabled channels.
 
 ## Upcoming Milestones
 
@@ -140,6 +148,6 @@ graph TD
 
 - [x] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers.
 - [x] **Channel Registry**: Formalized channel adapters (Telegram, SSE, CLI) with ingress/egress event routing.
-- [ ] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenRouter, local models).
+- [x] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenAI, Anthropic, Ollama, NVIDIA).
 - [ ] **Compaction Service**: LLM-powered summarization for conversation thread compaction.
 - [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.

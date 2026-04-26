@@ -27,9 +27,6 @@ export async function startGateway(
     logger.info(
       `- Health check: ${chalk.cyan(`http://localhost:${port}/api/health`)}`,
     );
-    logger.info(
-      `- SSE Stream:   ${chalk.cyan(`http://localhost:${port}/stream`)}`,
-    );
   });
 
   // Future Agent instantiation will be wired to the bus here

@@ -1,7 +1,7 @@
 import type { ConfigService } from "./config";
 import { MessageBus } from "../bus/index";
 import { startGateway } from "../gateway/runtime";
-import { logger } from "../utils/logger";
+import { configureLogger, logger } from "../utils/logger";
 import chalk from "chalk";
 
 import { ChannelRegistry } from "../channels/base";
@@ -17,6 +17,7 @@ export class GatewayService {
   public async execute(configPath?: string): Promise<void> {
     logger.info(chalk.cyan("Loading Miniclaw configuration..."));
     const config = await this.configService.load({ configPath });
+    configureLogger(config.logging.level);
 
     logger.info(chalk.cyan("Initializing Message Bus..."));
     const bus = new MessageBus();

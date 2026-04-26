@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { ulid } from "ulid";
 import { FileSystemService } from "./fs";
 import { ConfigService } from "./config";
 import { logger } from "@/utils/logger";
@@ -18,7 +17,7 @@ export type ThreadType = "conversation" | "system";
 export type ThreadStatus = "active" | "archived" | "compacted";
 
 export interface ThreadMeta {
-  id: string; // Always ULID
+  id: string; // Thread type name (e.g., "conversation", "system")
   type: ThreadType;
   title: string;
   status: ThreadStatus;
@@ -79,7 +78,7 @@ export class PersistenceService {
   public async createThread(
     input: Pick<ThreadMeta, "type" | "title" | "metadata">,
   ): Promise<ThreadMeta> {
-    const threadId = ulid();
+    const threadId = input.type; // Use thread type as folder name
     const threadPath = path.join(this.threadsDir, threadId);
 
     try {
