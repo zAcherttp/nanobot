@@ -95,7 +95,6 @@ export class ChannelRegistry {
       }
     }
     if (stopped.length > 0) {
-      process.stdout.write("\n");
       logger.info(`Stopped channel(s): ${stopped.join(", ")}`);
     }
   }

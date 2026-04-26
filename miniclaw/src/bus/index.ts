@@ -2,9 +2,9 @@ import { EventEmitter } from "node:events";
 import type { InboundBusEvent, OutboundBusEvent, StreamDelta } from "./types";
 
 export class MessageBus extends EventEmitter {
-  constructor() {
-    super();
-  }
+  // constructor() {
+  //   super();
+  // }
 
   // Frontend to Agent
   publishInbound(event: InboundBusEvent): void {

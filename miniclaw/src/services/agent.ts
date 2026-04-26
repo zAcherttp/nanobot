@@ -1,4 +1,4 @@
-import { ConfigService } from "./config";
+import type { ConfigService } from "./config";
 import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
 import { CliChannel } from "../channels/cli";
