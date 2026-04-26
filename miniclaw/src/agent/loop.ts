@@ -1,11 +1,13 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel, registerBuiltInApiProviders } from "@mariozechner/pi-ai";
-import { buildSystemPrompt } from "./context";
-import type { MessageBus } from "@/bus/index";
-import type { PersistenceService } from "@/services/persistence";
-import type { AppConfig } from "@/config/schema";
-import { logger } from "@/utils/logger";
 import { ulid } from "ulid";
+import path from "node:path";
+import type { MessageBus } from "@/bus/index";
+import type { AppConfig } from "@/config/schema";
+import type { PersistenceService } from "@/services/persistence";
+import { logger } from "@/utils/logger";
+import { CompactionService } from "./compaction";
+import { buildSystemPrompt } from "./context";
 
 // Ensure built-in pi-ai providers (OpenAI, Anthropic, etc.) are registered
 registerBuiltInApiProviders();
@@ -62,12 +64,55 @@ export class AgentLoop {
 
     // 2. Load context
     const messages = await this.persistence.getMessages(thread.id);
+    const threadMeta = await this.persistence.getThread(thread.id);
+
+    // 3. Check and perform compaction if needed
+    const compaction = new CompactionService(
+      this.bus,
+      this.config.thread.compaction,
+      this.persistence,
+    );
+
+    const {
+      compacted,
+      messages: compactedMessages,
+      summary,
+    } = await compaction.compactIfNeeded(
+      messages,
+      this.config.thread.contextWindowTokens,
+      thread.id,
+      channel,
+      userId,
+    );
+
+    if (compacted && summary) {
+      // Save summary to file
+      await this.persistence.saveSummary(thread.id, summary);
+
+      // Update thread metadata
+      await this.persistence.updateMeta(thread.id, {
+        summary,
+        lastCompactedAt: new Date().toISOString(),
+        status: "compacted",
+      });
+
+      // Save compacted messages
+      await this.persistence.saveMessages(thread.id, compactedMessages);
+    }
+
+    // 4. Build system prompt with summary
+    const threadPath = path.join(
+      this.config.workspace.path,
+      "threads",
+      thread.id,
+    );
     const systemPrompt = await buildSystemPrompt({
       workspacePath: this.config.workspace.path,
+      threadPath,
       channel,
     });
 
-    // 3. Resolve Provider & API Key
+    // 5. Resolve Provider & API Key
     const providerStr = this.config.thread.provider as any;
     const modelIdStr = this.config.thread.modelId;
     let model;
@@ -124,17 +169,17 @@ export class AgentLoop {
       return apiKey || (provider === "ollama" ? "ollama" : undefined);
     };
 
-    // 4. Initialize pi-agent-core Agent
+    // 6. Initialize pi-agent-core Agent
     const agent = new Agent({
       initialState: {
         model,
         systemPrompt,
-        messages,
+        messages: compactedMessages,
         thinkingLevel: "off",
       },
       getApiKey,
       transformContext: async (msgs) => {
-        // TODO: Summarization/Compaction logic will go here
+        // TODO: Additional context transformation logic if needed
         return msgs;
       },
     });

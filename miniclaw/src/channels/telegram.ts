@@ -1,32 +1,23 @@
 import { Bot, GrammyError, HttpError } from "grammy";
-import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { StreamDelta, OutboundBusEvent } from "@/bus/types";
+import type { EditBusEvent, OutboundBusEvent, StreamDelta } from "@/bus/types";
 import { logger } from "@/utils/logger";
+import type { Channel } from "./base";
 
-type DraftStreamState = {
-  mode: "draft";
+type StreamMode = "draft" | "message";
+
+type StreamState = {
+  mode: StreamMode;
   streamId: string;
   targetChatId: string;
-  draftId: number;
   text: string;
   lastSendAt: number;
   timeoutId?: NodeJS.Timeout;
   pendingFlush: boolean;
+  // Mode-specific fields
+  draftId?: number;
+  messageId?: number;
 };
-
-type MessageStreamState = {
-  mode: "message";
-  streamId: string;
-  targetChatId: string;
-  messageId: number;
-  text: string;
-  lastSendAt: number;
-  timeoutId?: NodeJS.Timeout;
-  pendingFlush: boolean;
-};
-
-type StreamState = DraftStreamState | MessageStreamState;
 
 export class TelegramChannel implements Channel {
   public readonly name = "telegram";
@@ -50,6 +41,13 @@ export class TelegramChannel implements Channel {
 
   public async start(): Promise<void> {
     this.bot = new Bot(this.token);
+
+    // Subscribe to edit events
+    this.bus.subscribeEdit(async (event: EditBusEvent) => {
+      if (event.channel === this.name) {
+        await this.handleEdit(event);
+      }
+    });
 
     this.bot.use(async (ctx, next) => {
       const userId = ctx.from?.id.toString();
@@ -131,48 +129,7 @@ export class TelegramChannel implements Channel {
       if (stream) {
         if (stream.timeoutId) clearTimeout(stream.timeoutId);
 
-        try {
-          if (stream.mode === "draft") {
-            // Draft stream is ephemeral; emit one final persisted message.
-            await this.sendMarkdownV2Message(bot, stream.targetChatId, content);
-          } else {
-            // Always finalize with an edit in case the last debounced preview differs.
-            await this.editMarkdownV2Message(
-              bot,
-              stream.targetChatId,
-              stream.messageId,
-              content,
-            );
-          }
-        } catch (err) {
-          if (this.isMessageNotModifiedError(err)) {
-            // Already finalized.
-          } else {
-            logger.error(
-              { err },
-              `Failed to finalize telegram stream for route ${routeKey}`,
-            );
-            try {
-              await this.sendMarkdownV2Message(
-                bot,
-                stream.targetChatId,
-                content,
-              );
-            } catch (sendErr) {
-              logger.error(
-                { err: sendErr },
-                `Failed to send fallback telegram message to ${stream.targetChatId}`,
-              );
-            }
-          }
-        } finally {
-          this.closedStreams.set(routeKey, {
-            streamId: stream.streamId,
-            closedAt: Date.now(),
-          });
-          this.activeStreams.delete(routeKey);
-        }
-
+        await this.finalizeStream(bot, stream, content, routeKey);
         return;
       }
 
@@ -204,81 +161,92 @@ export class TelegramChannel implements Channel {
     const bot = this.bot;
     if (!bot) return;
 
-    const closed = this.closedStreams.get(routeKey);
-    if (closed) {
-      const expired =
-        Date.now() - closed.closedAt > TelegramChannel.CLOSED_STREAM_TTL_MS;
-      if (expired) {
-        this.closedStreams.delete(routeKey);
-      } else if (closed.streamId === delta.id) {
-        return;
-      }
-    }
+    if (this.shouldSkipStream(routeKey, delta)) return;
 
     const targetChatId = this.resolveTargetChatId(routeKey);
     const stream = this.activeStreams.get(routeKey);
 
     if (!stream || stream.targetChatId !== targetChatId) {
-      if (stream?.timeoutId) {
-        clearTimeout(stream.timeoutId);
-      }
-
-      this.closedStreams.delete(routeKey);
-
-      const initialText = delta.delta || "...";
-      const draftId = this.toDraftId(delta.id);
-      const usedDraft = await this.trySendMarkdownV2Draft(
-        bot,
-        targetChatId,
-        draftId,
-        initialText,
-      );
-
-      if (usedDraft) {
-        this.activeStreams.set(routeKey, {
-          mode: "draft",
-          streamId: delta.id,
-          targetChatId,
-          draftId,
-          text: initialText,
-          lastSendAt: Date.now(),
-          pendingFlush: false,
-        });
-        return;
-      }
-
-      try {
-        const messageId = await this.sendMarkdownV2Message(
-          bot,
-          targetChatId,
-          initialText,
-        );
-        this.activeStreams.set(routeKey, {
-          mode: "message",
-          streamId: delta.id,
-          targetChatId,
-          messageId,
-          text: initialText,
-          lastSendAt: Date.now(),
-          pendingFlush: false,
-        });
-      } catch (err) {
-        logger.error(
-          { err },
-          `Failed to send initial stream draft to ${targetChatId}`,
-        );
-      }
-
+      await this.createNewStream(bot, routeKey, targetChatId, delta);
       return;
     }
 
-    if (stream.streamId !== delta.id) {
-      // Keep one active stream per route while tolerating stream id churn.
-      stream.streamId = delta.id;
+    this.updateStreamState(stream, delta);
+    await this.scheduleStreamFlush(routeKey);
+  }
+
+  private shouldSkipStream(routeKey: string, delta: StreamDelta): boolean {
+    const closed = this.closedStreams.get(routeKey);
+    if (!closed) return false;
+
+    const expired =
+      Date.now() - closed.closedAt > TelegramChannel.CLOSED_STREAM_TTL_MS;
+    if (expired) {
+      this.closedStreams.delete(routeKey);
+      return false;
     }
 
+    return closed.streamId === delta.id;
+  }
+
+  private async createNewStream(
+    bot: Bot,
+    routeKey: string,
+    targetChatId: string,
+    delta: StreamDelta,
+  ): Promise<void> {
+    const existing = this.activeStreams.get(routeKey);
+    if (existing?.timeoutId) clearTimeout(existing.timeoutId);
+    this.closedStreams.delete(routeKey);
+
+    const initialText = delta.delta || "...";
+    const draftId = this.toDraftId(delta.id);
+
+    const usedDraft = await this.trySendMarkdownV2Draft(
+      bot,
+      targetChatId,
+      draftId,
+      initialText,
+    );
+
+    this.activeStreams.set(routeKey, {
+      mode: usedDraft ? "draft" : "message",
+      streamId: delta.id,
+      targetChatId,
+      draftId: usedDraft ? draftId : undefined,
+      messageId: usedDraft
+        ? undefined
+        : await this.trySendMessage(bot, targetChatId, initialText),
+      text: initialText,
+      lastSendAt: Date.now(),
+      pendingFlush: false,
+    });
+  }
+
+  private async trySendMessage(
+    bot: Bot,
+    chatId: string,
+    text: string,
+  ): Promise<number | undefined> {
+    try {
+      return await this.sendMarkdownV2Message(bot, chatId, text);
+    } catch (err) {
+      logger.error({ err }, `Failed to send initial stream draft to ${chatId}`);
+      return undefined;
+    }
+  }
+
+  private updateStreamState(stream: StreamState, delta: StreamDelta): void {
+    if (stream.streamId !== delta.id) {
+      stream.streamId = delta.id;
+    }
     stream.text += delta.delta;
     stream.pendingFlush = true;
+  }
+
+  private async scheduleStreamFlush(routeKey: string): Promise<void> {
+    const stream = this.activeStreams.get(routeKey);
+    if (!stream) return;
 
     const elapsed = Date.now() - stream.lastSendAt;
     if (elapsed >= TelegramChannel.STREAM_SEND_INTERVAL_MS) {
@@ -311,71 +279,102 @@ export class TelegramChannel implements Channel {
     const preview = `${stream.text} ...`;
 
     if (stream.mode === "draft") {
-      const ok = await this.trySendMarkdownV2Draft(
-        bot,
-        stream.targetChatId,
-        stream.draftId,
-        preview,
-      );
-
-      if (ok) {
-        return;
-      }
-
-      try {
-        const messageId = await this.sendMarkdownV2Message(
-          bot,
-          stream.targetChatId,
-          preview,
-        );
-        this.activeStreams.set(routeKey, {
-          mode: "message",
-          streamId: stream.streamId,
-          targetChatId: stream.targetChatId,
-          messageId,
-          text: stream.text,
-          lastSendAt: stream.lastSendAt,
-          pendingFlush: false,
-        });
-      } catch (err) {
-        logger.error(
-          { err },
-          `Failed fallback stream send to ${stream.targetChatId}`,
-        );
-      }
-
-      return;
+      await this.flushDraftStream(bot, stream, preview, routeKey);
+    } else {
+      await this.flushMessageStream(bot, stream, preview);
     }
+  }
 
+  private async flushDraftStream(
+    bot: Bot,
+    stream: StreamState,
+    preview: string,
+    routeKey: string,
+  ): Promise<void> {
+    const ok = await this.trySendMarkdownV2Draft(
+      bot,
+      stream.targetChatId,
+      stream.draftId!,
+      preview,
+    );
+
+    if (ok) return;
+
+    const messageId = await this.trySendMessage(
+      bot,
+      stream.targetChatId,
+      preview,
+    );
+    if (messageId) {
+      this.activeStreams.set(routeKey, {
+        ...stream,
+        mode: "message",
+        messageId,
+        draftId: undefined,
+      });
+    }
+  }
+
+  private async flushMessageStream(
+    bot: Bot,
+    stream: StreamState,
+    preview: string,
+  ): Promise<void> {
     try {
       await this.editMarkdownV2Message(
         bot,
         stream.targetChatId,
-        stream.messageId,
+        stream.messageId!,
         preview,
       );
     } catch (err: unknown) {
-      if (this.isMessageNotModifiedError(err)) {
+      if (this.isMessageNotModifiedError(err)) return;
+
+      if (this.isMessageNotFoundError(err)) {
+        const newMessageId = await this.trySendMessage(
+          bot,
+          stream.targetChatId,
+          preview,
+        );
+        if (newMessageId) stream.messageId = newMessageId;
         return;
       }
 
-      if (this.isMessageNotFoundError(err)) {
-        try {
-          stream.messageId = await this.sendMarkdownV2Message(
-            bot,
-            stream.targetChatId,
-            preview,
-          );
-          return;
-        } catch (sendErr) {
-          logger.error(
-            { err: sendErr },
-            `Failed to recover missing telegram message for ${stream.targetChatId}`,
-          );
-        }
-      }
-
       logger.error({ err }, `Failed to edit message ${stream.messageId}`);
+    }
+  }
+
+  private async finalizeStream(
+    bot: Bot,
+    stream: StreamState,
+    content: string,
+    routeKey: string,
+  ): Promise<void> {
+    try {
+      if (stream.mode === "draft") {
+        await this.sendMarkdownV2Message(bot, stream.targetChatId, content);
+      } else {
+        await this.editMarkdownV2Message(
+          bot,
+          stream.targetChatId,
+          stream.messageId!,
+          content,
+        );
+      }
+    } catch (err) {
+      if (!this.isMessageNotModifiedError(err)) {
+        logger.error(
+          { err },
+          `Failed to finalize telegram stream for route ${routeKey}`,
+        );
+        await this.trySendMessage(bot, stream.targetChatId, content);
+      }
+    } finally {
+      this.closedStreams.set(routeKey, {
+        streamId: stream.streamId,
+        closedAt: Date.now(),
+      });
+      this.activeStreams.delete(routeKey);
     }
   }
 
@@ -402,13 +401,8 @@ export class TelegramChannel implements Channel {
 
   private renderOutboundContent(event: OutboundBusEvent): string {
     const { content } = event.message;
-    if (typeof content === "string") {
-      return content;
-    }
-
-    if (!Array.isArray(content)) {
-      return "";
-    }
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
 
     return content
       .map((part) => {
@@ -422,7 +416,6 @@ export class TelegramChannel implements Channel {
           const text = (part as { text?: unknown }).text;
           return typeof text === "string" ? text : "";
         }
-
         return "[Media]";
       })
       .join("\n");
@@ -439,27 +432,15 @@ export class TelegramChannel implements Channel {
         .toLowerCase()
         .includes("message to edit not found");
     }
-
     const message = err instanceof Error ? err.message : String(err);
     return message.toLowerCase().includes("message to edit not found");
   }
 
   private isAllowedUser(userId: string, username?: string): boolean {
-    if (this.allowedUsers.includes("*")) {
-      return true;
-    }
-
-    if (this.allowedUsers.length === 0) {
-      return false;
-    }
-
-    if (this.allowedUsers.includes(userId)) {
-      return true;
-    }
-
-    if (!username) {
-      return false;
-    }
+    if (this.allowedUsers.includes("*")) return true;
+    if (this.allowedUsers.length === 0) return false;
+    if (this.allowedUsers.includes(userId)) return true;
+    if (!username) return false;
 
     return (
       this.allowedUsers.includes(username) ||
@@ -479,7 +460,6 @@ export class TelegramChannel implements Channel {
         parse_mode: "MarkdownV2",
       },
     );
-
     return sent.message_id;
   }
 
@@ -504,7 +484,6 @@ export class TelegramChannel implements Channel {
     for (let i = 0; i < streamId.length; i++) {
       hash = (hash * 31 + streamId.charCodeAt(i)) | 0;
     }
-
     const normalized = Math.abs(hash) % 2147483647;
     return normalized === 0 ? 1 : normalized;
   }
@@ -516,9 +495,7 @@ export class TelegramChannel implements Channel {
     text: string,
   ): Promise<boolean> {
     const numericChatId = Number(chatId);
-    if (!Number.isInteger(numericChatId)) {
-      return false;
-    }
+    if (!Number.isInteger(numericChatId)) return false;
 
     try {
       await bot.api.sendMessageDraft(
@@ -541,5 +518,27 @@ export class TelegramChannel implements Channel {
     return text
       .replace(/\\/g, "\\\\")
       .replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1");
+  }
+
+  public async handleEdit(event: EditBusEvent): Promise<void> {
+    if (!event.userId) return;
+    const routeKey = event.userId;
+
+    await this.enqueueRouteTask(routeKey, async () => {
+      const bot = this.bot;
+      if (!bot) return;
+
+      const targetChatId = this.resolveTargetChatId(routeKey);
+      try {
+        // For compaction messages, we need to find the last message sent
+        // Since we don't track messageId for compaction messages, we'll send a new message
+        await this.sendMarkdownV2Message(bot, targetChatId, event.newContent);
+      } catch (err) {
+        logger.error(
+          { err },
+          `Failed to edit telegram message to ${targetChatId}`,
+        );
+      }
+    });
   }
 }

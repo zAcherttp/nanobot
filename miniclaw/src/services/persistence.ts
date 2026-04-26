@@ -1,15 +1,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { FileSystemService } from "./fs";
-import { ConfigService } from "./config";
-import { logger } from "@/utils/logger";
+import type { AgentMessage } from "@/bus/types";
 import {
-  ThreadNotFoundError,
   ThreadCorruptedError,
+  ThreadNotFoundError,
   ThreadWriteError,
 } from "@/errors/base";
-import type { AgentMessage } from "@/bus/types";
+import { logger } from "@/utils/logger";
+import type { ConfigService } from "./config";
+import type { FileSystemService } from "./fs";
 
 // ─── Thread Meta Types ──────────────────────────────────────────
 
@@ -231,7 +230,7 @@ export class PersistenceService {
     const messagesPath = path.join(this.threadsDir, threadId, "messages.jsonl");
 
     try {
-      await fs.appendFile(messagesPath, JSON.stringify(message) + "\n");
+      await fs.appendFile(messagesPath, `${JSON.stringify(message)}\n`);
       const meta = await this.getThread(threadId);
       await this.updateMeta(threadId, {
         messageCount: meta.messageCount + 1,
@@ -245,6 +244,46 @@ export class PersistenceService {
   }
 
   // ── Maintenance ────────────────────────────────────
+
+  public async compactThread(
+    threadId: string,
+    messages: AgentMessage[],
+    summary: string,
+  ): Promise<void> {
+    await this.saveMessages(threadId, messages);
+    await this.updateMeta(threadId, {
+      summary,
+      lastCompactedAt: nowISO(),
+      status: "compacted",
+    });
+  }
+
+  public async saveSummary(threadId: string, summary: string): Promise<void> {
+    const summaryPath = path.join(this.threadsDir, threadId, "summary.md");
+    try {
+      await fs.writeFile(summaryPath, summary, "utf8");
+      logger.debug(`Saved summary for thread ${threadId}`);
+    } catch (err) {
+      logger.error({ err }, `Failed to save summary for thread ${threadId}`);
+      throw new ThreadWriteError("Failed to write summary.md", {
+        cause: err,
+      });
+    }
+  }
+
+  public async getSummary(threadId: string): Promise<string | null> {
+    const summaryPath = path.join(this.threadsDir, threadId, "summary.md");
+    try {
+      const content = await fs.readFile(summaryPath, "utf8");
+      return content.trim() || null;
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        return null;
+      }
+      logger.error({ err }, `Failed to read summary for thread ${threadId}`);
+      return null;
+    }
+  }
 
   public async archiveThread(threadId: string): Promise<void> {
     const meta = await this.getThread(threadId);

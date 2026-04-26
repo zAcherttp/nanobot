@@ -2,7 +2,7 @@ import { input } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
+import type { OutboundBusEvent, StreamDelta, EditBusEvent } from "@/bus/types";
 import { logger } from "@/utils/logger";
 import { ulid } from "ulid";
 
@@ -16,6 +16,13 @@ export class CliChannel implements Channel {
 
   public async start(): Promise<void> {
     this.isActive = true;
+
+    // Subscribe to edit events
+    this.bus.subscribeEdit(async (event: EditBusEvent) => {
+      if (event.channel === this.name) {
+        await this.handleEdit(event);
+      }
+    });
 
     // Run the prompt loop in the background
     // We use setImmediate so it doesn't block the start() completion
@@ -108,5 +115,11 @@ export class CliChannel implements Channel {
       process.stdout.write(chalk.green("miniclaw > "));
     }
     process.stdout.write(delta.delta);
+  }
+
+  public async handleEdit(event: EditBusEvent): Promise<void> {
+    // Clear the current line and reprint with new content
+    process.stdout.write("\r\x1b[K");
+    process.stdout.write(chalk.green("miniclaw > ") + event.newContent + "\n");
   }
 }

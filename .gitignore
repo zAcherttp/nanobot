@@ -70,6 +70,7 @@ Desktop.ini
 .directory
 
 # Editors & IDEs (local workspace / user settings)
+.claude/
 .vscode/
 .cursor/
 .idea/

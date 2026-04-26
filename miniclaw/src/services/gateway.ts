@@ -1,15 +1,14 @@
-import type { ConfigService } from "./config";
-import { MessageBus } from "../bus/index";
-import { startGateway } from "../gateway/runtime";
-import { configureLogger, logger } from "../utils/logger";
 import chalk from "chalk";
-
+import { AgentLoop } from "../agent/loop";
+import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
 import { SseChannel } from "../channels/sse";
 import { TelegramChannel } from "../channels/telegram";
-import { PersistenceService } from "./persistence";
+import { startGateway } from "../gateway/runtime";
+import { configureLogger, logger } from "../utils/logger";
+import type { ConfigService } from "./config";
 import { FileSystemService } from "./fs";
-import { AgentLoop } from "../agent/loop";
+import { PersistenceService } from "./persistence";
 
 export class GatewayService {
   constructor(private readonly configService: ConfigService) {}

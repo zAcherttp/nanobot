@@ -31,6 +31,14 @@ export const ThreadConfigSchema = z.object({
   idleCompactAfterMinutes: z.number().int().min(0).default(0),
   maxTokens: z.number().int().positive().default(8192),
   temperature: z.number().min(0).max(2).default(0.1),
+  compaction: z
+    .object({
+      thresholdRatio: z.number().min(0.5).max(0.9).default(0.8),
+      keepRecentMessages: z.number().int().min(1).default(10),
+      maxRetries: z.number().int().min(1).max(5).default(3),
+      retryDelayMs: z.number().int().min(1000).default(2000),
+    })
+    .default({}),
   apiKeys: z
     .object({
       openai: z.string().default(""),

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import type { Channel } from "./base";
 import type { MessageBus } from "@/bus/index";
-import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
+import type { OutboundBusEvent, StreamDelta, EditBusEvent } from "@/bus/types";
 import { logger } from "@/utils/logger";
 
 export class SseChannel implements Channel {
@@ -13,6 +13,13 @@ export class SseChannel implements Channel {
   constructor(private readonly bus: MessageBus) {}
 
   public async start(): Promise<void> {
+    // Subscribe to edit events
+    this.bus.subscribeEdit(async (event: EditBusEvent) => {
+      if (event.channel === this.name) {
+        await this.handleEdit(event);
+      }
+    });
+
     this.router.get("/stream", (c) => {
       return streamSSE(c, async (stream: SSEStreamingApi) => {
         this.streams.add(stream);
@@ -78,6 +85,20 @@ export class SseChannel implements Channel {
         .writeSSE({
           event: "stream_delta",
           data: JSON.stringify(delta),
+        })
+        .catch(() => {
+          this.streams.delete(stream);
+        }),
+    );
+    await Promise.all(promises);
+  }
+
+  public async handleEdit(event: EditBusEvent): Promise<void> {
+    const promises = Array.from(this.streams).map((stream) =>
+      stream
+        .writeSSE({
+          event: "edit",
+          data: JSON.stringify(event),
         })
         .catch(() => {
           this.streams.delete(stream);

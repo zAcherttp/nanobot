@@ -3,7 +3,9 @@ import path from "node:path";
 
 export interface BuildSystemPromptOptions {
   workspacePath: string;
+  threadPath?: string;
   channel?: string;
+  summary?: string;
 }
 
 const USER_HEURISTICS_HEADER = "## Confirmed behavioral heuristics";
@@ -13,19 +15,28 @@ export async function buildSystemPrompt(
 ): Promise<string> {
   const parts: string[] = [];
 
-  // 1. Format Hint
+  // 1. Conversation Summary (from file if provided, or from options)
+  let summary = options.summary;
+  if (options.threadPath && !summary) {
+    summary = await readSummaryFile(options.threadPath);
+  }
+  if (summary) {
+    parts.push(`## Conversation Summary\n\n${summary}`);
+  }
+
+  // 2. Format Hint
   const formatHint = buildFormatHint(options.channel);
   if (formatHint) parts.push(formatHint);
 
-  // 2. AGENTS.md
+  // 3. AGENTS.md
   const agents = await readIfExists(options.workspacePath, "AGENTS.md");
   if (agents) parts.push(`## AGENTS.md\n\n${agents}`);
 
-  // 3. SOUL.md
+  // 4. SOUL.md
   const soul = await readIfExists(options.workspacePath, "SOUL.md");
   if (soul) parts.push(`## SOUL.md\n\n${soul}`);
 
-  // 4. USER.md (extracted heuristics)
+  // 5. USER.md (extracted heuristics)
   const user = await readIfExists(options.workspacePath, "USER.md");
   if (user) {
     const heuristics = extractConfirmedUserHeuristics(user);
@@ -85,6 +96,16 @@ async function readIfExists(
   try {
     const filePath = path.join(workspacePath, filename);
     const content = await fs.readFile(filePath, "utf8");
+    return content.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function readSummaryFile(threadPath: string): Promise<string | null> {
+  try {
+    const summaryPath = path.join(threadPath, "summary.md");
+    const content = await fs.readFile(summaryPath, "utf8");
     return content.trim() || null;
   } catch {
     return null;

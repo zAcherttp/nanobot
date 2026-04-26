@@ -1,8 +1,8 @@
 import { Command } from "commander";
+import { pkgName } from "@/utils/pkg";
 import { CliAgentService } from "../../services/cli_agent";
 import { ConfigService } from "../../services/config";
 import { FileSystemService } from "../../services/fs";
-import { pkgName } from "@/utils/pkg";
 
 export function agentCommand() {
   return new Command("agent")

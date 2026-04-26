@@ -1,7 +1,7 @@
-import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
 import type { MessageBus } from "@/bus/index";
-import { logger } from "@/utils/logger";
+import type { OutboundBusEvent, StreamDelta } from "@/bus/types";
 import type { AppConfig } from "@/config/schema";
+import { logger } from "@/utils/logger";
 
 export interface Channel {
   readonly name: string;

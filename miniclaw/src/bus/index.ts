@@ -1,5 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { InboundBusEvent, OutboundBusEvent, StreamDelta } from "./types";
+import type {
+  InboundBusEvent,
+  OutboundBusEvent,
+  StreamDelta,
+  EditBusEvent,
+} from "./types";
 
 export class MessageBus extends EventEmitter {
   // constructor() {
@@ -21,6 +26,11 @@ export class MessageBus extends EventEmitter {
     this.emit("stream_delta", delta);
   }
 
+  // Edit existing message
+  publishEdit(event: EditBusEvent): void {
+    this.emit("edit", event);
+  }
+
   subscribeInbound(handler: (event: InboundBusEvent) => void): () => void {
     this.on("inbound", handler);
     return () => this.off("inbound", handler);
@@ -34,5 +44,10 @@ export class MessageBus extends EventEmitter {
   subscribeStreamDelta(handler: (delta: StreamDelta) => void): () => void {
     this.on("stream_delta", handler);
     return () => this.off("stream_delta", handler);
+  }
+
+  subscribeEdit(handler: (event: EditBusEvent) => void): () => void {
+    this.on("edit", handler);
+    return () => this.off("edit", handler);
   }
 }

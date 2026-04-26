@@ -1,6 +1,14 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage as CoreAgentMessage } from "@mariozechner/pi-agent-core";
 
-export type { AgentMessage };
+export type AgentMessage =
+  | CoreAgentMessage
+  | {
+      role: "system";
+      content: string;
+      timestamp: number;
+    };
+
+export type { CoreAgentMessage };
 
 export interface InboundBusEvent {
   message: AgentMessage;
@@ -18,6 +26,13 @@ export interface StreamDelta {
   id: string;
   delta: string;
   timestamp: number;
+  channel?: string;
+  userId?: string;
+}
+
+export interface EditBusEvent {
+  messageId: string;
+  newContent: string;
   channel?: string;
   userId?: string;
 }
