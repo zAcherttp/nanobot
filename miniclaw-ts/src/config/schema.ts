@@ -56,7 +56,7 @@ export const ChannelsConfigSchema = z
     telegram: z
       .object({
         enabled: z.boolean().default(false),
-        botToken: z.string().optional(),
+        botToken: z.string().default(""),
         allowedUsers: z.array(z.string()).default([]),
       })
       .default({}),

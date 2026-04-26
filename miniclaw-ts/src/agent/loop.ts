@@ -59,6 +59,10 @@ export class AgentLoop {
     try {
       model = getModel(providerStr, modelIdStr as any);
     } catch {
+      // Ignored
+    }
+
+    if (!model) {
       // Fallback if model not found in strict types
       model = {
         id: modelIdStr,

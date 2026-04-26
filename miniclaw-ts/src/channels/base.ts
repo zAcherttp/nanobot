@@ -85,13 +85,18 @@ export class ChannelRegistry {
   }
 
   async stopAll(): Promise<void> {
+    const stopped: string[] = [];
     for (const channel of this.channels.values()) {
       try {
         await channel.stop();
-        logger.info(`Stopped channel: ${channel.name}`);
+        stopped.push(channel.name);
       } catch (err) {
         logger.error({ err }, `Failed to stop channel: ${channel.name}`);
       }
+    }
+    if (stopped.length > 0) {
+      process.stdout.write("\n");
+      logger.info(`Stopped channel(s): ${stopped.join(", ")}`);
     }
   }
 }
