@@ -1,14 +1,16 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { MemoryStore } from "../services/memory";
 
 export interface BuildSystemPromptOptions {
   workspacePath: string;
   threadPath?: string;
   channel?: string;
   summary?: string;
+  skillsPath?: string;
+  skillsSummary?: string;
+  memoryStore?: MemoryStore;
 }
-
-const USER_HEURISTICS_HEADER = "## Confirmed behavioral heuristics";
 
 export async function buildSystemPrompt(
   options: BuildSystemPromptOptions,
@@ -20,27 +22,29 @@ export async function buildSystemPrompt(
   if (options.threadPath && !summary) {
     summary = await readSummaryFile(options.threadPath);
   }
-  if (summary) {
+  if (summary && summary.trim()) {
     parts.push(`## Conversation Summary\n\n${summary}`);
   }
 
-  // 2. Format Hint
+  // 2. Long-term Memory (if available)
+  if (options.memoryStore) {
+    const memoryContext = await options.memoryStore.getMemoryContext();
+    if (memoryContext) {
+      parts.push(memoryContext);
+    }
+  }
+
+  // 3. Format Hint
   const formatHint = buildFormatHint(options.channel);
   if (formatHint) parts.push(formatHint);
 
-  // 3. AGENTS.md
-  const agents = await readIfExists(options.workspacePath, "AGENTS.md");
-  if (agents) parts.push(`## AGENTS.md\n\n${agents}`);
+  // 4. Bootstrap files (AGENTS.md, GOALS.md, SOUL.md, USER.md, TOOLS.md)
+  const bootstrap = await loadBootstrapFiles(options.workspacePath);
+  if (bootstrap) parts.push(bootstrap);
 
-  // 4. SOUL.md
-  const soul = await readIfExists(options.workspacePath, "SOUL.md");
-  if (soul) parts.push(`## SOUL.md\n\n${soul}`);
-
-  // 5. USER.md (extracted heuristics)
-  const user = await readIfExists(options.workspacePath, "USER.md");
-  if (user) {
-    const heuristics = extractConfirmedUserHeuristics(user);
-    if (heuristics) parts.push(heuristics);
+  // 5. Skills hint and summary
+  if (options.skillsSummary) {
+    parts.push(buildSkillsSection(options.skillsSummary));
   }
 
   return parts.join("\n\n---\n\n");
@@ -65,28 +69,34 @@ function buildFormatHint(channel?: string): string {
   }
 }
 
-export function extractConfirmedUserHeuristics(content: string): string {
-  const lines = content.split(/\r?\n/);
-  const bullets: string[] = [];
-  let inSection = false;
+async function loadBootstrapFiles(workspacePath: string): Promise<string> {
+  const BOOTSTRAP_FILES = [
+    "AGENTS.md",
+    "GOALS.md",
+    "SOUL.md",
+    "USER.md",
+    "TOOLS.md",
+  ];
+  const parts: string[] = [];
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("## ")) {
-      inSection = trimmed === USER_HEURISTICS_HEADER;
-      continue;
-    }
-
-    if (!inSection) continue;
-
-    if (trimmed.startsWith("- ")) {
-      bullets.push(line);
+  for (const filename of BOOTSTRAP_FILES) {
+    const content = await readIfExists(workspacePath, filename);
+    if (content) {
+      parts.push(`## ${filename}\n\n${content}`);
     }
   }
 
-  if (bullets.length === 0) return "";
+  return parts.join("\n\n");
+}
 
-  return `${USER_HEURISTICS_HEADER}\n\n${bullets.join("\n")}`;
+function buildSkillsSection(skillsSummary: string): string {
+  return `## Available Skills
+
+You have access to various skills that can help you accomplish tasks. Skills are not loaded by default to keep context efficient.
+
+${skillsSummary}
+
+**Important**: When you need specific capabilities, use the \`load_skill\` tool to load the skill's instructions. Use \`list_skills\` to see all available skills.`;
 }
 
 async function readIfExists(

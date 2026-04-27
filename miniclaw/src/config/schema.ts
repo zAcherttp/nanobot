@@ -83,12 +83,39 @@ export const ChannelsConfigSchema = z
   })
   .default({});
 
+export const CalendarConfigSchema = z
+  .object({
+    provider: z.enum(["gws", "lark"]).default("gws"),
+    larkAppId: z.string().default(""),
+    larkAppSecret: z.string().default(""),
+  })
+  .default({});
+
+export const MemoryConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxMemories: z.number().int().positive().default(1000),
+  })
+  .default({});
+
+export const DreamConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    schedule: z.string().default("0 2 * * *"), // Daily at 2 AM
+    maxEntriesPerDream: z.number().int().positive().default(10),
+    minMessagesForDream: z.number().int().positive().default(5),
+  })
+  .default({});
+
 export const AppConfigSchema = z.object({
   workspace: WorkspaceConfigSchema.default({}),
   gateway: GatewayConfigSchema.default({}),
   thread: ThreadConfigSchema.default({}),
   logging: LoggingConfigSchema.default({}),
   channels: ChannelsConfigSchema.default({}),
+  calendar: CalendarConfigSchema.optional(),
+  memory: MemoryConfigSchema.optional(),
+  dream: DreamConfigSchema.optional(),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;

@@ -8,6 +8,13 @@ import type { PersistenceService } from "@/services/persistence";
 import { logger } from "@/utils/logger";
 import { CompactionService } from "./compaction";
 import { buildSystemPrompt } from "./context";
+import { SkillsLoader } from "./skills";
+import { CronService } from "@/services/cron";
+import { CalendarService } from "@/services/calendar";
+import { GwsCalendarProvider } from "@/services/calendar/gws";
+import { LarkCalendarProvider } from "@/services/calendar/lark";
+import { MemoryStore } from "@/services/memory";
+import { DreamCronJob } from "./dream-cron";
 
 // Ensure built-in pi-ai providers (OpenAI, Anthropic, etc.) are registered
 registerBuiltInApiProviders();
@@ -16,13 +23,131 @@ const INBOUND_LOG_PREVIEW_CHARS = 120;
 const OUTBOUND_LOG_PREVIEW_CHARS = 120;
 
 export class AgentLoop {
+  private readonly skillsLoader: SkillsLoader;
+  private readonly cronService: CronService;
+  private readonly calendarService: CalendarService | null;
+  private readonly memoryStore: MemoryStore | null;
+  private readonly dreamCronJob: DreamCronJob | null;
+
   constructor(
     private readonly bus: MessageBus,
     private readonly persistence: PersistenceService,
     private readonly config: AppConfig,
-  ) {}
+  ) {
+    // Initialize SkillsLoader
+    const skillsPath = path.join(this.config.workspace.path, "skills");
+    this.skillsLoader = new SkillsLoader(skillsPath);
 
-  public start() {
+    // Initialize CronService
+    const cronStorePath = path.join(
+      this.config.workspace.path,
+      "cron",
+      "store.json",
+    );
+    this.cronService = new CronService(cronStorePath, async (job) => {
+      // Handle cron job execution
+      if (job.payload.deliver) {
+        this.bus.publishOutbound({
+          message: {
+            role: "assistant",
+            content: job.payload.message,
+            timestamp: Date.now(),
+          },
+          channel: job.payload.channel,
+          userId: job.payload.to,
+        });
+      }
+    });
+
+    // Initialize CalendarService
+    this.calendarService = this.initCalendarService();
+
+    // Initialize MemoryStore
+    this.memoryStore = this.initMemoryStore();
+
+    // Initialize DreamCronJob
+    this.dreamCronJob = this.initDreamCronJob();
+  }
+
+  private initCalendarService(): CalendarService | null {
+    const calendarConfig = this.config.calendar;
+    if (!calendarConfig) return null;
+
+    switch (calendarConfig.provider) {
+      case "gws":
+        return new CalendarService(new GwsCalendarProvider());
+      case "lark":
+        if (!calendarConfig.larkAppId || !calendarConfig.larkAppSecret) {
+          logger.warn("Lark calendar provider requires appId and appSecret");
+          return null;
+        }
+        return new CalendarService(
+          new LarkCalendarProvider(
+            calendarConfig.larkAppId,
+            calendarConfig.larkAppSecret,
+          ),
+        );
+      default:
+        logger.warn(`Unknown calendar provider: ${calendarConfig.provider}`);
+        return null;
+    }
+  }
+
+  private initMemoryStore(): MemoryStore | null {
+    const memoryConfig = this.config.memory;
+    if (!memoryConfig?.enabled) {
+      logger.info("Memory store disabled");
+      return null;
+    }
+
+    const memoryDir = path.join(this.config.workspace.path, "memory");
+    return new MemoryStore(memoryDir);
+  }
+
+  private initDreamCronJob(): DreamCronJob | null {
+    const dreamConfig = this.config.dream;
+    if (!dreamConfig?.enabled || !this.memoryStore) {
+      logger.info("Dream cron job disabled");
+      return null;
+    }
+
+    return new DreamCronJob(
+      this.memoryStore,
+      this.cronService,
+      async () => {
+        // Get all messages from all threads
+        const threads = await this.persistence.listThreads();
+        const allMessages: Array<{ id: string; timestamp: number }> = [];
+
+        for (const thread of threads) {
+          const messages = await this.persistence.getMessages(thread.id);
+          for (const msg of messages) {
+            allMessages.push({
+              id: msg.id || ulid(),
+              timestamp: msg.timestamp || Date.now(),
+            });
+          }
+        }
+
+        return allMessages;
+      },
+      {
+        schedule: dreamConfig.schedule,
+        maxEntriesPerDream: dreamConfig.maxEntriesPerDream,
+        minMessagesForDream: dreamConfig.minMessagesForDream,
+      },
+    );
+  }
+
+  public async start() {
+    // Start cron service
+    await this.cronService.start();
+
+    // Register dream cron job
+    if (this.dreamCronJob) {
+      await this.dreamCronJob.register();
+    }
+
     this.bus.subscribeInbound(async (event) => {
       const busReceivedAt = Date.now();
       try {
@@ -36,6 +161,10 @@ export class AgentLoop {
         logger.error({ err }, "Agent loop turn failed");
       }
     });
+  }
+
+  public stop() {
+    this.cronService.stop();
   }
 
   private async handleTurn(
@@ -100,17 +229,30 @@ export class AgentLoop {
       await this.persistence.saveMessages(thread.id, compactedMessages);
     }
 
-    // 4. Build system prompt with summary
+    // 4. Build system prompt with summary, memory, and skills
     const threadPath = path.join(
       this.config.workspace.path,
       "threads",
       thread.id,
     );
+    const skillsSummary = await this.skillsLoader.getSkillSummary();
+    const alwaysSkills = await this.skillsLoader.getAlwaysSkills();
+    const alwaysSkillsContent = await this.skillsLoader.loadSkillsForContext(
+      alwaysSkills.map((s) => s.name),
+    );
+
     const systemPrompt = await buildSystemPrompt({
       workspacePath: this.config.workspace.path,
       threadPath,
       channel,
+      skillsSummary,
+      memoryStore: this.memoryStore || undefined,
     });
+
+    // Add always skills to system prompt if any exist
+    const finalSystemPrompt = alwaysSkillsContent
+      ? `${systemPrompt}\n\n---\n\n${alwaysSkillsContent}`
+      : systemPrompt;
 
     // 5. Resolve Provider & API Key
     const providerStr = this.config.thread.provider as any;
@@ -173,7 +315,7 @@ export class AgentLoop {
     const agent = new Agent({
       initialState: {
         model,
-        systemPrompt,
+        systemPrompt: finalSystemPrompt,
         messages: compactedMessages,
         thinkingLevel: "off",
       },
