@@ -3,7 +3,6 @@ import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
 import { CliChannel } from "../channels/cli";
 import { PersistenceService } from "./persistence";
-import { FileSystemService } from "./fs";
 import { AgentLoop } from "../agent/loop";
 import { configureLogger, logger } from "../utils/logger";
 import chalk from "chalk";
@@ -24,10 +23,9 @@ export class CliAgentService {
     const bus = new MessageBus();
 
     logger.info(chalk.cyan("Initializing Persistence..."));
-    const fsService = new FileSystemService();
     const persistenceSvc = new PersistenceService(
-      fsService,
       this.configService,
+      "miniclaw",
     );
 
     logger.info(chalk.cyan("Initializing Channel Registry - CLI ..."));

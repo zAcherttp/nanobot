@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { confirm } from "@inquirer/prompts";
 import chalk from "chalk";
 import { ConfigService } from "./config";
-import { FileSystemService } from "./fs";
+import { getRootDir, getConfigPath } from "../utils/paths";
 import { logger } from "../utils/logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -12,12 +12,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export class OnboardService {
   constructor(
     private readonly configService: ConfigService,
-    private readonly fsService: FileSystemService,
+    private readonly appName: string = "miniclaw",
   ) {}
 
   public async execute(): Promise<void> {
-    const miniclawDir = this.fsService.getRootPath();
-    const configPath = this.fsService.getConfigPath();
+    const miniclawDir = getRootDir(this.appName);
+    const configPath = getConfigPath(this.appName);
 
     const shouldCreate = await this.checkAndConfirmOverwrite(configPath);
     if (!shouldCreate) {

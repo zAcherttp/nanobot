@@ -8,7 +8,7 @@ import {
 } from "@/errors/base";
 import { logger } from "@/utils/logger";
 import type { ConfigService } from "./config";
-import type { FileSystemService } from "./fs";
+import { resolvePath } from "../utils/paths";
 
 // ─── Thread Meta Types ──────────────────────────────────────────
 
@@ -46,10 +46,10 @@ export class PersistenceService {
   private readonly threadsDir: string;
 
   constructor(
-    private readonly fsService: FileSystemService,
     private readonly configService: ConfigService,
+    private readonly appName: string = "miniclaw",
   ) {
-    this.threadsDir = this.fsService.resolvePath("threads");
+    this.threadsDir = resolvePath(appName, "threads");
   }
 
   // ── Conversation Thread (singleton) ────────────────

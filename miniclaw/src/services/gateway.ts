@@ -7,7 +7,6 @@ import { TelegramChannel } from "../channels/telegram";
 import { startGateway } from "../gateway/runtime";
 import { configureLogger, logger } from "../utils/logger";
 import type { ConfigService } from "./config";
-import { FileSystemService } from "./fs";
 import { PersistenceService } from "./persistence";
 
 export class GatewayService {
@@ -22,10 +21,9 @@ export class GatewayService {
     const bus = new MessageBus();
 
     logger.info(chalk.cyan("Initializing Persistence..."));
-    const fsService = new FileSystemService();
     const persistenceSvc = new PersistenceService(
-      fsService,
       this.configService,
+      "miniclaw",
     );
 
     logger.info(chalk.cyan("Initializing Channel Registry..."));

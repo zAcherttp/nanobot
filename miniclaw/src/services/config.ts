@@ -3,7 +3,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { AppConfig, AppConfigSchema, LogLevelSchema } from "../config/schema";
 import { ConfigLoadError, ConfigValidationError } from "../errors/base";
-import { FileSystemService } from "./fs";
+import { getConfigPath } from "../utils/paths";
 
 dotenv.config({ quiet: true });
 
@@ -13,10 +13,10 @@ export interface LoadConfigOptions {
 }
 
 export class ConfigService {
-  constructor(private readonly fsService: FileSystemService) {}
+  constructor(private readonly appName: string = "miniclaw") {}
 
   public async load(options: LoadConfigOptions = {}): Promise<AppConfig> {
-    const configPath = options.configPath || this.fsService.getConfigPath();
+    const configPath = options.configPath || getConfigPath(this.appName);
     let rawConfig: Record<string, unknown> = {};
 
     try {
