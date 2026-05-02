@@ -16,6 +16,7 @@ export interface EvalCommandOptions {
   configPath?: string;
   mode?: EvalMode;
   outputDir?: string;
+  keepWorkspace?: boolean;
   safeWindowStart?: string;
   safeWindowEnd?: string;
 }
@@ -97,6 +98,7 @@ export class EvalService {
         options.outputDir ||
         config.eval?.outputDir ||
         path.resolve(process.cwd(), "eval-reports"),
+      keepWorkspace: options.keepWorkspace || false,
       safePolicy: buildSafetyPolicy(config, options),
       throttle: {
         llmMaxConcurrency: config.eval?.throttle.llmMaxConcurrency || 1,
@@ -107,8 +109,8 @@ export class EvalService {
         maxToolCallsPerScenario:
           config.eval?.throttle.maxToolCallsPerScenario || 20,
       },
-      scenarioTimeoutMs: config.eval?.timeouts.scenarioMs || 120000,
-      turnTimeoutMs: config.eval?.timeouts.turnMs || 30000,
+      scenarioTimeoutMs: config.eval?.timeouts.scenarioMs || 300000,
+      turnTimeoutMs: config.eval?.timeouts.turnMs || 300000,
     };
   }
 }

@@ -5,7 +5,7 @@ export class TaskProgressNotifier {
   constructor(private readonly bus: MessageBus) {}
 
   public async announceJob(job: TaskJob): Promise<void> {
-    if (!job.channel || !job.userId) return;
+    if (!this.shouldPublish(job)) return;
 
     this.bus.publishOutbound({
       message: {
@@ -20,7 +20,7 @@ export class TaskProgressNotifier {
   }
 
   public async refreshJob(job: TaskJob): Promise<void> {
-    if (!job.channel || !job.userId) return;
+    if (!this.shouldPublish(job)) return;
 
     this.bus.publishEdit({
       trackingKey: job.trackingKey,
@@ -31,7 +31,7 @@ export class TaskProgressNotifier {
   }
 
   public async closeJob(job: TaskJob): Promise<void> {
-    if (!job.channel || !job.userId) return;
+    if (!this.shouldPublish(job)) return;
 
     await this.refreshJob(job);
     this.bus.publishOutbound({
@@ -46,6 +46,10 @@ export class TaskProgressNotifier {
       channel: job.channel,
       userId: job.userId,
     });
+  }
+
+  private shouldPublish(job: TaskJob): boolean {
+    return Boolean(job.channel && job.userId && job.publiclyVisible);
   }
 }
 

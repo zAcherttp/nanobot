@@ -67,6 +67,7 @@ describe("Context Integration", () => {
 
       expect(prompt).toContain("## Runtime");
       expect(prompt).toContain("## Workspace");
+      expect(prompt).toContain("## Task Policy");
       expect(prompt).toContain("## Search & Discovery");
       expect(prompt).toContain("## Conversation Summary");
       expect(prompt).toContain("## Format Hint");
@@ -96,6 +97,7 @@ describe("Context Integration", () => {
 
       expect(prompt).toContain("## Runtime");
       expect(prompt).toContain("## Workspace");
+      expect(prompt).toContain("## Task Policy");
       expect(prompt).toContain("## Search & Discovery");
       expect(prompt).toContain("## AGENTS.md");
       expect(prompt).toContain("## SOUL.md");

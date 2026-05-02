@@ -85,6 +85,7 @@ export interface EvalRunConfig {
   scenarios: EvalScenario[];
   mode: EvalMode;
   outputDir: string;
+  keepWorkspace: boolean;
   safePolicy: CalendarSafetyPolicy;
   throttle: ThrottleProfile;
   scenarioTimeoutMs: number;
@@ -150,6 +151,7 @@ export interface EvalResult {
   shellExecutions: ShellExecutionRecord[];
   snapshots: EvalSnapshots;
   outputDir: string;
+  workspacePath?: string;
 }
 
 export interface EvalSummary {
@@ -172,6 +174,7 @@ export interface EvalSummary {
       | "complexity"
       | "durationMs"
       | "toolMetrics"
+      | "workspacePath"
     >
   >;
 }

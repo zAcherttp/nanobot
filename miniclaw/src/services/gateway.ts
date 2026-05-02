@@ -1,35 +1,53 @@
-import chalk from "chalk";
 import { AgentLoop } from "../agent/loop";
 import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
 import { TelegramChannel } from "../channels/telegram";
 import { startGateway } from "../gateway/runtime";
 import { configureLogger, logger } from "../utils/logger";
+import { pkgVersion } from "../utils/pkg";
 import type { ConfigService } from "./config";
 import { PersistenceService } from "./persistence";
+
+const NANOBOT_LOGO = "🐈";
+
+function printGatewayLine(message: string): void {
+  console.log(message);
+}
+
+function printGatewayStatus(label: string, value: string): void {
+  printGatewayLine(`✓ ${label}: ${value}`);
+}
+
+function printGatewayWarning(message: string): void {
+  printGatewayLine(`Warning: ${message}`);
+}
 
 export class GatewayService {
   constructor(private readonly configService: ConfigService) {}
 
   public async execute(configPath?: string): Promise<void> {
-    logger.info(chalk.cyan("Loading Miniclaw configuration..."));
     const config = await this.configService.load({ configPath });
     configureLogger(config.logging.level);
+    printGatewayLine(
+      `${NANOBOT_LOGO} Starting nanobot gateway version ${pkgVersion} on port ${config.gateway.port}...`,
+    );
 
-    logger.info(chalk.cyan("Initializing Message Bus..."));
     const bus = new MessageBus();
 
-    logger.info(chalk.cyan("Initializing Persistence..."));
     const persistenceSvc = new PersistenceService(
       this.configService,
       "miniclaw",
+      {
+        threadsDir: config.thread.store.path,
+      },
     );
 
-    logger.info(chalk.cyan("Initializing Channel Registry..."));
     const registry = new ChannelRegistry(bus, config);
+    const enabledChannels: string[] = [];
 
     if (config.channels.telegram.enabled) {
       if (config.channels.telegram.botToken) {
+        enabledChannels.push("telegram");
         registry.register(
           new TelegramChannel(
             bus,
@@ -51,6 +69,24 @@ export class GatewayService {
     await loop.start();
 
     const server = await startGateway(config, bus);
+
+    if (enabledChannels.length > 0) {
+      printGatewayStatus("Channels enabled", enabledChannels.join(", "));
+    } else {
+      printGatewayWarning("No channels enabled");
+    }
+    printGatewayStatus(
+      "Heartbeat",
+      config.gateway.heartbeat.enabled
+        ? `every ${config.gateway.heartbeat.intervalSeconds}s`
+        : "disabled",
+    );
+    printGatewayStatus(
+      "Dream",
+      config.dream?.enabled === false
+        ? "disabled"
+        : config.dream?.schedule || "0 2 * * *",
+    );
 
     const shutdownSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
     const signalHandlers = new Map<NodeJS.Signals, () => void>();
@@ -81,14 +117,14 @@ export class GatewayService {
       }
 
       shuttingDown = true;
-      logger.info(chalk.yellow(`Shutting down miniclaw (${signal})...`));
+      printGatewayLine("");
+      printGatewayLine("Shutting down...");
 
       let exitCode = 0;
       try {
         await loop.stop();
         await registry.stopAll();
         await closeServer();
-        logger.info(chalk.green("Miniclaw shutdown complete."));
       } catch (err) {
         exitCode = 1;
         logger.error({ err }, "Failed during miniclaw shutdown");

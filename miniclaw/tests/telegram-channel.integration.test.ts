@@ -7,10 +7,19 @@ import { AppConfigSchema } from "../src/config/schema";
 const telegramHarness = vi.hoisted(() => {
   class GrammyError extends Error {
     public readonly description: string;
+    public readonly error_code: number;
+    public readonly parameters: { retry_after?: number };
 
-    constructor(message: string, description = message) {
+    constructor(
+      message: string,
+      description = message,
+      errorCode = 400,
+      parameters: { retry_after?: number } = {},
+    ) {
       super(message);
       this.description = description;
+      this.error_code = errorCode;
+      this.parameters = parameters;
     }
   }
 
@@ -30,7 +39,10 @@ const telegramHarness = vi.hoisted(() => {
     private messageHandler: ((ctx: any) => Promise<void> | void) | null = null;
     private catchHandler: ((error: any) => Promise<void> | void) | null = null;
 
-    constructor(public readonly token: string) {
+    constructor(
+      public readonly token: string,
+      public readonly config?: Record<string, unknown>,
+    ) {
       Bot.instances.push(this);
     }
 
@@ -145,6 +157,37 @@ describe("TelegramChannel integration", () => {
     });
 
     expect(inbound).toEqual([]);
+  });
+
+  it("configures separate polling and outbound transport agents", async () => {
+    const bus = new MessageBus();
+    const channel = new TelegramChannel(bus, "token", ["42"]);
+
+    await channel.start();
+    const bot = telegramHarness.Bot.instances[0];
+    const client = bot.config?.client as
+      | {
+          timeoutSeconds?: number;
+          baseFetchConfig?: {
+            agent?: (parsedUrl: URL) => unknown;
+          };
+        }
+      | undefined;
+
+    expect(client?.timeoutSeconds).toBe(60);
+    expect(typeof client?.baseFetchConfig?.agent).toBe("function");
+
+    const selectAgent = client?.baseFetchConfig?.agent;
+    const pollingAgent = selectAgent?.(
+      new URL("https://api.telegram.org/bot123/getUpdates"),
+    );
+    const sendAgent = selectAgent?.(
+      new URL("https://api.telegram.org/bot123/sendMessage"),
+    );
+
+    expect(pollingAgent).toBeDefined();
+    expect(sendAgent).toBeDefined();
+    expect(pollingAgent).not.toBe(sendAgent);
   });
 
   it("routes a real bus event chain from inbound Telegram message to streamed and finalized output", async () => {
@@ -306,6 +349,39 @@ describe("TelegramChannel integration", () => {
     expect(bot.api.sendMessage).toHaveBeenCalledWith(
       "4242",
       "Context compacted\\!",
+      expect.objectContaining({ parse_mode: "MarkdownV2" }),
+    );
+  });
+
+  it("retries transient outbound send failures with backoff", async () => {
+    const bus = new MessageBus();
+    const channel = new TelegramChannel(bus, "token", ["42"]);
+
+    await channel.start();
+    const bot = telegramHarness.Bot.instances[0];
+    bot.api.sendMessage
+      .mockRejectedValueOnce(new telegramHarness.HttpError("socket hang up"))
+      .mockRejectedValueOnce(new telegramHarness.HttpError("timed out"))
+      .mockResolvedValueOnce({ message_id: 7 });
+
+    const sendTask = channel.handleOutbound({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "retry me" }],
+        timestamp: Date.now(),
+      },
+      channel: "telegram",
+      userId: "42",
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1000);
+    await sendTask;
+
+    expect(bot.api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(bot.api.sendMessage).toHaveBeenLastCalledWith(
+      "42",
+      "retry me",
       expect.objectContaining({ parse_mode: "MarkdownV2" }),
     );
   });

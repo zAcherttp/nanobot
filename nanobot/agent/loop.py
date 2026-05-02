@@ -1175,10 +1175,43 @@ class AgentLoop:
 
         return filtered
 
+    @staticmethod
+    def _strip_runtime_context_text(content: str) -> str | None:
+        """Remove all runtime-context blocks from persisted merged user text."""
+        import re
+
+        tag = ContextBuilder._RUNTIME_CONTEXT_TAG
+        end_marker = ContextBuilder._RUNTIME_CONTEXT_END
+        parts: list[str] = []
+        cursor = 0
+        while True:
+            start = content.find(tag, cursor)
+            if start < 0:
+                parts.append(content[cursor:])
+                break
+            parts.append(content[cursor:start])
+            end = content.find(end_marker, start)
+            if end < 0:
+                break
+            cursor = end + len(end_marker)
+        stripped = re.sub(r"\n{3,}", "\n\n", "".join(parts)).strip()
+        return stripped or None
+
+    @staticmethod
+    def _persisted_message_key(message: dict[str, Any]) -> str:
+        """Stable equivalence key for persisted history entries."""
+        return json.dumps(
+            {k: v for k, v in message.items() if k != "timestamp"},
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+
     def _save_turn(self, session: Session, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
         from datetime import datetime
 
+        pending_entries: list[dict[str, Any]] = []
         for m in messages[skip:]:
             entry = dict(m)
             role, content = entry.get("role"), entry.get("content")
@@ -1193,31 +1226,30 @@ class AgentLoop:
                         continue
                     entry["content"] = filtered
             elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                    # Strip the entire runtime-context block (including any session summary).
-                    # The block is bounded by _RUNTIME_CONTEXT_TAG and _RUNTIME_CONTEXT_END.
-                    end_marker = ContextBuilder._RUNTIME_CONTEXT_END
-                    end_pos = content.find(end_marker)
-                    if end_pos >= 0:
-                        after = content[end_pos + len(end_marker):].lstrip("\n")
-                        if after:
-                            entry["content"] = after
-                        else:
-                            continue
-                    else:
-                        # Fallback: no end marker found, strip the tag prefix
-                        after_tag = content[len(ContextBuilder._RUNTIME_CONTEXT_TAG):].lstrip("\n")
-                        if after_tag.strip():
-                            entry["content"] = after_tag
-                        else:
-                            continue
+                if isinstance(content, str):
+                    stripped = self._strip_runtime_context_text(content)
+                    if stripped is None:
+                        continue
+                    entry["content"] = stripped
                 if isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, drop_runtime=True)
                     if not filtered:
                         continue
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
-            session.messages.append(entry)
+            pending_entries.append(entry)
+        overlap = 0
+        max_overlap = min(len(session.messages), len(pending_entries))
+        for size in range(max_overlap, 0, -1):
+            existing = session.messages[-size:]
+            incoming = pending_entries[:size]
+            if all(
+                self._persisted_message_key(left) == self._persisted_message_key(right)
+                for left, right in zip(existing, incoming)
+            ):
+                overlap = size
+                break
+        session.messages.extend(pending_entries[overlap:])
         session.updated_at = datetime.now()
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
@@ -1282,6 +1314,7 @@ class AgentLoop:
         assistant_message = checkpoint.get("assistant_message")
         completed_tool_results = checkpoint.get("completed_tool_results") or []
         pending_tool_calls = checkpoint.get("pending_tool_calls") or []
+        injected_user_messages = checkpoint.get("injected_user_messages") or []
 
         restored_messages: list[dict[str, Any]] = []
         if isinstance(assistant_message, dict):
@@ -1304,6 +1337,19 @@ class AgentLoop:
                     "tool_call_id": tool_id,
                     "name": name,
                     "content": "Error: Task interrupted before this tool finished.",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+        for message in injected_user_messages:
+            if isinstance(message, dict) and message.get("role") == "user":
+                restored = dict(message)
+                restored.setdefault("timestamp", datetime.now().isoformat())
+                restored_messages.append(restored)
+        if restored_messages and restored_messages[-1].get("role") == "user":
+            restored_messages.append(
+                {
+                    "role": "assistant",
+                    "content": "Error: Task interrupted before a response was generated.",
                     "timestamp": datetime.now().isoformat(),
                 }
             )

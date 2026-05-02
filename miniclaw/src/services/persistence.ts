@@ -50,7 +50,7 @@ export class PersistenceService {
     private readonly appName: string = "miniclaw",
     options: { threadsDir?: string } = {},
   ) {
-    this.threadsDir = options.threadsDir || resolvePath(appName, "threads");
+    this.threadsDir = options.threadsDir || resolvePath("threads");
   }
 
   // ── Conversation Thread (singleton) ────────────────

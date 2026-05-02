@@ -90,6 +90,38 @@ def test_save_turn_keeps_tool_results_under_16k() -> None:
     assert session.messages[0]["content"] == content
 
 
+def test_save_turn_strips_all_runtime_context_blocks_from_merged_user_text() -> None:
+    loop = _mk_loop()
+    session = Session(key="test:merged-runtime")
+    runtime_a = (
+        ContextBuilder._RUNTIME_CONTEXT_TAG
+        + "\nCurrent Time: now (UTC)\nChannel: telegram\n"
+        + ContextBuilder._RUNTIME_CONTEXT_END
+    )
+    runtime_b = (
+        ContextBuilder._RUNTIME_CONTEXT_TAG
+        + "\nCurrent Time: later (UTC)\nChannel: telegram\n"
+        + ContextBuilder._RUNTIME_CONTEXT_END
+    )
+
+    loop._save_turn(
+        session,
+        [{
+            "role": "user",
+            "content": f"{runtime_a}\n\nfirst follow-up\n\n{runtime_b}\n\nsecond follow-up",
+        }],
+        skip=0,
+    )
+
+    assert session.messages == [
+        {
+            "role": "user",
+            "content": "first follow-up\n\nsecond follow-up",
+            "timestamp": session.messages[0]["timestamp"],
+        }
+    ]
+
+
 def test_restore_runtime_checkpoint_rehydrates_completed_and_pending_tools() -> None:
     loop = _mk_loop()
     session = Session(
@@ -214,6 +246,42 @@ def test_restore_runtime_checkpoint_dedupes_overlapping_tail() -> None:
     assert session.messages[0]["role"] == "assistant"
     assert session.messages[1]["tool_call_id"] == "call_done"
     assert session.messages[2]["tool_call_id"] == "call_pending"
+
+
+def test_restore_runtime_checkpoint_rehydrates_injected_followups_and_closes_turn() -> None:
+    loop = _mk_loop()
+    session = Session(
+        key="test:checkpoint-injections",
+        metadata={
+            AgentLoop._RUNTIME_CHECKPOINT_KEY: {
+                "phase": "final_response",
+                "iteration": 1,
+                "model": "test-model",
+                "assistant_message": {
+                    "role": "assistant",
+                    "content": "slow answer",
+                },
+                "completed_tool_results": [],
+                "pending_tool_calls": [],
+                "injected_user_messages": [
+                    {"role": "user", "content": "follow-up after the slow answer"},
+                ],
+            }
+        },
+    )
+
+    restored = loop._restore_runtime_checkpoint(session)
+
+    assert restored is True
+    assert session.metadata.get(AgentLoop._RUNTIME_CHECKPOINT_KEY) is None
+    assert [
+        {k: v for k, v in message.items() if k in {"role", "content"}}
+        for message in session.messages
+    ] == [
+        {"role": "assistant", "content": "slow answer"},
+        {"role": "user", "content": "follow-up after the slow answer"},
+        {"role": "assistant", "content": "Error: Task interrupted before a response was generated."},
+    ]
 
 
 @pytest.mark.asyncio

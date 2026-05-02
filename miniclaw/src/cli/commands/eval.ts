@@ -16,6 +16,10 @@ export function evalCommand() {
     .option("-m, --mode <mode>", "Eval mode: simulate or sandbox-live")
     .option("-o, --output-dir <dir>", "Override report output directory")
     .option(
+      "--keep-workspace",
+      "Keep the per-scenario eval workspace on disk for inspection",
+    )
+    .option(
       "--safe-window-start <iso>",
       "Override the safe calendar window start",
     )
@@ -27,6 +31,7 @@ export function evalCommand() {
             configPath: options.config,
             mode: options.mode,
             outputDir: options.outputDir,
+            keepWorkspace: options.keepWorkspace,
             safeWindowStart: options.safeWindowStart,
             safeWindowEnd: options.safeWindowEnd,
           })
@@ -34,6 +39,7 @@ export function evalCommand() {
             configPath: options.config,
             mode: options.mode,
             outputDir: options.outputDir,
+            keepWorkspace: options.keepWorkspace,
             safeWindowStart: options.safeWindowStart,
             safeWindowEnd: options.safeWindowEnd,
           });

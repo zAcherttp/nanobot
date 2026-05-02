@@ -14,6 +14,7 @@ export interface TaskChannelContext {
   channel?: string;
   userId?: string;
   trackingKey?: string;
+  publiclyVisible?: boolean;
 }
 
 export interface JobTask {
@@ -35,6 +36,7 @@ export interface TaskJob {
   channel?: string;
   userId?: string;
   trackingKey?: string;
+  publiclyVisible?: boolean;
   outcomeSummary?: string;
   cancelReason?: string;
   kind?: string;
@@ -123,6 +125,7 @@ export class TaskService {
       userId: input.channelContext?.userId,
       trackingKey:
         input.channelContext?.trackingKey || `task:${jobId.toLowerCase()}`,
+      publiclyVisible: input.channelContext?.publiclyVisible === true,
       kind: input.kind,
       metadata: input.metadata,
     };
@@ -240,6 +243,13 @@ export class TaskService {
       job.trackingKey = context.trackingKey;
       changed = true;
     }
+    if (
+      typeof context.publiclyVisible === "boolean" &&
+      job.publiclyVisible !== context.publiclyVisible
+    ) {
+      job.publiclyVisible = context.publiclyVisible;
+      changed = true;
+    }
 
     if (changed) {
       job.updatedAt = new Date().toISOString();
@@ -294,6 +304,14 @@ export class TaskService {
     }
 
     return [header, goal, ...lines].join("\n");
+  }
+
+  public renderActiveJobsSummary(jobs: TaskJob[]): string {
+    if (jobs.length === 0) {
+      return "No active jobs.";
+    }
+
+    return jobs.map((job) => this.renderJobStatus(job)).join("\n\n");
   }
 
   public async getPromptContext(): Promise<string | null> {

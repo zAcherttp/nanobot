@@ -146,10 +146,11 @@ class AgentRunner:
         messages: list[dict[str, Any]],
         assistant_message: dict[str, Any] | None,
         injection_cycles: int,
+        checkpoint_payload: dict[str, Any] | None,
         *,
         phase: str = "after error",
         iteration: int | None = None,
-    ) -> tuple[bool, int]:
+    ) -> tuple[bool, int, dict[str, Any] | None]:
         """Drain pending injections. Returns (should_continue, updated_cycles).
 
         If injections are found and we haven't exceeded _MAX_INJECTION_CYCLES,
@@ -158,31 +159,32 @@ class AgentRunner:
         caller continues the iteration loop.  Otherwise return (False, cycles).
         """
         if injection_cycles >= _MAX_INJECTION_CYCLES:
-            return False, injection_cycles
+            return False, injection_cycles, checkpoint_payload
         injections = await self._drain_injections(spec)
         if not injections:
-            return False, injection_cycles
+            return False, injection_cycles, checkpoint_payload
         injection_cycles += 1
         if assistant_message is not None:
             messages.append(assistant_message)
-            if iteration is not None:
-                await self._emit_checkpoint(
-                    spec,
-                    {
-                        "phase": "final_response",
-                        "iteration": iteration,
-                        "model": spec.model,
-                        "assistant_message": assistant_message,
-                        "completed_tool_results": [],
-                        "pending_tool_calls": [],
-                    },
-                )
+        updated_checkpoint = dict(checkpoint_payload or {})
+        if assistant_message is not None:
+            updated_checkpoint.update({
+                "phase": "final_response",
+                "iteration": iteration,
+                "model": spec.model,
+                "assistant_message": assistant_message,
+                "completed_tool_results": [],
+                "pending_tool_calls": [],
+            })
+        if updated_checkpoint:
+            updated_checkpoint["injected_user_messages"] = [dict(injection) for injection in injections]
+            await self._emit_checkpoint(spec, updated_checkpoint)
         self._append_injected_messages(messages, injections)
         logger.info(
             "Injected {} follow-up message(s) {} ({}/{})",
             len(injections), phase, injection_cycles, _MAX_INJECTION_CYCLES,
         )
-        return True, injection_cycles
+        return True, injection_cycles, updated_checkpoint or checkpoint_payload
 
     async def _drain_injections(self, spec: AgentRunSpec) -> list[dict[str, Any]]:
         """Drain pending user messages via the injection callback.
@@ -243,6 +245,7 @@ class AgentRunner:
         length_recovery_count = 0
         had_injections = False
         injection_cycles = 0
+        checkpoint_payload: dict[str, Any] | None = None
 
         for iteration in range(spec.max_iterations):
             try:
@@ -296,17 +299,15 @@ class AgentRunner:
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in tool_calls)
-                await self._emit_checkpoint(
-                    spec,
-                    {
-                        "phase": "awaiting_tools",
-                        "iteration": iteration,
-                        "model": spec.model,
-                        "assistant_message": assistant_message,
-                        "completed_tool_results": [],
-                        "pending_tool_calls": [tc.to_openai_tool_call() for tc in tool_calls],
-                    },
-                )
+                checkpoint_payload = {
+                    "phase": "awaiting_tools",
+                    "iteration": iteration,
+                    "model": spec.model,
+                    "assistant_message": assistant_message,
+                    "completed_tool_results": [],
+                    "pending_tool_calls": [tc.to_openai_tool_call() for tc in tool_calls],
+                }
+                await self._emit_checkpoint(spec, checkpoint_payload)
 
                 await hook.before_execute_tools(context)
 
@@ -353,30 +354,28 @@ class AgentRunner:
                     context.error = error
                     context.stop_reason = stop_reason
                     await hook.after_iteration(context)
-                    should_continue, injection_cycles = await self._try_drain_injections(
-                        spec, messages, None, injection_cycles,
+                    should_continue, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                        spec, messages, None, injection_cycles, checkpoint_payload,
                         phase="after tool error",
                     )
                     if should_continue:
                         had_injections = True
                         continue
                     break
-                await self._emit_checkpoint(
-                    spec,
-                    {
-                        "phase": "tools_completed",
-                        "iteration": iteration,
-                        "model": spec.model,
-                        "assistant_message": assistant_message,
-                        "completed_tool_results": completed_tool_results,
-                        "pending_tool_calls": [],
-                    },
-                )
+                checkpoint_payload = {
+                    "phase": "tools_completed",
+                    "iteration": iteration,
+                    "model": spec.model,
+                    "assistant_message": assistant_message,
+                    "completed_tool_results": completed_tool_results,
+                    "pending_tool_calls": [],
+                }
+                await self._emit_checkpoint(spec, checkpoint_payload)
                 empty_content_retries = 0
                 length_recovery_count = 0
                 # Checkpoint 1: drain injections after tools, before next LLM call
-                _drained, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                _drained, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                    spec, messages, None, injection_cycles, checkpoint_payload,
                     phase="after tool execution",
                 )
                 if _drained:
@@ -455,8 +454,8 @@ class AgentRunner:
             # Check for mid-turn injections BEFORE signaling stream end.
             # If injections are found we keep the stream alive (resuming=True)
             # so streaming channels don't prematurely finalize the card.
-            should_continue, injection_cycles = await self._try_drain_injections(
-                spec, messages, assistant_message, injection_cycles,
+            should_continue, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                spec, messages, assistant_message, injection_cycles, checkpoint_payload,
                 phase="after final response",
                 iteration=iteration,
             )
@@ -479,8 +478,8 @@ class AgentRunner:
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
-                should_continue, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                should_continue, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                    spec, messages, None, injection_cycles, checkpoint_payload,
                     phase="after LLM error",
                 )
                 if should_continue:
@@ -496,8 +495,8 @@ class AgentRunner:
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
-                should_continue, injection_cycles = await self._try_drain_injections(
-                    spec, messages, None, injection_cycles,
+                should_continue, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                    spec, messages, None, injection_cycles, checkpoint_payload,
                     phase="after empty response",
                 )
                 if should_continue:
@@ -510,17 +509,15 @@ class AgentRunner:
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
             ))
-            await self._emit_checkpoint(
-                spec,
-                {
-                    "phase": "final_response",
-                    "iteration": iteration,
-                    "model": spec.model,
-                    "assistant_message": messages[-1],
-                    "completed_tool_results": [],
-                    "pending_tool_calls": [],
-                },
-            )
+            checkpoint_payload = {
+                "phase": "final_response",
+                "iteration": iteration,
+                "model": spec.model,
+                "assistant_message": messages[-1],
+                "completed_tool_results": [],
+                "pending_tool_calls": [],
+            }
+            await self._emit_checkpoint(spec, checkpoint_payload)
             final_content = clean
             context.final_content = final_content
             context.stop_reason = stop_reason
@@ -544,8 +541,8 @@ class AgentRunner:
             # independent inbound messages by _dispatch's finally block.
             # We ignore should_continue here because the for-loop has already
             # exhausted all iterations.
-            drained_after_max_iterations, injection_cycles = await self._try_drain_injections(
-                spec, messages, None, injection_cycles,
+            drained_after_max_iterations, injection_cycles, checkpoint_payload = await self._try_drain_injections(
+                spec, messages, None, injection_cycles, checkpoint_payload,
                 phase="after max_iterations",
             )
             if drained_after_max_iterations:

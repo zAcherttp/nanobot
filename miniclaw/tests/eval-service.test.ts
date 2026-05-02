@@ -131,9 +131,20 @@ describe("EvalService", () => {
 
     expect(runnerHarness.ctorArgs).toHaveLength(1);
     expect(runnerHarness.ctorArgs[0].mode).toBe("sandbox-live");
+    expect(runnerHarness.ctorArgs[0].keepWorkspace).toBe(false);
     expect(
       runnerHarness.ctorArgs[0].scenarios.map((entry) => entry.id),
     ).toEqual(["live-one"]);
+  });
+
+  it("passes keepWorkspace through to the runner config", async () => {
+    const { EvalService } = await import("../src/services/eval");
+    const service = new EvalService(configService as never);
+
+    await service.runAll({ mode: "sandbox-live", keepWorkspace: true });
+
+    expect(runnerHarness.ctorArgs).toHaveLength(1);
+    expect(runnerHarness.ctorArgs[0].keepWorkspace).toBe(true);
   });
 
   it("passes only the requested scenario to runOne when the mode matches", async () => {

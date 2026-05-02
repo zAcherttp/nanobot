@@ -1,4 +1,6 @@
-import { Bot, GrammyError, HttpError } from "grammy";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
+import { Bot, GrammyError, HttpError, type ApiClientOptions } from "grammy";
 import type { MessageBus } from "@/bus/index";
 import type { EditBusEvent, OutboundBusEvent, StreamDelta } from "@/bus/types";
 import { logger } from "@/utils/logger";
@@ -36,6 +38,26 @@ export class TelegramChannel implements Channel {
 
   private static readonly STREAM_SEND_INTERVAL_MS = 1000;
   private static readonly CLOSED_STREAM_TTL_MS = 5000;
+  private static readonly POLLING_MAX_SOCKETS = 2;
+  private static readonly SEND_MAX_SOCKETS = 16;
+  private static readonly API_RETRY_ATTEMPTS = 3;
+  private static readonly API_RETRY_BASE_DELAY_MS = 500;
+  private readonly pollingHttpAgent = new HttpAgent({
+    keepAlive: true,
+    maxSockets: TelegramChannel.POLLING_MAX_SOCKETS,
+  });
+  private readonly pollingHttpsAgent = new HttpsAgent({
+    keepAlive: true,
+    maxSockets: TelegramChannel.POLLING_MAX_SOCKETS,
+  });
+  private readonly sendHttpAgent = new HttpAgent({
+    keepAlive: true,
+    maxSockets: TelegramChannel.SEND_MAX_SOCKETS,
+  });
+  private readonly sendHttpsAgent = new HttpsAgent({
+    keepAlive: true,
+    maxSockets: TelegramChannel.SEND_MAX_SOCKETS,
+  });
 
   constructor(
     private readonly bus: MessageBus,
@@ -44,7 +66,9 @@ export class TelegramChannel implements Channel {
   ) {}
 
   public async start(): Promise<void> {
-    this.bot = new Bot(this.token);
+    this.bot = new Bot(this.token, {
+      client: this.buildClientConfig(),
+    });
 
     // Subscribe to edit events
     this.bus.subscribeEdit(async (event: EditBusEvent) => {
@@ -470,10 +494,8 @@ export class TelegramChannel implements Channel {
     text: string,
     options?: string[],
   ): Promise<number> {
-    const sent = await bot.api.sendMessage(
-      chatId,
-      this.escapeMarkdownV2(text),
-      {
+    const sent = await this.callTelegramApi("sendMessage", () =>
+      bot.api.sendMessage(chatId, this.escapeMarkdownV2(text), {
         parse_mode: "MarkdownV2",
         reply_markup:
           options && options.length > 0
@@ -483,7 +505,7 @@ export class TelegramChannel implements Channel {
                 one_time_keyboard: true,
               }
             : undefined,
-      },
+      }),
     );
     return sent.message_id;
   }
@@ -494,13 +516,10 @@ export class TelegramChannel implements Channel {
     messageId: number,
     text: string,
   ): Promise<void> {
-    await bot.api.editMessageText(
-      chatId,
-      messageId,
-      this.escapeMarkdownV2(text),
-      {
+    await this.callTelegramApi("editMessageText", () =>
+      bot.api.editMessageText(chatId, messageId, this.escapeMarkdownV2(text), {
         parse_mode: "MarkdownV2",
-      },
+      }),
     );
   }
 
@@ -523,11 +542,13 @@ export class TelegramChannel implements Channel {
     if (!Number.isInteger(numericChatId)) return false;
 
     try {
-      await bot.api.sendMessageDraft(
-        numericChatId,
-        draftId,
-        this.escapeMarkdownV2(text),
-        { parse_mode: "MarkdownV2" },
+      await this.callTelegramApi("sendMessageDraft", () =>
+        bot.api.sendMessageDraft(
+          numericChatId,
+          draftId,
+          this.escapeMarkdownV2(text),
+          { parse_mode: "MarkdownV2" },
+        ),
       );
       return true;
     } catch (err) {
@@ -607,5 +628,82 @@ export class TelegramChannel implements Channel {
         );
       }
     });
+  }
+
+  private buildClientConfig(): ApiClientOptions {
+    const baseFetchConfig = {
+      compress: true,
+      agent: (parsedUrl: URL) => this.selectTransportAgent(parsedUrl),
+    } as ApiClientOptions["baseFetchConfig"];
+
+    return {
+      timeoutSeconds: 60,
+      baseFetchConfig,
+    };
+  }
+
+  private selectTransportAgent(parsedUrl: URL): HttpAgent | HttpsAgent {
+    const isPolling = parsedUrl.pathname.endsWith("/getUpdates");
+    const useHttps = parsedUrl.protocol === "https:";
+    if (isPolling) {
+      return useHttps ? this.pollingHttpsAgent : this.pollingHttpAgent;
+    }
+    return useHttps ? this.sendHttpsAgent : this.sendHttpAgent;
+  }
+
+  private async callTelegramApi<T>(
+    method: string,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    let delayMs = TelegramChannel.API_RETRY_BASE_DELAY_MS;
+
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await action();
+      } catch (err) {
+        if (
+          attempt >= TelegramChannel.API_RETRY_ATTEMPTS ||
+          !this.shouldRetryTelegramApiError(err)
+        ) {
+          throw err;
+        }
+
+        logger.warn(
+          { err, attempt, method, delayMs },
+          `Transient Telegram API failure in ${method}, retrying`,
+        );
+        await this.sleep(delayMs);
+        delayMs *= 2;
+      }
+    }
+  }
+
+  private shouldRetryTelegramApiError(err: unknown): boolean {
+    if (err instanceof HttpError) {
+      return true;
+    }
+    if (err instanceof GrammyError) {
+      if (err.error_code >= 500) return true;
+      if (err.error_code === 429) return true;
+      const description = err.description.toLowerCase();
+      return (
+        description.includes("timed out") ||
+        description.includes("timeout") ||
+        description.includes("temporarily unavailable")
+      );
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    const lowered = message.toLowerCase();
+    return (
+      lowered.includes("timed out") ||
+      lowered.includes("timeout") ||
+      lowered.includes("econnreset") ||
+      lowered.includes("socket hang up") ||
+      lowered.includes("temporarily unavailable")
+    );
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

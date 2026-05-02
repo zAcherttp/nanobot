@@ -113,6 +113,7 @@ function buildSummary(
       complexity: result.complexity,
       durationMs: result.durationMs,
       toolMetrics: result.toolMetrics,
+      workspacePath: result.workspacePath,
     })),
   };
 }
@@ -166,6 +167,9 @@ function renderSummaryMarkdown(summary: EvalSummary): string {
     lines.push(
       `  tools: ${result.toolMetrics.totalCalls} total (${result.toolMetrics.successfulCalls} success, ${result.toolMetrics.failedCalls} failed)`,
     );
+    if (result.workspacePath) {
+      lines.push(`  workspace: ${result.workspacePath}`);
+    }
   }
 
   return lines.join("\n");

@@ -318,21 +318,17 @@ export class AgentLoop {
     busReceivedAt?: number,
   ) {
     const shouldLog = shouldLogChannel(channel);
-    if (shouldLog) {
-      logger.info(
-        {
-          channel: channel || "unknown",
-          userId: userId || "anonymous",
-          content: this.truncateForLog(userText, INBOUND_LOG_PREVIEW_CHARS),
-        },
-        "Gateway message received",
-      );
-    }
 
     const thread = await this.persistence.getConversationThread();
+    if (this.isTasksListCommand(userText)) {
+      await this.handleTasksListCommand(thread.id, userText, channel, userId);
+      return;
+    }
+
     const pendingAsk = await this.askUserService.getPendingAsk(thread.id);
     let approvalGranted = false;
     let workingMessages: AgentMessage[];
+    let injectedMessage: AgentMessage;
 
     if (pendingAsk) {
       const replyOutcome = this.askUserService.classifyReply(
@@ -350,20 +346,34 @@ export class AgentLoop {
         await this.askUserService.clearApprovedAsk(thread.id);
       }
 
+      injectedMessage = this.askUserService.buildToolResultMessage(
+        pendingAsk.toolCallId,
+        userText,
+      );
+
       workingMessages = [
         ...(await this.persistence.getMessages(thread.id)),
-        this.askUserService.buildToolResultMessage(
-          pendingAsk.toolCallId,
-          userText,
-        ),
+        injectedMessage,
       ];
     } else {
-      await this.persistence.appendMessage(thread.id, {
+      injectedMessage = {
         role: "user",
         content: userText,
         timestamp: Date.now(),
-      });
+      };
+      await this.persistence.appendMessage(thread.id, injectedMessage);
       workingMessages = await this.persistence.getMessages(thread.id);
+    }
+
+    if (shouldLog) {
+      logger.info(
+        {
+          channel: channel || "unknown",
+          userId: userId || "anonymous",
+          message: this.describeInjectedMessage(injectedMessage),
+        },
+        "Agent context injection",
+      );
     }
 
     await this.ensureOnboardingJob(channel, userId);
@@ -458,7 +468,7 @@ export class AgentLoop {
         systemPrompt,
         messages: compactedMessages,
         tools,
-        thinkingLevel: "off",
+        thinkingLevel: "medium",
       },
       getApiKey: this.getApiKey,
       transformContext: async (msgs) => msgs,
@@ -489,6 +499,24 @@ export class AgentLoop {
               channel,
               userId,
             });
+          } else if (
+            shouldLog &&
+            this.isReasoningAssistantEvent(agentEvent.assistantMessageEvent)
+          ) {
+            logger.info(
+              {
+                channel: channel || "unknown",
+                userId: userId || "anonymous",
+                eventType: agentEvent.assistantMessageEvent.type,
+                preview: this.truncateForLog(
+                  this.summarizeAssistantMessageEvent(
+                    agentEvent.assistantMessageEvent,
+                  ),
+                  MESSAGE_PART_LOG_PREVIEW_CHARS,
+                ),
+              },
+              "Agent reasoning",
+            );
           } else if (
             shouldLog &&
             !isToolStreamEvent(agentEvent.assistantMessageEvent.type)
@@ -602,6 +630,40 @@ export class AgentLoop {
     } finally {
       this.activeAgents.delete(agent);
     }
+  }
+
+  private isTasksListCommand(userText: string): boolean {
+    return userText.trim().toLowerCase() === "/tasks_list";
+  }
+
+  private async handleTasksListCommand(
+    threadId: string,
+    userText: string,
+    channel?: string,
+    userId?: string,
+  ): Promise<void> {
+    const userMessage: AgentMessage = {
+      role: "user",
+      content: userText,
+      timestamp: Date.now(),
+    };
+    await this.persistence.appendMessage(threadId, userMessage);
+
+    await this.ensureOnboardingJob(channel, userId);
+    const activeJobs = await this.taskService.listJobs("active");
+    const responseText = this.taskService.renderActiveJobsSummary(activeJobs);
+    const assistantMessage: AgentMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: responseText }],
+      timestamp: Date.now(),
+    };
+    await this.persistence.appendMessage(threadId, assistantMessage);
+
+    this.bus.publishOutbound({
+      message: assistantMessage,
+      channel,
+      userId,
+    });
   }
 
   private resolveModel(): Model<Api> {
@@ -759,6 +821,40 @@ export class AgentLoop {
       })
       .join("\n")
       .trim();
+  }
+
+  private describeInjectedMessage(
+    message: AgentMessage,
+  ): Record<string, unknown> {
+    if (message.role === "user") {
+      return {
+        role: "user",
+        content: this.truncateForLog(
+          this.extractTextContent(message.content),
+          INBOUND_LOG_PREVIEW_CHARS,
+        ),
+      };
+    }
+
+    if (message.role === "toolResult") {
+      return {
+        role: "toolResult",
+        toolName: message.toolName,
+        toolCallId: message.toolCallId,
+        content: this.truncateForLog(
+          this.extractTextContent(message.content),
+          INBOUND_LOG_PREVIEW_CHARS,
+        ),
+      };
+    }
+
+    return {
+      role: message.role,
+      content: this.truncateForLog(
+        this.extractTextContent(message.content),
+        INBOUND_LOG_PREVIEW_CHARS,
+      ),
+    };
   }
 
   private logConversationMessages(
@@ -929,6 +1025,21 @@ export class AgentLoop {
     const eventType =
       typeof record.type === "string" ? record.type : "unknown_event";
 
+    if (this.isReasoningAssistantEvent(event)) {
+      for (const field of [
+        "delta",
+        "text",
+        "content",
+        "summary",
+        "reasoning",
+        "thinking",
+      ]) {
+        if (typeof record[field] === "string") {
+          return record[field] as string;
+        }
+      }
+    }
+
     if (eventType === "toolcall_start") {
       const toolName = this.extractToolCallName(record);
       return toolName ? `executing ${toolName}` : eventType;
@@ -1050,6 +1161,31 @@ export class AgentLoop {
     }
 
     return this.safeSerializeForLog(value);
+  }
+
+  private isReasoningAssistantEvent(event: unknown): boolean {
+    if (!event || typeof event !== "object") {
+      return false;
+    }
+
+    const record = event as Record<string, unknown>;
+    const eventType =
+      typeof record.type === "string" ? record.type.toLowerCase() : "";
+
+    if (
+      eventType.includes("reasoning") ||
+      eventType.includes("thinking") ||
+      eventType.includes("thought")
+    ) {
+      return true;
+    }
+
+    return (
+      typeof record.reasoning === "string" ||
+      typeof record.thinking === "string" ||
+      (typeof record.summary === "string" &&
+        (eventType.includes("summary") || "reasoning" in record))
+    );
   }
 
   private safeSerializeForLog(value: unknown): string {

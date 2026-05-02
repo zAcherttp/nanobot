@@ -36,7 +36,7 @@ const EVAL_SKILL_READ_TOOL_NAMES = new Set([
   "load_skill",
   "get_skill_info",
 ]);
-const EVAL_TURN_INACTIVITY_TIMEOUT_MS = 15000;
+const EVAL_TURN_INACTIVITY_TIMEOUT_MS = 60000;
 
 export class EvalRunner {
   constructor(private readonly options: EvalRunConfig) {}
@@ -274,7 +274,7 @@ export class EvalRunner {
         const scenarioTimeoutMs =
           scenario.providerBudgets?.maxDurationMs ||
           this.options.scenarioTimeoutMs;
-        await withTimeout(
+        await withActivityTimeout(
           this.executeScenarioTurns(
             bus,
             loop,
@@ -284,7 +284,9 @@ export class EvalRunner {
             () => lastActivityAt,
           ),
           scenarioTimeoutMs,
-          `Scenario timed out after ${scenarioTimeoutMs} ms`,
+          () =>
+            `Scenario stalled after ${scenarioTimeoutMs} ms without assistant output or tool activity`,
+          () => lastActivityAt,
         );
       } catch (error) {
         if (error instanceof TimeoutError) {
@@ -386,6 +388,7 @@ export class EvalRunner {
         shellExecutions,
         snapshots,
         outputDir: reportDir,
+        workspacePath: this.options.keepWorkspace ? tempRoot : undefined,
       };
 
       return result;
@@ -421,9 +424,20 @@ export class EvalRunner {
         shellExecutions,
         snapshots: await readSnapshotsSafe(workspaceDir),
         outputDir: reportDir,
+        workspacePath: this.options.keepWorkspace ? tempRoot : undefined,
       };
     } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      if (this.options.keepWorkspace) {
+        logger.info(
+          {
+            scenarioId: scenario.id,
+            workspacePath: tempRoot,
+          },
+          "Eval workspace retained",
+        );
+      } else {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     }
   }
 
@@ -964,24 +978,47 @@ async function withTimeout<T>(
   }
 }
 
+async function withActivityTimeout<T>(
+  promise: Promise<T>,
+  inactivityTimeoutMs: number,
+  messageFactory: () => string,
+  getLastActivityAt: () => number,
+): Promise<T> {
+  let intervalHandle: NodeJS.Timeout | null = null;
+
+  const inactivityPromise = new Promise<T>((_resolve, reject) => {
+    intervalHandle = setInterval(() => {
+      const inactivityMs = Date.now() - getLastActivityAt();
+      if (inactivityMs >= inactivityTimeoutMs) {
+        reject(new TimeoutError(messageFactory()));
+      }
+    }, 250);
+  });
+
+  try {
+    return await Promise.race([promise, inactivityPromise]);
+  } finally {
+    if (intervalHandle) {
+      clearInterval(intervalHandle);
+    }
+  }
+}
+
 async function waitForIdleWithWatchdog(
   idlePromise: Promise<void>,
   turnTimeoutMs: number,
   inactivityTimeoutMs: number,
   getLastActivityAt: () => number,
 ): Promise<void> {
-  let timeoutHandle: NodeJS.Timeout | null = null;
   let intervalHandle: NodeJS.Timeout | null = null;
-
-  const timeoutPromise = new Promise<void>((_resolve, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new TimeoutError(`Turn timed out after ${turnTimeoutMs} ms`));
-    }, turnTimeoutMs);
-  });
 
   const inactivityPromise = new Promise<void>((_resolve, reject) => {
     intervalHandle = setInterval(() => {
       const inactivityMs = Date.now() - getLastActivityAt();
+      if (inactivityMs >= turnTimeoutMs) {
+        reject(new TimeoutError(`Turn timed out after ${turnTimeoutMs} ms`));
+        return;
+      }
       if (inactivityMs >= inactivityTimeoutMs) {
         reject(
           new TimeoutError(
@@ -993,11 +1030,8 @@ async function waitForIdleWithWatchdog(
   });
 
   try {
-    await Promise.race([idlePromise, timeoutPromise, inactivityPromise]);
+    await Promise.race([idlePromise, inactivityPromise]);
   } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
     if (intervalHandle) {
       clearInterval(intervalHandle);
     }

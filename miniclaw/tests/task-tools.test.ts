@@ -37,7 +37,7 @@ describe("task tools", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("creates jobs through the tool interface and posts a status message", async () => {
+  it("creates jobs through the tool interface without exposing internal status", async () => {
     const tools = createTaskTools(taskService, new TaskProgressNotifier(bus), {
       channel: "cli",
       userId: "user-1",
@@ -53,10 +53,10 @@ describe("task tools", () => {
     const jobs = await taskService.listJobs("active");
     expect(result.details.job.id).toBe(jobs[0].id);
     expect(jobs[0].tasks).toHaveLength(2);
-    expect(outbound[0]).toContain("Ship release notes [active]");
+    expect(outbound).toEqual([]);
   });
 
-  it("updates progress and archives jobs through the tool interface", async () => {
+  it("updates progress and archives jobs without emitting tasklist messages", async () => {
     const tools = createTaskTools(taskService, new TaskProgressNotifier(bus), {
       channel: "cli",
       userId: "user-1",
@@ -75,7 +75,7 @@ describe("task tools", () => {
       job_id: job.id,
       task_id: job.tasks[0].id,
     });
-    expect(edits[0]).toContain("[x] Send reply");
+    expect(edits).toEqual([]);
 
     const archiveJob = tools.find((tool) => tool.name === "archive_job")!;
     await archiveJob.execute("tool-3", {
@@ -87,8 +87,6 @@ describe("task tools", () => {
     expect((await taskService.listJobs("archived"))[0].status).toBe(
       "completed",
     );
-    expect(outbound[outbound.length - 1]).toContain(
-      "Finished job: Close support loop",
-    );
+    expect(outbound).toEqual([]);
   });
 });

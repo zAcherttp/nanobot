@@ -26,6 +26,9 @@ export class CliAgentService {
     const persistenceSvc = new PersistenceService(
       this.configService,
       "miniclaw",
+      {
+        threadsDir: config.thread.store.path,
+      },
     );
 
     logger.info(chalk.cyan("Initializing Channel Registry - CLI ..."));

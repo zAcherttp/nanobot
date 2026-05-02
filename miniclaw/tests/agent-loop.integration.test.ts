@@ -896,7 +896,7 @@ Use gws calendar +agenda.`,
     bus.publishInbound({
       message: {
         role: "user",
-        content: "maybe later",
+        content: "not now",
         timestamp: Date.now(),
       },
       channel: "cli",
@@ -1189,9 +1189,10 @@ Use gws calendar +agenda.`,
     await waitFor(
       async () => (await taskService.listJobs("active")).length === 1,
     );
+    await waitFor(async () => outbound.length === 1);
     const activeJob = (await taskService.listJobs("active"))[0];
     expect(activeJob.kind).toBe("onboarding");
-    expect(outbound[0]).toContain("Complete user profile");
+    expect(outbound[0]).toBe("Need a few more preferences.");
 
     bus.publishInbound({
       message: {
@@ -1214,6 +1215,72 @@ Use gws calendar +agenda.`,
     const profile = await profileService.getProfile();
     expect(profile.setupComplete).toBe(true);
     expect(profile.defaultCalendar).toBe("primary");
+  });
+
+  it("shows active jobs only when the user sends /tasks_list", async () => {
+    const { AgentLoop } = await import("../src/agent/loop");
+    const outbound: string[] = [];
+
+    await profileService.updateProfile({
+      setupComplete: false,
+      name: "",
+      timezone: "",
+      language: "",
+      communicationStyle: "",
+      responseLength: "",
+      technicalLevel: "",
+      calendarProvider: "",
+      defaultCalendar: "",
+    });
+
+    bus.subscribeOutbound((event) => {
+      outbound.push(extractText(event.message.content));
+    });
+
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello! How can I help you today?" }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+
+    const loop = new AgentLoop(bus, persistence, config);
+    await loop.start();
+    startedLoops.push(loop);
+
+    bus.publishInbound({
+      message: {
+        role: "user",
+        content: "hello",
+        timestamp: Date.now(),
+      },
+      channel: "cli",
+      userId: "user-1",
+    });
+
+    await waitFor(async () =>
+      outbound.includes("Hello! How can I help you today?"),
+    );
+    expect(outbound).toEqual(["Hello! How can I help you today?"]);
+    expect(await taskService.listJobs("active")).toHaveLength(1);
+
+    bus.publishInbound({
+      message: {
+        role: "user",
+        content: "/tasks_list",
+        timestamp: Date.now(),
+      },
+      channel: "cli",
+      userId: "user-1",
+    });
+
+    await waitFor(async () => outbound.length === 2);
+    expect(outbound[1]).toContain("Complete user profile [active]");
+    expect(outbound[1]).toContain("Capture the user's name");
   });
 });
 

@@ -225,6 +225,7 @@ describe.sequential("EvalRunner", () => {
       ],
       mode: "simulate",
       outputDir,
+      keepWorkspace: false,
       safePolicy: {
         enabled: true,
         safeWindow: {
@@ -365,6 +366,7 @@ describe.sequential("EvalRunner", () => {
       ],
       mode: "sandbox-live",
       outputDir,
+      keepWorkspace: false,
       safePolicy: {
         enabled: true,
         safeWindow: {
@@ -465,6 +467,7 @@ describe.sequential("EvalRunner", () => {
       ],
       mode: "sandbox-live",
       outputDir,
+      keepWorkspace: false,
       safePolicy: {
         enabled: true,
         safeWindow: {
@@ -542,6 +545,7 @@ describe.sequential("EvalRunner", () => {
       ],
       mode: "simulate",
       outputDir,
+      keepWorkspace: false,
       safePolicy: {
         enabled: true,
         safeWindow: {
@@ -618,6 +622,7 @@ describe.sequential("EvalRunner", () => {
       ],
       mode: "sandbox-live",
       outputDir,
+      keepWorkspace: false,
       safePolicy: {
         enabled: true,
         safeWindow: {
@@ -665,5 +670,251 @@ describe.sequential("EvalRunner", () => {
         content: "I can help schedule that",
       }),
     );
+  });
+
+  it("extends the scenario timeout window when tool activity continues", async () => {
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const listSkills = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "list_skills",
+      );
+      await listSkills.execute("tool-1", {});
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Still working, but active." }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+    agentHarness.FakeAgent.waitForIdleImpl = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+
+    const runner = new EvalRunner({
+      config,
+      scenarios: [
+        {
+          id: "activity_extends_timeout",
+          title: "Activity extends timeout",
+          mode: "simulate",
+          complexity: "simple",
+          turns: ["keep going"],
+          assertions: {},
+          rubricWeights: {
+            recallRelevance: 1,
+            planningCoherence: 1,
+            consentPolicyAdherence: 1,
+            proposalUsefulness: 1,
+            efficiency: 1,
+          },
+        },
+      ],
+      mode: "simulate",
+      outputDir,
+      keepWorkspace: false,
+      safePolicy: {
+        enabled: true,
+        safeWindow: {
+          start: "2026-06-01T00:00:00.000Z",
+          end: "2026-06-30T23:59:59.000Z",
+        },
+        eventPrefix: "[MINICLAW-EVAL]",
+        requireTaggedEventForMutations: true,
+      },
+      throttle: {
+        llmMaxConcurrency: 1,
+        gwsMaxConcurrency: 1,
+        llmCooldownMs: 0,
+        gwsCooldownMs: 0,
+        turnCooldownMs: 0,
+        maxToolCallsPerScenario: 10,
+      },
+      scenarioTimeoutMs: 30,
+      turnTimeoutMs: 200,
+    });
+
+    const summary = await runner.runAll();
+    const reportDirEntries = await fs.readdir(outputDir, {
+      withFileTypes: true,
+    });
+    const reportDir = reportDirEntries.find(
+      (entry) => entry.isDirectory() && entry.name !== "latest",
+    );
+    const report = JSON.parse(
+      await fs.readFile(
+        path.join(outputDir, reportDir!.name, "activity_extends_timeout.json"),
+        "utf8",
+      ),
+    );
+
+    expect(summary.failed).toBe(0);
+    expect(report.failureKind).toBeUndefined();
+    expect(report.toolCalls).toContainEqual(
+      expect.objectContaining({
+        name: "list_skills",
+        success: true,
+      }),
+    );
+  });
+
+  it("extends the turn timeout window when tool activity continues", async () => {
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const listSkills = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "list_skills",
+      );
+      await listSkills.execute("tool-1", {});
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Turn stayed alive." }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+    agentHarness.FakeAgent.waitForIdleImpl = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+
+    const runner = new EvalRunner({
+      config,
+      scenarios: [
+        {
+          id: "activity_extends_turn_timeout",
+          title: "Activity extends turn timeout",
+          mode: "simulate",
+          complexity: "simple",
+          turns: ["keep the turn alive"],
+          assertions: {},
+          rubricWeights: {
+            recallRelevance: 1,
+            planningCoherence: 1,
+            consentPolicyAdherence: 1,
+            proposalUsefulness: 1,
+            efficiency: 1,
+          },
+        },
+      ],
+      mode: "simulate",
+      outputDir,
+      keepWorkspace: false,
+      safePolicy: {
+        enabled: true,
+        safeWindow: {
+          start: "2026-06-01T00:00:00.000Z",
+          end: "2026-06-30T23:59:59.000Z",
+        },
+        eventPrefix: "[MINICLAW-EVAL]",
+        requireTaggedEventForMutations: true,
+      },
+      throttle: {
+        llmMaxConcurrency: 1,
+        gwsMaxConcurrency: 1,
+        llmCooldownMs: 0,
+        gwsCooldownMs: 0,
+        turnCooldownMs: 0,
+        maxToolCallsPerScenario: 10,
+      },
+      scenarioTimeoutMs: 200,
+      turnTimeoutMs: 30,
+    });
+
+    const summary = await runner.runAll();
+    const reportDirEntries = await fs.readdir(outputDir, {
+      withFileTypes: true,
+    });
+    const reportDir = reportDirEntries.find(
+      (entry) => entry.isDirectory() && entry.name !== "latest",
+    );
+    const report = JSON.parse(
+      await fs.readFile(
+        path.join(
+          outputDir,
+          reportDir!.name,
+          "activity_extends_turn_timeout.json",
+        ),
+        "utf8",
+      ),
+    );
+
+    expect(summary.failed).toBe(0);
+    expect(report.failureKind).toBeUndefined();
+    expect(report.toolCalls).toContainEqual(
+      expect.objectContaining({
+        name: "list_skills",
+        success: true,
+      }),
+    );
+  });
+
+  it("retains the scenario workspace when keepWorkspace is enabled", async () => {
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done." }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+
+    const runner = new EvalRunner({
+      config,
+      scenarios: [
+        {
+          id: "retain_workspace",
+          title: "Retain workspace",
+          mode: "simulate",
+          complexity: "simple",
+          turns: ["hello"],
+          assertions: {},
+          rubricWeights: {
+            recallRelevance: 1,
+            planningCoherence: 1,
+            consentPolicyAdherence: 1,
+            proposalUsefulness: 1,
+            efficiency: 1,
+          },
+        },
+      ],
+      mode: "simulate",
+      outputDir,
+      keepWorkspace: true,
+      safePolicy: {
+        enabled: true,
+        safeWindow: {
+          start: "2026-06-01T00:00:00.000Z",
+          end: "2026-06-30T23:59:59.000Z",
+        },
+        eventPrefix: "[MINICLAW-EVAL]",
+        requireTaggedEventForMutations: true,
+      },
+      throttle: {
+        llmMaxConcurrency: 1,
+        gwsMaxConcurrency: 1,
+        llmCooldownMs: 0,
+        gwsCooldownMs: 0,
+        turnCooldownMs: 0,
+        maxToolCallsPerScenario: 10,
+      },
+      scenarioTimeoutMs: 30000,
+      turnTimeoutMs: 5000,
+    });
+
+    const summary = await runner.runAll();
+    const retained = summary.results[0].workspacePath;
+
+    expect(retained).toBeTruthy();
+    await expect(fs.access(retained!)).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(retained!, "workspace", "AGENTS.md")),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(retained!, "threads")),
+    ).resolves.toBeUndefined();
   });
 });

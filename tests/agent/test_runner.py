@@ -6,6 +6,7 @@ import asyncio
 import base64
 import os
 import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1919,6 +1920,59 @@ async def test_drain_injections_returns_empty_when_no_callback():
     )
     result = await runner._drain_injections(spec)
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_injected_followups_are_checkpointed_before_continuation():
+    """A slow answer plus a follow-up should checkpoint that follow-up before the next LLM call."""
+    from nanobot.agent.runner import AgentRunSpec, AgentRunner
+    from nanobot.bus.events import InboundMessage
+
+    provider = MagicMock()
+    call_count = {"n": 0}
+    checkpoints: list[dict[str, Any]] = []
+
+    async def chat_with_retry(*, messages, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return LLMResponse(content="slow answer", tool_calls=[], usage={})
+        raise RuntimeError("boom")
+
+    async def checkpoint_callback(payload):
+        checkpoints.append(payload)
+
+    provider.chat_with_retry = chat_with_retry
+    tools = MagicMock()
+    tools.get_definitions.return_value = []
+
+    injection_queue = asyncio.Queue()
+    inject_cb = _make_injection_callback(injection_queue)
+    await injection_queue.put(
+        InboundMessage(
+            channel="telegram",
+            sender_id="u",
+            chat_id="c",
+            content="follow-up after slow answer",
+        )
+    )
+
+    runner = AgentRunner(provider)
+    with pytest.raises(RuntimeError, match="boom"):
+        await runner.run(AgentRunSpec(
+            initial_messages=[{"role": "user", "content": "start"}],
+            tools=tools,
+            model="test-model",
+            max_iterations=5,
+            max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+            injection_callback=inject_cb,
+            checkpoint_callback=checkpoint_callback,
+        ))
+
+    assert checkpoints
+    assert checkpoints[-1]["assistant_message"]["content"] == "slow answer"
+    assert checkpoints[-1]["injected_user_messages"] == [
+        {"role": "user", "content": "follow-up after slow answer"}
+    ]
 
 
 @pytest.mark.asyncio

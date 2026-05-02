@@ -33,7 +33,7 @@ describe.sequential("PersistenceService integration", () => {
 
   it("auto-creates the conversation thread on first access", async () => {
     const thread = await service.getConversationThread();
-    const threadDir = path.join(tempDir, "miniclaw", "threads", "conversation");
+    const threadDir = path.join(tempDir, "threads", "conversation");
 
     expect(thread.type).toBe("conversation");
     expect(thread.status).toBe("active");
@@ -86,7 +86,6 @@ describe.sequential("PersistenceService integration", () => {
     const thread = await service.getConversationThread();
     const messagesPath = path.join(
       tempDir,
-      "miniclaw",
       "threads",
       thread.id,
       "messages.jsonl",
@@ -140,7 +139,7 @@ describe.sequential("PersistenceService integration", () => {
       ThreadNotFoundError,
     );
 
-    const threadsRoot = path.join(tempDir, "miniclaw", "threads");
+    const threadsRoot = path.join(tempDir, "threads");
     const entries = await fs.readdir(threadsRoot);
     const archivedDir = entries.find((entry) => entry !== "conversation");
 
