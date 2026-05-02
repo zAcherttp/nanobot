@@ -173,11 +173,11 @@ graph TD
 - **Managed User Profile**: Agent-managed `USER.md` block storing onboarding preferences such as timezone, language, communication style, response length, technical level, and calendar preference.
 - **Onboarding as Work**: First-run preference gathering is no longer a separate mode; the agent auto-injects an onboarding job and completes it through the standard multi-turn task workflow.
 - **Skill Runtime**: Real agent tools for `list_skills`, `load_skill`, and `get_skill_info`, with loaded skill bodies scoped to the active turn instead of being persisted into history.
-- **Calendar Execution Model**: The generalized calendar tool path has been removed. Google Calendar work now flows through provider-specific `gws-*` skills, while `lark` remains a stored preference until dedicated skills exist.
+- **Calendar Execution Model**: The generalized calendar config/service layer has been removed. Calendar skills now provide guidance only, and the only supported execution path is `gws_calendar_agenda` plus the generic confirmation-gated tools `propose_plan` and `execute_plan`. The currently supported write plan type is `gws_calendar_insert`. `lark` remains a stored preference until a real execution path exists.
 
 ## Recent Improvements
 
-- **Service Layer Optimization**: Removed thin wrapper services (`FileSystemService`, `CalendarService`, duplicate `agent.ts`) to reduce unnecessary abstraction layers. Replaced with direct usage of standard Node.js modules and centralized `paths` utility (~170 lines removed).
+- **Service Layer Optimization**: Removed thin wrapper services (`FileSystemService`, generalized `CalendarService`, duplicate `agent.ts`) to reduce unnecessary abstraction layers. Replaced with direct usage of standard Node.js modules, an explicit GWS calendar runtime, and centralized `paths` utility (~170 lines removed).
 - **Reduced Coupling**: Eliminated unnecessary service dependencies by using direct path resolution functions (`getRootDir()`, `getConfigPath()`, `resolvePath()`) instead of service injection.
 - **Thread Naming**: Migrated from ULID-based thread IDs to type-based folder names (`conversation/`, `system/`) for clearer file system organization.
 - **Provider Configuration**: Refactored provider resolution to use dictionaries instead of if-else chains, making it easier to add new providers.
@@ -186,7 +186,7 @@ graph TD
 - **SSE Removal**: Removed the SSE channel and `/api/sse/*` routes to focus the runtime on CLI and Telegram plus thin HTTP ingress.
 - **Task-Oriented Agent State**: Added `TASKS.md`, structured task tooling, task progress notification/edit flows, and archived-job retention instead of deleting finished work.
 - **Profile-Driven Onboarding**: Added managed `USER.md` profile state and onboarding job injection so the agent can gather preferences through the same normal planning loop it uses for other long-horizon work.
-- **Skill-Driven Calendar Flow**: Replaced the generalized calendar wrapper with real skill discovery/loading, plus provider-specific `gws-*` skills for agenda exploration and event insertion guidance.
+- **Skill-Directed Calendar Flow**: Calendar skills now handle discovery and operating guidance, while execution goes through the explicit GWS agenda tool plus generic proposal/confirm plan tools instead of a generalized provider runtime.
 
 ## Upcoming Milestones
 

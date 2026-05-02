@@ -32,9 +32,11 @@ This file documents non-obvious constraints and usage patterns.
 
 ## Calendar Tools
 
+- Calendar skills are instruction surfaces. These three tools are the only runtime execution path.
 - Use `gws_calendar_agenda` for read-only Google Calendar inspection.
-- Use `propose_gws_calendar_insert` to create a pending proposal instead of writing immediately.
-- Use `execute_gws_calendar_insert` only after explicit user confirmation.
+- Use `propose_plan` to create a pending proposal instead of writing immediately.
+- Use `execute_plan` only after explicit user confirmation.
+- The currently supported write plan type is `gws_calendar_insert`.
 
 ## exec — Safety Limits
 

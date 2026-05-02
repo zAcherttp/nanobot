@@ -34,9 +34,10 @@ Skills are available through tools.
 
 ## Calendar
 
-Calendar work is proposal-first and provider-specific.
+Calendar work is proposal-first and has one supported execution path today.
 
-- For Google Calendar, use the `gws-*` skills.
+- Load `gws-*` skills when you need calendar instructions or command guidance.
+- Execute Google Calendar actions only through `gws_calendar_agenda`, `propose_plan`, and `execute_plan`.
 - Inspect the agenda first, propose a concrete change in natural language, and wait for explicit confirmation before any write action.
 - Do not infer confirmation from vague assent. If the user's confirmation is ambiguous, clarify instead of executing.
-- If the user's preferred provider is `lark`, explain that execution support is pending dedicated Lark skills.
+- If the user's preferred provider is `lark`, explain that Miniclaw currently stores the preference but does not have a Lark execution path.
