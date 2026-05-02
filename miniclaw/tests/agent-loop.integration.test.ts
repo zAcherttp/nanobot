@@ -946,6 +946,46 @@ Use gws calendar +agenda.`,
     expect(outboundCount).toBe(0);
   });
 
+  it("does not emit a final outbound event when the final assistant message has no text", async () => {
+    const { AgentLoop } = await import("../src/agent/loop");
+    let outboundCount = 0;
+
+    bus.subscribeOutbound(() => {
+      outboundCount += 1;
+    });
+
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+
+    const loop = new AgentLoop(bus, persistence, config);
+    await loop.start();
+    startedLoops.push(loop);
+
+    bus.publishInbound({
+      message: {
+        role: "user",
+        content: "user only",
+        timestamp: Date.now(),
+      },
+      channel: "cli",
+    });
+
+    await waitFor(async () => {
+      const thread = await persistence.getConversationThread();
+      return (await persistence.getMessages(thread.id)).length === 2;
+    });
+
+    expect(outboundCount).toBe(0);
+  });
+
   it("contains turn failures and keeps the inbound subscription alive for later turns", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
     const outbound: string[] = [];

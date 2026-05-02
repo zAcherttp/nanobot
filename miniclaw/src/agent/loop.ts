@@ -2,12 +2,12 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Agent } from "@mariozechner/pi-agent-core";
 import {
+  type Api,
   getModels,
   getProviders,
-  registerBuiltInApiProviders,
-  type Api,
   type KnownProvider,
   type Model,
+  registerBuiltInApiProviders,
 } from "@mariozechner/pi-ai";
 import { ulid } from "ulid";
 import type { MessageBus } from "@/bus/index";
@@ -122,6 +122,7 @@ export class AgentLoop {
   private readonly options: AgentLoopOptions;
   private unsubscribeInbound: (() => void) | null = null;
   private readonly activeTurns = new Set<Promise<void>>();
+  private readonly activeAgents = new Set<Agent>();
   private running = false;
   private stopPromise: Promise<void> | null = null;
 
@@ -261,7 +262,9 @@ export class AgentLoop {
         event.userId,
         busReceivedAt,
       ).catch((err) => {
-        logger.error({ err }, "Agent loop turn failed");
+        if (shouldLogChannel(event.channel)) {
+          logger.error({ err }, "Agent loop turn failed");
+        }
       });
       this.activeTurns.add(turnPromise);
       void turnPromise.finally(() => {
@@ -290,6 +293,13 @@ export class AgentLoop {
       }
 
       this.cronService.stop();
+      for (const agent of this.activeAgents) {
+        try {
+          agent.abort();
+        } catch {
+          // Best effort: stopping should still wait on the turn promises.
+        }
+      }
       await Promise.allSettled([...this.activeTurns]);
     })();
 
@@ -307,14 +317,17 @@ export class AgentLoop {
     userId?: string,
     busReceivedAt?: number,
   ) {
-    logger.info(
-      {
-        channel: channel || "unknown",
-        userId: userId || "anonymous",
-        content: this.truncateForLog(userText, INBOUND_LOG_PREVIEW_CHARS),
-      },
-      "Gateway message received",
-    );
+    const shouldLog = shouldLogChannel(channel);
+    if (shouldLog) {
+      logger.info(
+        {
+          channel: channel || "unknown",
+          userId: userId || "anonymous",
+          content: this.truncateForLog(userText, INBOUND_LOG_PREVIEW_CHARS),
+        },
+        "Gateway message received",
+      );
+    }
 
     const thread = await this.persistence.getConversationThread();
     const pendingAsk = await this.askUserService.getPendingAsk(thread.id);
@@ -408,33 +421,36 @@ export class AgentLoop {
     });
 
     const model = this.resolveModel();
-    const tools = this.instrumentTools([
-      ...createSkillTools(this.skillsLoader),
-      ...createTaskTools(this.taskService, this.taskNotifier, {
-        channel,
-        userId,
-      }),
-      ...createUserProfileTools(this.userProfileService),
-      ...createGoalTools(this.goalService),
-      ...createWorkspaceMemoryTools(this.workspaceMemoryService),
-      ...createAskUserTools({
-        askUserService: this.askUserService,
-        threadId: thread.id,
-        channel,
-        userId,
-      }),
-      ...createSearchTools({
-        workspacePath: this.config.workspace.path,
-        restrictToWorkspace: this.config.tools.restrictToWorkspace,
-      }),
-      ...createExecTools({
-        shellService: this.shellService,
-        workspacePath: this.config.workspace.path,
-        timeoutSeconds: this.config.tools.exec.timeout,
-        canRunMutatingGws: async () =>
-          Boolean(await this.askUserService.getApprovedAsk(thread.id)),
-      }),
-    ]);
+    const tools = this.instrumentTools(
+      [
+        ...createSkillTools(this.skillsLoader),
+        ...createTaskTools(this.taskService, this.taskNotifier, {
+          channel,
+          userId,
+        }),
+        ...createUserProfileTools(this.userProfileService),
+        ...createGoalTools(this.goalService),
+        ...createWorkspaceMemoryTools(this.workspaceMemoryService),
+        ...createAskUserTools({
+          askUserService: this.askUserService,
+          threadId: thread.id,
+          channel,
+          userId,
+        }),
+        ...createSearchTools({
+          workspacePath: this.config.workspace.path,
+          restrictToWorkspace: this.config.tools.restrictToWorkspace,
+        }),
+        ...createExecTools({
+          shellService: this.shellService,
+          workspacePath: this.config.workspace.path,
+          timeoutSeconds: this.config.tools.exec.timeout,
+          canRunMutatingGws: async () =>
+            Boolean(await this.askUserService.getApprovedAsk(thread.id)),
+        }),
+      ],
+      channel,
+    );
 
     const agent = new Agent({
       initialState: {
@@ -447,118 +463,144 @@ export class AgentLoop {
       getApiKey: this.getApiKey,
       transformContext: async (msgs) => msgs,
     });
+    this.activeAgents.add(agent);
 
     const streamId = ulid();
     let firstTokenLogged = false;
 
-    agent.subscribe(async (agentEvent) => {
-      if (agentEvent.type === "message_update") {
-        if (agentEvent.assistantMessageEvent.type === "text_delta") {
-          if (!firstTokenLogged && typeof busReceivedAt === "number") {
-            firstTokenLogged = true;
-            const latencyMs = Date.now() - busReceivedAt;
-            logger.debug(
-              `Time from bus receive to first streamed token: ${latencyMs} ms`,
+    try {
+      agent.subscribe(async (agentEvent) => {
+        if (agentEvent.type === "message_update") {
+          if (agentEvent.assistantMessageEvent.type === "text_delta") {
+            if (!firstTokenLogged && typeof busReceivedAt === "number") {
+              firstTokenLogged = true;
+              const latencyMs = Date.now() - busReceivedAt;
+              if (shouldLog) {
+                logger.debug(
+                  `Time from bus receive to first streamed token: ${latencyMs} ms`,
+                );
+              }
+            }
+
+            this.bus.publishStreamDelta({
+              id: streamId,
+              delta: agentEvent.assistantMessageEvent.delta,
+              timestamp: Date.now(),
+              channel,
+              userId,
+            });
+          } else if (
+            shouldLog &&
+            !isToolStreamEvent(agentEvent.assistantMessageEvent.type)
+          ) {
+            logger.info(
+              {
+                channel: channel || "unknown",
+                userId: userId || "anonymous",
+                eventType: agentEvent.assistantMessageEvent.type,
+                preview: this.truncateForLog(
+                  this.summarizeAssistantMessageEvent(
+                    agentEvent.assistantMessageEvent,
+                  ),
+                  MESSAGE_PART_LOG_PREVIEW_CHARS,
+                ),
+              },
+              "Agent stream event",
             );
           }
+        }
+      });
 
-          this.bus.publishStreamDelta({
-            id: streamId,
-            delta: agentEvent.assistantMessageEvent.delta,
-            timestamp: Date.now(),
-            channel,
-            userId,
-          });
-        } else {
+      if (shouldLog) {
+        logger.debug(`Starting agent turn (channel: ${channel || "unknown"})`);
+      }
+      await agent.continue();
+      await agent.waitForIdle();
+      this.logConversationMessages(
+        agent.state.messages,
+        compactedMessages.length,
+        channel,
+        userId,
+      );
+
+      if (!firstTokenLogged && typeof busReceivedAt === "number") {
+        const latencyMs = Date.now() - busReceivedAt;
+        if (shouldLog) {
+          logger.debug(
+            `No streamed token emitted before turn completion: ${latencyMs} ms`,
+          );
+        }
+      }
+
+      await this.ensureOnboardingJob(channel, userId);
+      if (approvalGranted) {
+        await this.askUserService.clearApprovedAsk(thread.id);
+      }
+
+      const updatedMessages = stripTransientMessages(agent.state.messages);
+      await this.persistence.saveMessages(thread.id, updatedMessages);
+
+      const activePendingAsk = await this.askUserService.getPendingAsk(
+        thread.id,
+      );
+      if (activePendingAsk) {
+        if (shouldLog) {
           logger.info(
             {
               channel: channel || "unknown",
               userId: userId || "anonymous",
-              eventType: agentEvent.assistantMessageEvent.type,
-              preview: this.truncateForLog(
-                this.safeSerializeForLog(agentEvent.assistantMessageEvent),
-                MESSAGE_PART_LOG_PREVIEW_CHARS,
+              content: this.truncateForLog(
+                activePendingAsk.question,
+                OUTBOUND_LOG_PREVIEW_CHARS,
               ),
+              options: activePendingAsk.options,
             },
-            "Agent stream event",
+            "Agent response",
           );
         }
-      }
-    });
 
-    logger.debug(`Starting agent turn (channel: ${channel || "unknown"})`);
-    await agent.continue();
-    await agent.waitForIdle();
-    this.logConversationMessages(
-      agent.state.messages,
-      compactedMessages.length,
-      channel,
-      userId,
-    );
-
-    if (!firstTokenLogged && typeof busReceivedAt === "number") {
-      const latencyMs = Date.now() - busReceivedAt;
-      logger.debug(
-        `No streamed token emitted before turn completion: ${latencyMs} ms`,
-      );
-    }
-
-    await this.ensureOnboardingJob(channel, userId);
-    if (approvalGranted) {
-      await this.askUserService.clearApprovedAsk(thread.id);
-    }
-
-    const updatedMessages = stripTransientMessages(agent.state.messages);
-    await this.persistence.saveMessages(thread.id, updatedMessages);
-
-    const activePendingAsk = await this.askUserService.getPendingAsk(thread.id);
-    if (activePendingAsk) {
-      logger.info(
-        {
-          channel: channel || "unknown",
-          userId: userId || "anonymous",
-          content: this.truncateForLog(
-            activePendingAsk.question,
-            OUTBOUND_LOG_PREVIEW_CHARS,
-          ),
+        this.bus.publishOutbound({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: activePendingAsk.question }],
+            timestamp: Date.now(),
+          },
+          channel,
+          userId,
           options: activePendingAsk.options,
-        },
-        "Agent response",
-      );
+        });
+        return;
+      }
 
-      this.bus.publishOutbound({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: activePendingAsk.question }],
-          timestamp: Date.now(),
-        },
-        channel,
-        userId,
-        options: activePendingAsk.options,
-      });
-      return;
-    }
+      const lastMsg = updatedMessages[updatedMessages.length - 1];
+      if (lastMsg && lastMsg.role === "assistant") {
+        const responseText = this.extractTextContent(lastMsg.content);
+        if (responseText.trim().length === 0) {
+          return;
+        }
 
-    const lastMsg = updatedMessages[updatedMessages.length - 1];
-    if (lastMsg && lastMsg.role === "assistant") {
-      const responseText = this.extractTextContent(lastMsg.content);
-      logger.info(
-        {
-          channel: channel || "unknown",
-          userId: userId || "anonymous",
-          content: this.truncateForLog(
-            responseText,
-            OUTBOUND_LOG_PREVIEW_CHARS,
-          ),
-        },
-        "Agent response",
-      );
+        if (shouldLog) {
+          logger.info(
+            {
+              channel: channel || "unknown",
+              userId: userId || "anonymous",
+              content: this.truncateForLog(
+                responseText,
+                OUTBOUND_LOG_PREVIEW_CHARS,
+              ),
+            },
+            "Agent response",
+          );
+        }
 
-      this.bus.publishOutbound({
-        message: lastMsg,
-        channel,
-        userId,
-      });
+        this.bus.publishOutbound({
+          message: lastMsg,
+          channel,
+          userId,
+        });
+      }
+    } finally {
+      this.activeAgents.delete(agent);
     }
   }
 
@@ -725,8 +767,26 @@ export class AgentLoop {
     channel?: string,
     userId?: string,
   ) {
+    if (!shouldLogChannel(channel)) {
+      return;
+    }
+
     const newMessages = messages.slice(startIndex);
     for (const [offset, message] of newMessages.entries()) {
+      if (
+        isToolResultMessage(message) ||
+        isToolCallOnlyAssistantMessage(message)
+      ) {
+        continue;
+      }
+
+      const parts = this.summarizeMessageContent(message.content).filter(
+        (part) => part.preview.trim().length > 0,
+      );
+      if (parts.length === 0) {
+        continue;
+      }
+
       logger.info(
         {
           channel: channel || "unknown",
@@ -740,7 +800,7 @@ export class AgentLoop {
             typeof message.toolName === "string"
               ? message.toolName
               : undefined,
-          parts: this.summarizeMessageContent(message.content),
+          parts,
         },
         "Agent conversation message",
       );
@@ -860,6 +920,138 @@ export class AgentLoop {
     return this.safeSerializeForLog(record);
   }
 
+  private summarizeAssistantMessageEvent(event: unknown): string {
+    if (!event || typeof event !== "object") {
+      return this.safeSerializeForLog(event);
+    }
+
+    const record = event as Record<string, unknown>;
+    const eventType =
+      typeof record.type === "string" ? record.type : "unknown_event";
+
+    if (eventType === "toolcall_start") {
+      const toolName = this.extractToolCallName(record);
+      return toolName ? `executing ${toolName}` : eventType;
+    }
+
+    if (eventType === "toolcall_delta") {
+      const toolName = this.extractToolCallName(record);
+      const delta =
+        typeof record.delta === "string"
+          ? this.summarizeToolArgumentsDelta(record.delta)
+          : "";
+      return [toolName, delta].filter(Boolean).join(" ").trim() || eventType;
+    }
+
+    if (eventType === "toolcall_end") {
+      const toolName = this.extractToolCallName(record);
+      const toolArgs = this.extractToolCallArguments(record);
+      const paramsPreview = this.summarizeToolLogValue(toolArgs);
+      return (
+        [toolName, paramsPreview].filter(Boolean).join(" ").trim() || eventType
+      );
+    }
+
+    return this.safeSerializeForLog(event);
+  }
+
+  private extractToolCallName(record: Record<string, unknown>): string | null {
+    const directToolCall =
+      record.toolCall && typeof record.toolCall === "object"
+        ? (record.toolCall as Record<string, unknown>)
+        : null;
+    if (directToolCall && typeof directToolCall.name === "string") {
+      return directToolCall.name;
+    }
+
+    const partial =
+      record.partial && typeof record.partial === "object"
+        ? (record.partial as Record<string, unknown>)
+        : null;
+    const content =
+      partial && Array.isArray(partial.content) ? partial.content : null;
+    const contentIndex =
+      typeof record.contentIndex === "number" ? record.contentIndex : 0;
+    const candidate =
+      content &&
+      contentIndex >= 0 &&
+      contentIndex < content.length &&
+      typeof content[contentIndex] === "object" &&
+      content[contentIndex] !== null
+        ? (content[contentIndex] as Record<string, unknown>)
+        : null;
+
+    return candidate && typeof candidate.name === "string"
+      ? candidate.name
+      : null;
+  }
+
+  private extractToolCallArguments(record: Record<string, unknown>): unknown {
+    const directToolCall =
+      record.toolCall && typeof record.toolCall === "object"
+        ? (record.toolCall as Record<string, unknown>)
+        : null;
+    if (directToolCall && "arguments" in directToolCall) {
+      return directToolCall.arguments;
+    }
+
+    const partial =
+      record.partial && typeof record.partial === "object"
+        ? (record.partial as Record<string, unknown>)
+        : null;
+    const content =
+      partial && Array.isArray(partial.content) ? partial.content : null;
+    const contentIndex =
+      typeof record.contentIndex === "number" ? record.contentIndex : 0;
+    const candidate =
+      content &&
+      contentIndex >= 0 &&
+      contentIndex < content.length &&
+      typeof content[contentIndex] === "object" &&
+      content[contentIndex] !== null
+        ? (content[contentIndex] as Record<string, unknown>)
+        : null;
+
+    return candidate?.arguments;
+  }
+
+  private summarizeToolArgumentsDelta(delta: string): string {
+    try {
+      const parsed = JSON.parse(delta) as unknown;
+      return this.summarizeToolLogValue(parsed);
+    } catch {
+      return delta;
+    }
+  }
+
+  private summarizeToolLogValue(value: unknown): string {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "command" in value &&
+      typeof (value as { command?: unknown }).command === "string"
+    ) {
+      return (value as { command: string }).command;
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      "question" in value &&
+      typeof (value as { question?: unknown }).question === "string"
+    ) {
+      return (value as { question: string }).question;
+    }
+
+    if (typeof value === "string") {
+      return value;
+    }
+
+    return this.safeSerializeForLog(value);
+  }
+
   private safeSerializeForLog(value: unknown): string {
     if (typeof value === "string") {
       return value;
@@ -914,42 +1106,50 @@ export class AgentLoop {
     return lines.join("\n");
   }
 
-  private instrumentTools(tools: AgentTool<any, any>[]): AgentTool<any, any>[] {
+  private instrumentTools(
+    tools: AgentTool<any, any>[],
+    channel?: string,
+  ): AgentTool<any, any>[] {
     if (!this.options.onToolExecution) {
       return tools;
     }
 
+    const shouldLog = shouldLogChannel(channel);
     return tools.map((tool) => {
       const execute = tool.execute.bind(tool);
       return {
         ...tool,
         execute: async (toolCallId, params) => {
           const startedAt = new Date().toISOString();
-          logger.info(
-            {
-              toolName: tool.name,
-              toolCallId,
-              params: this.truncateForLog(
-                this.safeSerializeForLog(params),
-                MESSAGE_PART_LOG_PREVIEW_CHARS,
-              ),
-            },
-            "Agent tool call",
-          );
-          try {
-            const result = await execute(toolCallId, params);
-            const resultText = this.extractTextContent(result?.content);
+          if (shouldLog) {
             logger.info(
               {
                 toolName: tool.name,
                 toolCallId,
-                result: this.truncateForLog(
-                  resultText || this.safeSerializeForLog(result),
+                params: this.truncateForLog(
+                  this.summarizeToolLogValue(params),
                   MESSAGE_PART_LOG_PREVIEW_CHARS,
                 ),
               },
-              "Agent tool result",
+              "Agent tool call",
             );
+          }
+          try {
+            const result = await execute(toolCallId, params);
+            const resultText = this.extractTextContent(result?.content);
+            if (shouldLog) {
+              logger.info(
+                {
+                  toolName: tool.name,
+                  toolCallId,
+                  result: this.truncateForLog(
+                    resultText || this.safeSerializeForLog(result),
+                    MESSAGE_PART_LOG_PREVIEW_CHARS,
+                  ),
+                },
+                "Agent tool result",
+              );
+            }
             this.options.onToolExecution?.({
               name: tool.name,
               toolCallId,
@@ -961,17 +1161,19 @@ export class AgentLoop {
             });
             return result;
           } catch (error) {
-            logger.warn(
-              {
-                toolName: tool.name,
-                toolCallId,
-                error: this.truncateForLog(
-                  error instanceof Error ? error.message : String(error),
-                  MESSAGE_PART_LOG_PREVIEW_CHARS,
-                ),
-              },
-              "Agent tool failure",
-            );
+            if (shouldLog) {
+              logger.warn(
+                {
+                  toolName: tool.name,
+                  toolCallId,
+                  error: this.truncateForLog(
+                    error instanceof Error ? error.message : String(error),
+                    MESSAGE_PART_LOG_PREVIEW_CHARS,
+                  ),
+                },
+                "Agent tool failure",
+              );
+            }
             this.options.onToolExecution?.({
               name: tool.name,
               toolCallId,
@@ -1066,11 +1268,22 @@ function isRequiredProfileField(
   value: string | undefined,
 ): value is RequiredProfileField {
   return (
-    typeof value === "string" &&
-    Object.prototype.hasOwnProperty.call(PROFILE_FIELD_LABELS, value)
+    typeof value === "string" && Object.hasOwn(PROFILE_FIELD_LABELS, value)
   );
 }
 
 function isKnownProvider(value: string): value is KnownProvider {
   return getProviders().some((provider) => provider === value);
+}
+
+function shouldLogChannel(channel?: string): boolean {
+  return channel === "cli" || channel === "eval";
+}
+
+function isToolStreamEvent(eventType: string): boolean {
+  return (
+    eventType === "toolcall_start" ||
+    eventType === "toolcall_delta" ||
+    eventType === "toolcall_end"
+  );
 }

@@ -4,6 +4,7 @@ import { gatewayCommand } from "./commands/gateway";
 import { onboardCommand } from "./commands/onboard";
 import { agentCommand } from "./commands/agent";
 import { evalCommand } from "./commands/eval";
+import { promptCommand } from "./commands/prompt";
 import { pkgName, pkgDescription, pkgVersion } from "@/utils/pkg";
 
 export const program = new Command();
@@ -21,3 +22,4 @@ program.addCommand(gatewayCommand());
 program.addCommand(onboardCommand());
 program.addCommand(agentCommand());
 program.addCommand(evalCommand());
+program.addCommand(promptCommand());

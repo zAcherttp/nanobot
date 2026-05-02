@@ -10,6 +10,8 @@ import {
   ShellExecutionService,
   SimulatedGwsShellAdapter,
 } from "@/services/shell";
+import { UserProfileService } from "@/services/user_profile";
+import { logger } from "@/utils/logger";
 import { EvalThrottle, sleep } from "./throttle";
 import { publishLatestSummary, writeEvalReport } from "./reporter";
 import { checkProviderAvailability } from "./provider";
@@ -21,12 +23,20 @@ import {
   EvalScenario,
   EvalSnapshots,
   EvalSummary,
+  EvalToolMetrics,
+  EvalToolStat,
   EvalTurnRecord,
 } from "./types";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = path.resolve(__dirname, "../../templates");
 const SKILLS_DIR = path.resolve(__dirname, "../../skills");
+const EVAL_SKILL_READ_TOOL_NAMES = new Set([
+  "list_skills",
+  "load_skill",
+  "get_skill_info",
+]);
+const EVAL_TURN_INACTIVITY_TIMEOUT_MS = 15000;
 
 export class EvalRunner {
   constructor(private readonly options: EvalRunConfig) {}
@@ -36,6 +46,14 @@ export class EvalRunner {
     const reportDir = path.join(
       this.options.outputDir,
       timestampSlug(new Date(startedAt)),
+    );
+    logger.info(
+      {
+        mode: this.options.mode,
+        scenarioCount: this.options.scenarios.length,
+        outputDir: reportDir,
+      },
+      "Eval run started",
     );
     const availability = await checkProviderAvailability(this.options.config);
     if (!availability.ok) {
@@ -60,8 +78,29 @@ export class EvalRunner {
 
     const results: EvalResult[] = [];
 
-    for (const scenario of this.options.scenarios) {
-      results.push(await this.runScenario(scenario, reportDir));
+    for (const [index, scenario] of this.options.scenarios.entries()) {
+      logger.info(
+        {
+          scenarioId: scenario.id,
+          title: scenario.title,
+          index: index + 1,
+          total: this.options.scenarios.length,
+          mode: this.options.mode,
+          complexity: scenario.complexity,
+        },
+        "Eval scenario started",
+      );
+      const result = await this.runScenario(scenario, reportDir);
+      logger.info(
+        {
+          scenarioId: scenario.id,
+          passed: result.passed,
+          failureKind: result.failureKind,
+          durationMs: result.durationMs,
+        },
+        "Eval scenario finished",
+      );
+      results.push(result);
     }
 
     const summary = await writeEvalReport(reportDir, results);
@@ -85,6 +124,15 @@ export class EvalRunner {
       this.options.outputDir,
       timestampSlug(new Date()),
     );
+    logger.info(
+      {
+        scenarioId: scenario.id,
+        title: scenario.title,
+        mode: this.options.mode,
+        outputDir: reportDir,
+      },
+      "Eval scenario started",
+    );
     const availability = await checkProviderAvailability(this.options.config);
     if (!availability.ok) {
       const result = createProviderFailureResult(
@@ -100,6 +148,15 @@ export class EvalRunner {
     }
 
     const result = await this.runScenario(scenario, reportDir);
+    logger.info(
+      {
+        scenarioId: scenario.id,
+        passed: result.passed,
+        failureKind: result.failureKind,
+        durationMs: result.durationMs,
+      },
+      "Eval scenario finished",
+    );
     const summary = await writeEvalReport(reportDir, [result]);
     await publishLatestSummary(reportDir, this.options.outputDir);
     return summary;
@@ -117,6 +174,8 @@ export class EvalRunner {
     const transcript: EvalTurnRecord[] = [];
     const toolCalls: EvalResult["toolCalls"] = [];
     const shellExecutions: EvalResult["shellExecutions"] = [];
+    let activeAssistantStream: EvalTurnRecord | null = null;
+    let lastActivityAt = Date.now();
     let failureKind: EvalResult["failureKind"];
 
     try {
@@ -124,7 +183,7 @@ export class EvalRunner {
       await fs.mkdir(threadsDir, { recursive: true });
       await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
       await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      await seedWorkspace(workspaceDir, scenario);
+      await seedWorkspace(workspaceDir, scenario, this.options);
 
       const config = AppConfigSchema.parse({
         ...structuredClone(this.options.config),
@@ -154,21 +213,59 @@ export class EvalRunner {
             : undefined,
         onExecution: (record) => {
           shellExecutions.push(record);
+          lastActivityAt = Date.now();
         },
+        enableLogging: false,
       });
       const loop = new AgentLoop(bus, persistence, config, {
         shellService,
         onToolExecution: (event) => {
           toolCalls.push(event);
+          lastActivityAt = Date.now();
         },
       });
 
       bus.subscribeOutbound((event) => {
+        const outboundText = extractText(event.message.content).trim();
+        if (activeAssistantStream) {
+          if (outboundText.length > 0) {
+            activeAssistantStream.content = outboundText;
+          }
+          activeAssistantStream.timestamp = new Date().toISOString();
+          activeAssistantStream = null;
+          lastActivityAt = Date.now();
+          return;
+        }
+
+        if (outboundText.length === 0) {
+          return;
+        }
+
         transcript.push({
           role: "assistant",
-          content: extractText(event.message.content),
+          content: outboundText,
           timestamp: new Date().toISOString(),
         });
+        lastActivityAt = Date.now();
+      });
+
+      bus.subscribeStreamDelta((event) => {
+        if (!activeAssistantStream) {
+          activeAssistantStream = {
+            role: "assistant",
+            content: event.delta,
+            timestamp: new Date(event.timestamp).toISOString(),
+          };
+          transcript.push(activeAssistantStream);
+          lastActivityAt = Date.now();
+          return;
+        }
+
+        activeAssistantStream.content += event.delta;
+        activeAssistantStream.timestamp = new Date(
+          event.timestamp,
+        ).toISOString();
+        lastActivityAt = Date.now();
       });
 
       await loop.start();
@@ -178,13 +275,32 @@ export class EvalRunner {
           scenario.providerBudgets?.maxDurationMs ||
           this.options.scenarioTimeoutMs;
         await withTimeout(
-          this.executeScenarioTurns(bus, loop, transcript, scenario, throttle),
+          this.executeScenarioTurns(
+            bus,
+            loop,
+            transcript,
+            scenario,
+            throttle,
+            () => lastActivityAt,
+          ),
           scenarioTimeoutMs,
           `Scenario timed out after ${scenarioTimeoutMs} ms`,
         );
       } catch (error) {
         if (error instanceof TimeoutError) {
           failureKind = "timeout";
+          logger.warn(
+            {
+              scenarioId: scenario.id,
+              details: error.message,
+              toolCalls: toolCalls.length,
+              assistantMessages: transcript.filter(
+                (entry) =>
+                  entry.role === "assistant" && entry.content.trim().length > 0,
+              ).length,
+            },
+            "Eval scenario timed out",
+          );
         } else {
           throw error;
         }
@@ -266,6 +382,7 @@ export class EvalRunner {
         rubric,
         transcript,
         toolCalls,
+        toolMetrics: summarizeToolMetrics(toolCalls),
         shellExecutions,
         snapshots,
         outputDir: reportDir,
@@ -300,6 +417,7 @@ export class EvalRunner {
         rubric: [],
         transcript,
         toolCalls,
+        toolMetrics: summarizeToolMetrics(toolCalls),
         shellExecutions,
         snapshots: await readSnapshotsSafe(workspaceDir),
         outputDir: reportDir,
@@ -315,6 +433,7 @@ export class EvalRunner {
     transcript: EvalTurnRecord[],
     scenario: EvalScenario,
     throttle: EvalThrottle,
+    getLastActivityAt: () => number,
   ): Promise<void> {
     for (const turn of scenario.turns) {
       transcript.push({
@@ -334,10 +453,11 @@ export class EvalRunner {
           userId: "eval-user",
         });
 
-        await withTimeout(
+        await waitForIdleWithWatchdog(
           loop.waitForIdle(),
           this.options.turnTimeoutMs,
-          `Turn timed out after ${this.options.turnTimeoutMs} ms`,
+          Math.min(this.options.turnTimeoutMs, EVAL_TURN_INACTIVITY_TIMEOUT_MS),
+          getLastActivityAt,
         );
       });
 
@@ -553,6 +673,7 @@ function evaluateRubric(
 async function seedWorkspace(
   workspaceDir: string,
   scenario: EvalScenario,
+  options: EvalRunConfig,
 ): Promise<void> {
   const templateFiles = await fs.readdir(TEMPLATES_DIR);
   for (const entry of templateFiles) {
@@ -573,6 +694,8 @@ async function seedWorkspace(
 
   const seed = scenario.seed;
   if (!seed) {
+    await ensureEvalProfileFile(workspaceDir);
+    await appendEvalHeadsUp(workspaceDir, options);
     return;
   }
 
@@ -596,6 +719,9 @@ async function seedWorkspace(
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), skillContent, "utf8");
   }
+
+  await ensureEvalProfileFile(workspaceDir);
+  await appendEvalHeadsUp(workspaceDir, options);
 }
 
 async function readSnapshots(workspaceDir: string): Promise<EvalSnapshots> {
@@ -692,6 +818,7 @@ function createProviderFailureResult(
     rubric: [],
     transcript: [],
     toolCalls: [],
+    toolMetrics: summarizeToolMetrics([]),
     shellExecutions: [],
     snapshots: {
       user: "",
@@ -707,6 +834,105 @@ function isBootstrapAssistantMessage(content: string): boolean {
   return content.startsWith(
     "Complete user profile [active]\nGoal: Collect the user's preferences and calendar defaults in USER.md.",
   );
+}
+
+async function ensureEvalProfileFile(workspaceDir: string): Promise<void> {
+  const profileService = new UserProfileService(workspaceDir);
+  await profileService.ensureProfileFile();
+}
+
+async function appendEvalHeadsUp(
+  workspaceDir: string,
+  options: EvalRunConfig,
+): Promise<void> {
+  const agentsPath = path.join(workspaceDir, "AGENTS.md");
+  const existingAgents = await readFileSafe(agentsPath);
+  const evalHeadsUp = buildEvalHeadsUp(options);
+  const nextAgents = [existingAgents.trim(), evalHeadsUp]
+    .filter(Boolean)
+    .join("\n\n");
+  await fs.writeFile(agentsPath, `${nextAgents}\n`, "utf8");
+}
+
+function buildEvalHeadsUp(options: EvalRunConfig): string {
+  const start = options.safePolicy?.safeWindow?.start;
+  const end = options.safePolicy?.safeWindow?.end;
+  if (!start || !end) {
+    return [
+      "## Eval Heads Up",
+      "This is an evaluation run.",
+      "Treat relative date wording conservatively and do not use the actual system clock unless the user gives an explicit absolute date.",
+    ].join("\n");
+  }
+
+  const anchorDate = new Date(start);
+  const endDate = new Date(end);
+  const anchorLabel = anchorDate.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const endLabel = endDate.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+
+  return [
+    "## Eval Heads Up",
+    "This is an evaluation run with an artificial time anchor.",
+    "USER.md is available, but profile fields may be incomplete unless the scenario explicitly seeded them.",
+    `Treat all relative date phrases such as "today", "tomorrow", "this week", and "next week" as relative to ${anchorLabel}, not the real current date.`,
+    `Keep proposals and executable calendar actions inside the eval window ${anchorLabel} through ${endLabel} unless the user explicitly supplies a concrete absolute date to discuss.`,
+    "User facts and preferences are retrieved from USER.md and the get_user_profile tool, not from MEMORY.md tools.",
+    "Do not use workspace memory tools to recall recorded user preferences or facts.",
+    "For scheduling requests with missing time or ambiguous consent, prefer a direct clarification or ask_user proposal instead of repeated calendar command probing.",
+    "If a calendar command fails with a validation or usage error, do not keep guessing alternative CLI syntaxes in a loop. Use the schema once if needed, then move to a user-facing clarification or proposal.",
+    "When a request is ambiguous, prefer stating the resolved absolute June dates explicitly.",
+  ].join("\n");
+}
+
+function summarizeToolMetrics(
+  toolCalls: EvalResult["toolCalls"],
+): EvalToolMetrics {
+  const stats = new Map<string, EvalToolStat>();
+  let successfulCalls = 0;
+  let failedCalls = 0;
+
+  for (const call of toolCalls) {
+    const current = stats.get(call.name) || {
+      toolName: call.name,
+      total: 0,
+      successful: 0,
+      failed: 0,
+    };
+    current.total += 1;
+    if (call.success) {
+      current.successful += 1;
+      successfulCalls += 1;
+    } else {
+      current.failed += 1;
+      failedCalls += 1;
+    }
+    stats.set(call.name, current);
+  }
+
+  const byTool = [...stats.values()].sort(
+    (left, right) =>
+      right.total - left.total || left.toolName.localeCompare(right.toolName),
+  );
+
+  return {
+    totalCalls: toolCalls.length,
+    successfulCalls,
+    failedCalls,
+    byTool,
+    skillReads: byTool.filter((stat) =>
+      EVAL_SKILL_READ_TOOL_NAMES.has(stat.toolName),
+    ),
+  };
 }
 
 class TimeoutError extends Error {
@@ -734,6 +960,46 @@ async function withTimeout<T>(
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+async function waitForIdleWithWatchdog(
+  idlePromise: Promise<void>,
+  turnTimeoutMs: number,
+  inactivityTimeoutMs: number,
+  getLastActivityAt: () => number,
+): Promise<void> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  let intervalHandle: NodeJS.Timeout | null = null;
+
+  const timeoutPromise = new Promise<void>((_resolve, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new TimeoutError(`Turn timed out after ${turnTimeoutMs} ms`));
+    }, turnTimeoutMs);
+  });
+
+  const inactivityPromise = new Promise<void>((_resolve, reject) => {
+    intervalHandle = setInterval(() => {
+      const inactivityMs = Date.now() - getLastActivityAt();
+      if (inactivityMs >= inactivityTimeoutMs) {
+        reject(
+          new TimeoutError(
+            `Turn stalled after ${inactivityTimeoutMs} ms without assistant output or tool activity`,
+          ),
+        );
+      }
+    }, 250);
+  });
+
+  try {
+    await Promise.race([idlePromise, timeoutPromise, inactivityPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+    if (intervalHandle) {
+      clearInterval(intervalHandle);
     }
   }
 }

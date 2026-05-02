@@ -1,13 +1,14 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promises as fs } from "node:fs";
 import { confirm } from "@inquirer/prompts";
 import chalk from "chalk";
 import { ConfigService } from "./config";
 import { getRootDir, getConfigPath } from "../utils/paths";
 import { logger } from "../utils/logger";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import {
+  copyWorkspaceSkillDirectories,
+  copyWorkspaceTemplateFiles,
+} from "./workspace_bootstrap";
 
 export class OnboardService {
   constructor(
@@ -76,10 +77,10 @@ export class OnboardService {
     await fs.mkdir(memoryDir, { recursive: true });
 
     logger.info("Creating template files...");
-    await this.createTemplateFiles(workspaceDir);
+    await copyWorkspaceTemplateFiles(workspaceDir, { overwrite: true });
 
     logger.info("Creating skill directories...");
-    await this.createSkillDirectories(skillsDir);
+    await copyWorkspaceSkillDirectories(workspaceDir, { overwrite: true });
 
     logger.info(chalk.green("Successfully onboarded Miniclaw!"));
     logger.info(`- Config:    ${chalk.cyan(configPath)}`);
@@ -89,57 +90,5 @@ export class OnboardService {
     logger.info(`- Cron:      ${chalk.cyan(cronDir)}`);
     logger.info(`- Memory:    ${chalk.cyan(memoryDir)}`);
     logger.info(`You can now run: ${chalk.bold("miniclaw gateway")}`);
-  }
-
-  private async createTemplateFiles(workspaceDir: string): Promise<void> {
-    const templateDir = path.resolve(__dirname, "../../templates");
-    const templateFiles = [
-      "AGENTS.md",
-      "GOALS.md",
-      "MEMORY.md",
-      "SOUL.md",
-      "USER.md",
-      "TOOLS.md",
-      "TASKS.md",
-    ];
-
-    for (const filename of templateFiles) {
-      const sourcePath = path.join(templateDir, filename);
-      const destPath = path.join(workspaceDir, filename);
-
-      try {
-        const content = await fs.readFile(sourcePath, "utf8");
-        await fs.writeFile(destPath, content, "utf8");
-        logger.debug(`Created ${chalk.cyan(filename)}`);
-      } catch (err) {
-        logger.warn(`Failed to copy ${filename}: ${err}`);
-      }
-    }
-  }
-
-  private async createSkillDirectories(skillsDir: string): Promise<void> {
-    const templateSkillsDir = path.resolve(__dirname, "../../skills");
-    const entries = await fs.readdir(templateSkillsDir, {
-      withFileTypes: true,
-    });
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-
-      const skillName = entry.name;
-      const skillDir = path.join(skillsDir, skillName);
-      await fs.mkdir(skillDir, { recursive: true });
-
-      const sourcePath = path.join(templateSkillsDir, skillName, "SKILL.md");
-      const destPath = path.join(skillDir, "SKILL.md");
-
-      try {
-        const content = await fs.readFile(sourcePath, "utf8");
-        await fs.writeFile(destPath, content, "utf8");
-        logger.debug(`Created skill ${chalk.cyan(skillName)}`);
-      } catch (err) {
-        logger.warn(`Failed to copy skill ${skillName}: ${err}`);
-      }
-    }
   }
 }

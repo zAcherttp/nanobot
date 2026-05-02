@@ -5,7 +5,7 @@ import { ShellExecutionService } from "./shell";
 import { readLatestEvalSummary } from "@/eval/reporter";
 import { EvalRunner } from "@/eval/runner";
 import { loadEvalScenarios } from "@/eval/scenario";
-import type { EvalMode, EvalRunConfig } from "@/eval/types";
+import type { EvalMode, EvalRunConfig, EvalScenario } from "@/eval/types";
 import type { CalendarSafetyPolicy } from "./calendar/runtime";
 import type { AppConfig } from "@/config/schema";
 
@@ -29,7 +29,8 @@ export class EvalService {
   }
 
   public async runOne(scenarioId: string, options: EvalCommandOptions = {}) {
-    const runner = await this.createRunner(options);
+    const runConfig = await this.buildRunConfig(options, scenarioId);
+    const runner = new EvalRunner(runConfig);
     return runner.runOne(scenarioId);
   }
 
@@ -75,16 +76,23 @@ export class EvalService {
 
   private async buildRunConfig(
     options: EvalCommandOptions,
+    requestedScenarioId?: string,
   ): Promise<EvalRunConfig> {
     const config = await this.configService.load({
       configPath: options.configPath,
     });
+    const mode = options.mode || config.eval?.defaultMode || "simulate";
     const scenarios = await loadEvalScenarios(DEFAULT_SCENARIO_DIR);
+    const selectedScenarios = selectScenariosForMode(
+      scenarios,
+      mode,
+      requestedScenarioId,
+    );
 
     return {
       config,
-      scenarios,
-      mode: options.mode || config.eval?.defaultMode || "simulate",
+      scenarios: selectedScenarios,
+      mode,
       outputDir:
         options.outputDir ||
         config.eval?.outputDir ||
@@ -124,4 +132,27 @@ function buildSafetyPolicy(
     eventPrefix: config.eval?.eventPrefix || "[MINICLAW-EVAL]",
     requireTaggedEventForMutations: true,
   };
+}
+
+function selectScenariosForMode(
+  scenarios: EvalScenario[],
+  mode: EvalMode,
+  requestedScenarioId?: string,
+): EvalScenario[] {
+  if (requestedScenarioId) {
+    const scenario = scenarios.find(
+      (entry) => entry.id === requestedScenarioId,
+    );
+    if (!scenario) {
+      throw new Error(`Eval scenario not found: ${requestedScenarioId}`);
+    }
+    if (scenario.mode !== mode) {
+      throw new Error(
+        `Eval scenario "${requestedScenarioId}" is authored for ${scenario.mode}, not ${mode}.`,
+      );
+    }
+    return [scenario];
+  }
+
+  return scenarios.filter((scenario) => scenario.mode === mode);
 }

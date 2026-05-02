@@ -7,6 +7,7 @@ export interface SkillMetadata {
   description: string;
   triggers?: string[];
   always?: boolean;
+  frontmatter?: string;
   path: string;
 }
 
@@ -89,13 +90,8 @@ export class SkillsLoader {
     }
 
     return onDemandSkills
-      .map(
-        (skill) =>
-          `- **${skill.name}**: ${skill.description}${
-            skill.triggers ? ` (triggers: ${skill.triggers.join(", ")})` : ""
-          }`,
-      )
-      .join("\n");
+      .map((skill) => this.renderSkillSummaryLine(skill))
+      .join("\n\n");
   }
 
   /**
@@ -138,23 +134,19 @@ export class SkillsLoader {
     skillName: string,
     skillPath: string,
   ): SkillMetadata {
-    const lines = content.split("\n");
-    let name = skillName;
+    const normalizedContent = normalizeSkillContent(content);
+    const lines = normalizedContent.split("\n");
     let description = "";
     const triggers: string[] = [];
     let always = false;
+    const frontmatter = this.extractFrontmatter(normalizedContent);
 
     // Parse YAML frontmatter
     if (lines[0] === "---") {
       let i = 1;
       while (i < lines.length && lines[i] !== "---") {
         const line = lines[i].trim();
-        if (line.startsWith("name:")) {
-          name = line
-            .substring(5)
-            .trim()
-            .replace(/^["']|["']$/g, "");
-        } else if (line.startsWith("description:")) {
+        if (line.startsWith("description:")) {
           description = line
             .substring(12)
             .trim()
@@ -175,16 +167,18 @@ export class SkillsLoader {
 
     // If no description in frontmatter, try to extract from first paragraph
     if (!description) {
-      const contentWithoutFrontmatter = this.stripFrontmatter(content);
+      const contentWithoutFrontmatter =
+        this.stripFrontmatter(normalizedContent);
       const firstParagraph = contentWithoutFrontmatter.split("\n\n")[0];
       description = firstParagraph.replace(/^#\s+/, "").trim();
     }
 
     return {
-      name,
+      name: skillName,
       description: description || "No description available",
       triggers: triggers.length > 0 ? triggers : undefined,
       always,
+      frontmatter: frontmatter || undefined,
       path: skillPath,
     };
   }
@@ -193,7 +187,8 @@ export class SkillsLoader {
    * Remove YAML frontmatter from content
    */
   private stripFrontmatter(content: string): string {
-    const lines = content.split("\n");
+    const normalizedContent = normalizeSkillContent(content);
+    const lines = normalizedContent.split("\n");
     if (lines[0] === "---") {
       const endIdx = lines.indexOf("---", 1);
       if (endIdx !== -1) {
@@ -203,7 +198,36 @@ export class SkillsLoader {
           .trim();
       }
     }
-    return content.trim();
+    return normalizedContent.trim();
+  }
+
+  private extractFrontmatter(content: string): string | null {
+    const lines = content.split("\n");
+    if (lines[0] !== "---") {
+      return null;
+    }
+
+    const endIdx = lines.indexOf("---", 1);
+    if (endIdx === -1) {
+      return null;
+    }
+
+    return lines
+      .slice(0, endIdx + 1)
+      .join("\n")
+      .trim();
+  }
+
+  private renderSkillSummaryLine(skill: SkillMetadata): string {
+    if (skill.triggers && skill.triggers.length > 0) {
+      return `- **${skill.name}**: ${skill.description} (triggers: ${skill.triggers.join(", ")})`;
+    }
+
+    if (skill.frontmatter) {
+      return `- **${skill.name}**: ${skill.frontmatter}`;
+    }
+
+    return `- **${skill.name}**: ${skill.description}`;
   }
 
   /**
@@ -212,4 +236,8 @@ export class SkillsLoader {
   clearCache(): void {
     this.skillsCache = null;
   }
+}
+
+function normalizeSkillContent(content: string): string {
+  return content.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
 }

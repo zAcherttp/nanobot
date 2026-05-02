@@ -75,6 +75,7 @@ export interface ShellExecutionServiceOptions {
   throttle?: ProviderThrottle;
   simulationAdapter?: ShellSimulationAdapter;
   onExecution?: (record: ShellExecutionRecord) => void;
+  enableLogging?: boolean;
 }
 
 export interface EvalCleanupSummary {
@@ -90,6 +91,7 @@ export class ShellExecutionService {
   private readonly throttle?: ProviderThrottle;
   private readonly simulationAdapter?: ShellSimulationAdapter;
   private readonly onExecution?: (record: ShellExecutionRecord) => void;
+  private readonly enableLogging: boolean;
 
   constructor(options: ShellExecutionServiceOptions) {
     this.workspacePath = path.resolve(options.workspacePath);
@@ -99,6 +101,7 @@ export class ShellExecutionService {
     this.throttle = options.throttle;
     this.simulationAdapter = options.simulationAdapter;
     this.onExecution = options.onExecution;
+    this.enableLogging = options.enableLogging ?? true;
   }
 
   public async execute(
@@ -250,6 +253,10 @@ export class ShellExecutionService {
   }
 
   private logRecord(record: ShellExecutionRecord): void {
+    if (!this.enableLogging) {
+      return;
+    }
+
     logger.info(
       {
         command: truncatePreview(record.command),

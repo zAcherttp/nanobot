@@ -117,6 +117,21 @@ export interface EvalSnapshots {
   memory: string;
 }
 
+export interface EvalToolStat {
+  toolName: string;
+  total: number;
+  successful: number;
+  failed: number;
+}
+
+export interface EvalToolMetrics {
+  totalCalls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  byTool: EvalToolStat[];
+  skillReads: EvalToolStat[];
+}
+
 export interface EvalResult {
   scenarioId: string;
   title: string;
@@ -131,6 +146,7 @@ export interface EvalResult {
   rubric: EvalRubricScore[];
   transcript: EvalTurnRecord[];
   toolCalls: ToolExecutionEvent[];
+  toolMetrics: EvalToolMetrics;
   shellExecutions: ShellExecutionRecord[];
   snapshots: EvalSnapshots;
   outputDir: string;
@@ -145,6 +161,7 @@ export interface EvalSummary {
   failed: number;
   failuresByKind: Partial<Record<EvalFailureKind, number>>;
   byComplexity: Record<EvalComplexity, { total: number; passed: number }>;
+  toolMetrics: EvalToolMetrics;
   results: Array<
     Pick<
       EvalResult,
@@ -154,6 +171,7 @@ export interface EvalSummary {
       | "failureKind"
       | "complexity"
       | "durationMs"
+      | "toolMetrics"
     >
   >;
 }

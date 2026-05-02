@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { SkillsLoader, SkillMetadata } from "../src/agent/skills";
+import { SkillsLoader } from "../src/agent/skills";
 
 // Mock fs module
 vi.mock("node:fs", () => ({
@@ -80,7 +80,7 @@ This is a test skill.
 
       const skills = await skillsLoader.listSkills();
 
-      expect(skills[0].name).toBe("test-skill");
+      expect(skills[0].name).toBe("test");
       expect(skills[0].description).toBe("Test skill description");
       expect(skills[0].triggers).toEqual(["test", "trigger"]);
       expect(skills[0].always).toBe(true);
@@ -343,7 +343,8 @@ description: On-demand skill
       const summary = await skillsLoader.getSkillSummary();
 
       expect(summary).not.toContain("always-skill");
-      expect(summary).toContain("**on-demand**: On-demand skill");
+      expect(summary).toContain("**on-demand**: ---");
+      expect(summary).toContain("description: On-demand skill");
     });
 
     it("should return message when no skills available", async () => {
@@ -370,8 +371,37 @@ description: Test skill
 
       const summary = await skillsLoader.getSkillSummary();
 
-      expect(summary).toContain("**test**: Test skill");
+      expect(summary).toContain("**test**: ---");
+      expect(summary).toContain("description: Test skill");
       expect(summary).not.toContain("(triggers:");
+    });
+
+    it("should parse CRLF frontmatter and keep non-trigger skills to frontmatter only", async () => {
+      const mockEntries = [
+        { name: "calendar", isDirectory: () => true },
+        { name: "gws-calendar", isDirectory: () => true },
+      ];
+
+      const mockCalendarSkill =
+        '---\r\nname: calendar\r\ndescription: Manage calendar events\r\ntriggers: ["calendar", "event"]\r\n---\r\n\r\n# Calendar\r\n';
+      const mockGwsSkill =
+        '---\r\nname: gws-calendar\r\ndescription: "Google Calendar: Manage calendars and events."\r\nmetadata:\r\n  version: 0.22.5\r\n---\r\n\r\n# calendar\r\n\r\nFull body should not appear.\r\n';
+
+      vi.mocked(fs.readdir).mockResolvedValue(mockEntries as any);
+      vi.mocked(fs.readFile)
+        .mockResolvedValueOnce(mockCalendarSkill)
+        .mockResolvedValueOnce(mockGwsSkill);
+
+      const summary = await skillsLoader.getSkillSummary();
+
+      expect(summary).toContain(
+        "**calendar**: Manage calendar events (triggers: calendar, event)",
+      );
+      expect(summary).toContain("**gws-calendar**: ---");
+      expect(summary).toContain(
+        'description: "Google Calendar: Manage calendars and events."',
+      );
+      expect(summary).not.toContain("Full body should not appear.");
     });
   });
 

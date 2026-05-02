@@ -65,6 +65,9 @@ describe("Context Integration", () => {
 
       const prompt = await buildSystemPrompt(options);
 
+      expect(prompt).toContain("## Runtime");
+      expect(prompt).toContain("## Workspace");
+      expect(prompt).toContain("## Search & Discovery");
       expect(prompt).toContain("## Conversation Summary");
       expect(prompt).toContain("## Format Hint");
       expect(prompt).toContain("## AGENTS.md");
@@ -91,6 +94,9 @@ describe("Context Integration", () => {
         workspacePath: "/test/workspace",
       });
 
+      expect(prompt).toContain("## Runtime");
+      expect(prompt).toContain("## Workspace");
+      expect(prompt).toContain("## Search & Discovery");
       expect(prompt).toContain("## AGENTS.md");
       expect(prompt).toContain("## SOUL.md");
       expect(prompt).toContain("## TOOLS.md");
@@ -108,6 +114,7 @@ describe("Context Integration", () => {
         threadPath: "/test/threads/thread1",
       });
 
+      expect(prompt).toContain("## Runtime");
       expect(prompt).not.toContain("## Conversation Summary");
       expect(prompt).not.toContain("## AGENTS.md");
     });

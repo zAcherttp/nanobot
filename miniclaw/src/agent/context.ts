@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { GoalService } from "../services/goals";
 import type { TaskService } from "../services/tasks";
@@ -22,7 +23,7 @@ export interface BuildSystemPromptOptions {
 export async function buildSystemPrompt(
   options: BuildSystemPromptOptions,
 ): Promise<string> {
-  const parts: string[] = [];
+  const parts: string[] = [buildIdentitySection(options.workspacePath)];
 
   let summary = options.summary || null;
   if (options.threadPath && !summary) {
@@ -65,6 +66,33 @@ export async function buildSystemPrompt(
   return parts.join("\n\n---\n\n");
 }
 
+function buildIdentitySection(workspacePath: string): string {
+  const runtime = `${os.platform()} ${os.arch()}, Node.js ${process.version}`;
+  const parts = [
+    "## Runtime",
+    "",
+    runtime,
+    "",
+    "## Workspace",
+    "",
+    `Your workspace is at: ${workspacePath}`,
+    `- User profile: ${path.join(workspacePath, "USER.md")}`,
+    `- Goals: ${path.join(workspacePath, "GOALS.md")}`,
+    `- Tasks: ${path.join(workspacePath, "TASKS.md")}`,
+    `- Workspace memory: ${path.join(workspacePath, "MEMORY.md")}`,
+    `- Custom skills: ${path.join(workspacePath, "skills", "{skill-name}", "SKILL.md")}`,
+    "",
+    ...buildPlatformPolicy(),
+    "",
+    "## Search & Discovery",
+    "",
+    "- Prefer `grep` / `glob` over `exec` for workspace search.",
+    "- On broad searches, narrow scope first before reading large files.",
+  ];
+
+  return parts.join("\n");
+}
+
 function buildFormatHint(channel?: string): string {
   switch (channel) {
     case "telegram":
@@ -82,6 +110,23 @@ function buildFormatHint(channel?: string): string {
     default:
       return "";
   }
+}
+
+function buildPlatformPolicy(): string[] {
+  if (process.platform === "win32") {
+    return [
+      "## Platform Policy (Windows)",
+      "- You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.",
+      "- Prefer Windows-native commands or built-in file tools when they are more reliable.",
+      "- If terminal output is garbled, retry with UTF-8 output enabled.",
+    ];
+  }
+
+  return [
+    "## Platform Policy (POSIX)",
+    "- You are running on a POSIX system. Prefer UTF-8 and standard shell tools.",
+    "- Use file tools when they are simpler or more reliable than shell commands.",
+  ];
 }
 
 async function loadBootstrapFiles(workspacePath: string): Promise<string> {

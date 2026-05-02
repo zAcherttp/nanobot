@@ -13,9 +13,13 @@ const agentHarness = vi.hoisted(() => {
   class FakeAgent {
     public static continueImpl: ((agent: FakeAgent) => Promise<void>) | null =
       null;
+    public static waitForIdleImpl:
+      | ((agent: FakeAgent) => Promise<void>)
+      | null = null;
     public readonly options: any;
     public readonly listeners: Listener[] = [];
     public state: { messages: any[] };
+    public aborted = false;
 
     constructor(options: any) {
       this.options = options;
@@ -34,7 +38,27 @@ const agentHarness = vi.hoisted(() => {
       }
     }
 
-    async waitForIdle() {}
+    async waitForIdle() {
+      if (FakeAgent.waitForIdleImpl) {
+        await FakeAgent.waitForIdleImpl(this);
+      }
+    }
+
+    abort() {
+      this.aborted = true;
+    }
+
+    async emitTextDelta(delta: string) {
+      for (const listener of this.listeners) {
+        await listener({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            delta,
+          },
+        });
+      }
+    }
   }
 
   return { FakeAgent };
@@ -93,6 +117,8 @@ describe.sequential("EvalRunner", () => {
     outputDir = path.join(tempDir, "reports");
     originalFetch = global.fetch;
     execMock.mockReset();
+    agentHarness.FakeAgent.continueImpl = null;
+    agentHarness.FakeAgent.waitForIdleImpl = null;
     config = AppConfigSchema.parse({
       workspace: { path: path.join(tempDir, "workspace") },
       dream: { enabled: false },
@@ -118,6 +144,19 @@ describe.sequential("EvalRunner", () => {
 
   it("runs a simulate scenario through the real agent loop path and writes reports", async () => {
     agentHarness.FakeAgent.continueImpl = async (agent) => {
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "relative date phrases",
+      );
+      expect(agent.options.initialState.systemPrompt).toContain("June 1, 2026");
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "get_user_profile",
+      );
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "do not keep guessing alternative CLI syntaxes",
+      );
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "profile fields may be incomplete",
+      );
       const userText = String(
         agent.state.messages.at(-1)?.content ||
           agent.options.initialState.messages.at(-1)?.content ||
@@ -212,10 +251,33 @@ describe.sequential("EvalRunner", () => {
       path.join(outputDir, "latest", "summary.md"),
       "utf8",
     );
+    const reportDirEntries = await fs.readdir(outputDir, {
+      withFileTypes: true,
+    });
+    const reportDir = reportDirEntries.find(
+      (entry) => entry.isDirectory() && entry.name !== "latest",
+    );
+    const report = JSON.parse(
+      await fs.readFile(
+        path.join(outputDir, reportDir!.name, "recall_preference_simple.json"),
+        "utf8",
+      ),
+    );
 
     expect(summary.passed).toBe(1);
     expect(summary.failed).toBe(0);
     expect(latestSummary).toContain("recall_preference_simple: PASS");
+    expect(summary.toolMetrics.totalCalls).toBe(1);
+    expect(summary.toolMetrics.successfulCalls).toBe(1);
+    expect(summary.toolMetrics.failedCalls).toBe(0);
+    expect(report.toolMetrics.byTool).toEqual([
+      {
+        toolName: "record_user_preference",
+        total: 1,
+        successful: 1,
+        failed: 0,
+      },
+    ]);
   });
 
   it("routes sandbox-live execution through ask_user and shell exec records", async () => {
@@ -237,6 +299,13 @@ describe.sequential("EvalRunner", () => {
     );
 
     agentHarness.FakeAgent.continueImpl = async (agent) => {
+      expect(agent.options.initialState.systemPrompt).toContain("June 1, 2026");
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "get_user_profile",
+      );
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "prefer a direct clarification or ask_user proposal",
+      );
       const currentUserText =
         agent.options.initialState.messages.at(-1)?.content ||
         agent.state.messages.at(-1)?.content;
@@ -344,6 +413,23 @@ describe.sequential("EvalRunner", () => {
           entry.classification.action === "write",
       ),
     ).toBe(true);
+    expect(report.toolMetrics.totalCalls).toBe(2);
+    expect(report.toolMetrics.successfulCalls).toBe(2);
+    expect(report.toolMetrics.failedCalls).toBe(0);
+    expect(report.toolMetrics.byTool).toEqual([
+      {
+        toolName: "ask_user",
+        total: 1,
+        successful: 1,
+        failed: 0,
+      },
+      {
+        toolName: "exec",
+        total: 1,
+        successful: 1,
+        failed: 0,
+      },
+    ]);
   });
 
   it("marks every scenario as infra_failed when the ollama provider is unreachable", async () => {
@@ -497,5 +583,87 @@ describe.sequential("EvalRunner", () => {
 
     expect(summary.failed).toBe(1);
     expect(report.failureKind).toBe("infra_failed");
+  });
+
+  it("preserves streamed partial assistant text when a turn times out", async () => {
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      await agent.emitTextDelta("I can help schedule that");
+    };
+    agentHarness.FakeAgent.waitForIdleImpl = async (agent) => {
+      while (!agent.aborted) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    const runner = new EvalRunner({
+      config,
+      scenarios: [
+        {
+          id: "ambiguous_confirmation_block",
+          title: "Timeout with partial stream",
+          mode: "sandbox-live",
+          complexity: "moderate",
+          turns: ["Set up prep time for a team sync on June 15 2026."],
+          assertions: {
+            requireProposalBeforeWrite: true,
+          },
+          rubricWeights: {
+            recallRelevance: 1,
+            planningCoherence: 1,
+            consentPolicyAdherence: 1,
+            proposalUsefulness: 1,
+            efficiency: 1,
+          },
+        },
+      ],
+      mode: "sandbox-live",
+      outputDir,
+      safePolicy: {
+        enabled: true,
+        safeWindow: {
+          start: "2026-06-01T00:00:00.000Z",
+          end: "2026-06-30T23:59:59.000Z",
+        },
+        eventPrefix: "[MINICLAW-EVAL]",
+        requireTaggedEventForMutations: true,
+      },
+      throttle: {
+        llmMaxConcurrency: 1,
+        gwsMaxConcurrency: 1,
+        llmCooldownMs: 0,
+        gwsCooldownMs: 0,
+        turnCooldownMs: 0,
+        maxToolCallsPerScenario: 10,
+      },
+      scenarioTimeoutMs: 30000,
+      turnTimeoutMs: 50,
+    });
+
+    const summary = await runner.runAll();
+    const reportDirEntries = await fs.readdir(outputDir, {
+      withFileTypes: true,
+    });
+    const reportDir = reportDirEntries.find(
+      (entry) => entry.isDirectory() && entry.name !== "latest",
+    );
+    const report = JSON.parse(
+      await fs.readFile(
+        path.join(
+          outputDir,
+          reportDir!.name,
+          "ambiguous_confirmation_block.json",
+        ),
+        "utf8",
+      ),
+    );
+
+    expect(summary.failed).toBe(1);
+    expect(report.failureKind).toBe("timeout");
+    expect(report.transcript).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: "I can help schedule that",
+      }),
+    );
   });
 });

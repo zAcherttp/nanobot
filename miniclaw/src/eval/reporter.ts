@@ -1,6 +1,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { EvalComplexity, EvalResult, EvalSummary } from "./types";
+import type {
+  EvalComplexity,
+  EvalResult,
+  EvalSummary,
+  EvalToolMetrics,
+  EvalToolStat,
+} from "./types";
 
 export async function writeEvalReport(
   outputDir: string,
@@ -75,6 +81,9 @@ function buildSummary(
     complex: { total: 0, passed: 0 },
   };
   const failuresByKind: EvalSummary["failuresByKind"] = {};
+  const toolMetrics = combineToolMetrics(
+    results.map((result) => result.toolMetrics),
+  );
 
   for (const result of results) {
     byComplexity[result.complexity].total += 1;
@@ -95,6 +104,7 @@ function buildSummary(
     failed: results.filter((result) => !result.passed).length,
     failuresByKind,
     byComplexity,
+    toolMetrics,
     results: results.map((result) => ({
       scenarioId: result.scenarioId,
       title: result.title,
@@ -102,6 +112,7 @@ function buildSummary(
       failureKind: result.failureKind,
       complexity: result.complexity,
       durationMs: result.durationMs,
+      toolMetrics: result.toolMetrics,
     })),
   };
 }
@@ -116,9 +127,32 @@ function renderSummaryMarkdown(summary: EvalSummary): string {
     `- Passed: ${summary.passed}`,
     `- Failed: ${summary.failed}`,
     "",
-    "## Complexity Breakdown",
+    "## Tool Usage",
     "",
+    `- Total calls: ${summary.toolMetrics.totalCalls}`,
+    `- Successful calls: ${summary.toolMetrics.successfulCalls}`,
+    `- Failed calls: ${summary.toolMetrics.failedCalls}`,
   ];
+
+  if (summary.toolMetrics.byTool.length > 0) {
+    lines.push("", "### Tools", "");
+    for (const stat of summary.toolMetrics.byTool) {
+      lines.push(
+        `- ${stat.toolName}: ${stat.total} total (${stat.successful} success, ${stat.failed} failed)`,
+      );
+    }
+  }
+
+  if (summary.toolMetrics.skillReads.length > 0) {
+    lines.push("", "### Skill Reads", "");
+    for (const stat of summary.toolMetrics.skillReads) {
+      lines.push(
+        `- ${stat.toolName}: ${stat.total} total (${stat.successful} success, ${stat.failed} failed)`,
+      );
+    }
+  }
+
+  lines.push("", "## Complexity Breakdown", "");
 
   for (const [complexity, stats] of Object.entries(summary.byComplexity)) {
     lines.push(`- ${complexity}: ${stats.passed}/${stats.total} passed`);
@@ -129,7 +163,58 @@ function renderSummaryMarkdown(summary: EvalSummary): string {
     lines.push(
       `- ${result.scenarioId}: ${result.passed ? "PASS" : "FAIL"} (${result.complexity}, ${result.durationMs} ms${result.failureKind ? `, ${result.failureKind}` : ""})`,
     );
+    lines.push(
+      `  tools: ${result.toolMetrics.totalCalls} total (${result.toolMetrics.successfulCalls} success, ${result.toolMetrics.failedCalls} failed)`,
+    );
   }
 
   return lines.join("\n");
+}
+
+function combineToolMetrics(metricsList: EvalToolMetrics[]): EvalToolMetrics {
+  const stats = new Map<string, EvalToolStat>();
+
+  let totalCalls = 0;
+  let successfulCalls = 0;
+  let failedCalls = 0;
+
+  for (const metrics of metricsList) {
+    totalCalls += metrics.totalCalls;
+    successfulCalls += metrics.successfulCalls;
+    failedCalls += metrics.failedCalls;
+
+    for (const stat of metrics.byTool) {
+      const current = stats.get(stat.toolName) || {
+        toolName: stat.toolName,
+        total: 0,
+        successful: 0,
+        failed: 0,
+      };
+      current.total += stat.total;
+      current.successful += stat.successful;
+      current.failed += stat.failed;
+      stats.set(stat.toolName, current);
+    }
+  }
+
+  const byTool = [...stats.values()].sort(
+    (left, right) =>
+      right.total - left.total || left.toolName.localeCompare(right.toolName),
+  );
+
+  return {
+    totalCalls,
+    successfulCalls,
+    failedCalls,
+    byTool,
+    skillReads: byTool.filter((stat) => isSkillReadTool(stat.toolName)),
+  };
+}
+
+function isSkillReadTool(toolName: string): boolean {
+  return (
+    toolName === "list_skills" ||
+    toolName === "load_skill" ||
+    toolName === "get_skill_info"
+  );
 }
