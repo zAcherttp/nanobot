@@ -52,8 +52,8 @@ export class TaskProgressNotifier {
 function renderJobProgress(job: TaskJob): string {
   const header = `${job.title} [${job.status}]`;
   const goal = `Goal: ${job.goal}`;
-  const checklist = job.tasks.map((task) =>
-    `${task.done ? "[x]" : "[ ]"} ${task.title}`,
+  const checklist = job.tasks.map(
+    (task) => `${task.done ? "[x]" : "[ ]"} ${task.title}`,
   );
   const tail =
     job.status === "completed"

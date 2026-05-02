@@ -68,7 +68,11 @@ export class GoalService {
       await fs.access(this.goalsPath);
     } catch {
       await fs.mkdir(this.workspacePath, { recursive: true });
-      await fs.writeFile(this.goalsPath, renderGoalsMarkdown(emptyGoalsFile()), "utf8");
+      await fs.writeFile(
+        this.goalsPath,
+        renderGoalsMarkdown(emptyGoalsFile()),
+        "utf8",
+      );
     }
   }
 
@@ -83,9 +87,9 @@ export class GoalService {
   public async getGoal(goalId: string): Promise<GoalRecord | null> {
     const data = await this.readGoals();
     return (
-      data.active.find((goal) => goal.id === goalId)
-      || data.archived.find((goal) => goal.id === goalId)
-      || null
+      data.active.find((goal) => goal.id === goalId) ||
+      data.archived.find((goal) => goal.id === goalId) ||
+      null
     );
   }
 
@@ -262,8 +266,8 @@ function parseSection(
 
 function requireGoal(data: GoalsFileData, goalId: string): GoalRecord {
   const goal =
-    data.active.find((entry) => entry.id === goalId)
-    || data.archived.find((entry) => entry.id === goalId);
+    data.active.find((entry) => entry.id === goalId) ||
+    data.archived.find((entry) => entry.id === goalId);
   if (!goal) {
     throw new Error(`Goal not found: ${goalId}`);
   }

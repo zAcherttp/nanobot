@@ -122,7 +122,9 @@ export class AgentLoop {
     });
 
     this.memoryStore = this.initMemoryStore();
-    this.userProfileService = new UserProfileService(this.config.workspace.path);
+    this.userProfileService = new UserProfileService(
+      this.config.workspace.path,
+    );
     this.goalService = new GoalService(this.config.workspace.path);
     this.taskService = new TaskService(this.config.workspace.path);
     this.workspaceMemoryService = new WorkspaceMemoryService(
@@ -332,8 +334,9 @@ export class AgentLoop {
       goalService: this.goalService,
       taskService: this.taskService,
       memoryService: this.workspaceMemoryService,
-      relevantMemory:
-        this.workspaceMemoryService.formatRelevantEntries(relevantMemoryEntries),
+      relevantMemory: this.workspaceMemoryService.formatRelevantEntries(
+        relevantMemoryEntries,
+      ),
       relevantHistory,
     });
 
@@ -521,8 +524,7 @@ export class AgentLoop {
     if (!job) {
       job = await this.taskService.createJob({
         title: "Complete user profile",
-        goal:
-          "Collect the user's preferences and calendar defaults in USER.md.",
+        goal: "Collect the user's preferences and calendar defaults in USER.md.",
         tasks: REQUIRED_PROFILE_FIELDS.map((field) => ({
           title: PROFILE_FIELD_LABELS[field],
           fieldKey: field,
@@ -589,9 +591,7 @@ export class AgentLoop {
   }
 
   private truncateForLog(value: string, maxLength: number): string {
-    return value.length > maxLength
-      ? `${value.slice(0, maxLength)}...`
-      : value;
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
 
   private buildRelevantConversationContext(
@@ -615,8 +615,9 @@ export class AgentLoop {
         };
       })
       .filter((entry) => entry.content && entry.score > 0)
-      .sort((left, right) =>
-        right.score - left.score || right.timestamp - left.timestamp,
+      .sort(
+        (left, right) =>
+          right.score - left.score || right.timestamp - left.timestamp,
       )
       .slice(0, limit);
 
@@ -684,12 +685,14 @@ function isToolCallOnlyAssistantMessage(message: AgentMessage): boolean {
 }
 
 function tokenizeForRetrieval(value: string): string[] {
-  return [...new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/i)
-      .filter((token) => token.length >= 3),
-  )];
+  return [
+    ...new Set(
+      value
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((token) => token.length >= 3),
+    ),
+  ];
 }
 
 function scoreText(value: string, tokens: string[]): number {

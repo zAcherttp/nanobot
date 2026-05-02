@@ -48,9 +48,9 @@ export class MemoryStore {
     logger.debug(`Updated dream cursor: ${cursor.lastProcessedAt}`);
   }
 
-  public async readUnprocessedHistory<T extends { id: string; timestamp: number }>(
-    messages: T[],
-  ): Promise<T[]> {
+  public async readUnprocessedHistory<
+    T extends { id: string; timestamp: number },
+  >(messages: T[]): Promise<T[]> {
     const cursor = await this.getLastDreamCursor();
 
     if (!cursor) {

@@ -29,7 +29,10 @@ export class TelegramChannel implements Channel {
   >();
   private routeQueues = new Map<string, Promise<void>>();
   private userChatIds = new Map<string, string>();
-  private trackingMessages = new Map<string, { chatId: string; messageId: number }>();
+  private trackingMessages = new Map<
+    string,
+    { chatId: string; messageId: number }
+  >();
 
   private static readonly STREAM_SEND_INTERVAL_MS = 1000;
   private static readonly CLOSED_STREAM_TTL_MS = 5000;
@@ -566,7 +569,12 @@ export class TelegramChannel implements Channel {
           return;
         }
 
-        await this.editMarkdownV2Message(bot, chatId, messageId, event.newContent);
+        await this.editMarkdownV2Message(
+          bot,
+          chatId,
+          messageId,
+          event.newContent,
+        );
       } catch (err) {
         if (this.isMessageNotFoundError(err)) {
           const sentId = await this.sendMarkdownV2Message(

@@ -60,7 +60,9 @@ describe("GoalService", () => {
 
     expect(prompt).toContain("## GOALS.md");
     expect(prompt).toContain("Maintain exercise routine [active]");
-    expect(prompt).toContain("Latest progress: Completed three workouts this week.");
+    expect(prompt).toContain(
+      "Latest progress: Completed three workouts this week.",
+    );
     expect(archived.status).toBe("completed");
     expect(archivedGoals.map((entry) => entry.id)).toContain(goal.id);
   });

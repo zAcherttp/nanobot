@@ -27,7 +27,7 @@ describe("MemoryStore", () => {
     expect(vi.mocked(fs.mkdir)).toHaveBeenCalledWith(
       path.dirname(path.join(mockMemoryDir, "history.jsonl")),
       {
-      recursive: true,
+        recursive: true,
       },
     );
     expect(vi.mocked(fs.appendFile)).toHaveBeenCalledWith(
@@ -69,7 +69,7 @@ describe("MemoryStore", () => {
     expect(vi.mocked(fs.mkdir)).toHaveBeenCalledWith(
       path.dirname(path.join(mockMemoryDir, "cursor.json")),
       {
-      recursive: true,
+        recursive: true,
       },
     );
     expect(vi.mocked(fs.writeFile)).toHaveBeenCalledWith(

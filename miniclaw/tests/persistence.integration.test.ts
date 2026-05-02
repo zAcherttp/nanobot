@@ -6,7 +6,8 @@ const pathState = vi.hoisted(() => ({ root: "" }));
 
 vi.mock("../src/utils/paths", () => ({
   getRootDir: () => pathState.root,
-  getConfigPath: (appName = "miniclaw") => `${pathState.root}/${appName}/config.json`,
+  getConfigPath: (appName = "miniclaw") =>
+    `${pathState.root}/${appName}/config.json`,
   resolvePath: (...parts: string[]) => `${pathState.root}/${parts.join("/")}`,
 }));
 
@@ -14,10 +15,7 @@ import {
   PersistenceService,
   type ThreadMeta,
 } from "../src/services/persistence";
-import {
-  ThreadCorruptedError,
-  ThreadNotFoundError,
-} from "../src/errors/base";
+import { ThreadCorruptedError, ThreadNotFoundError } from "../src/errors/base";
 
 describe.sequential("PersistenceService integration", () => {
   let tempDir: string;
@@ -35,16 +33,13 @@ describe.sequential("PersistenceService integration", () => {
 
   it("auto-creates the conversation thread on first access", async () => {
     const thread = await service.getConversationThread();
-    const threadDir = path.join(
-      tempDir,
-      "miniclaw",
-      "threads",
-      "conversation",
-    );
+    const threadDir = path.join(tempDir, "miniclaw", "threads", "conversation");
 
     expect(thread.type).toBe("conversation");
     expect(thread.status).toBe("active");
-    await expect(fs.stat(path.join(threadDir, "meta.json"))).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(threadDir, "meta.json")),
+    ).resolves.toBeDefined();
     await expect(
       fs.readFile(path.join(threadDir, "messages.jsonl"), "utf8"),
     ).resolves.toBe("");
@@ -97,7 +92,10 @@ describe.sequential("PersistenceService integration", () => {
       "messages.jsonl",
     );
 
-    await fs.writeFile(messagesPath, '{"role":"user","content":"ok"}\n{bad json}\n');
+    await fs.writeFile(
+      messagesPath,
+      '{"role":"user","content":"ok"}\n{bad json}\n',
+    );
 
     await expect(service.getMessages(thread.id)).rejects.toBeInstanceOf(
       ThreadCorruptedError,

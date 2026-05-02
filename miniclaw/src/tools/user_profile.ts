@@ -1,6 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "typebox";
-import { REQUIRED_PROFILE_FIELDS, type UserProfileService } from "@/services/user_profile";
+import {
+  REQUIRED_PROFILE_FIELDS,
+  type UserProfileService,
+} from "@/services/user_profile";
 
 export function createUserProfileTools(
   profileService: UserProfileService,
@@ -96,7 +99,9 @@ export function createUserProfileTools(
       execute: async (_toolCallId, params) => {
         const document = await profileService.addPreference(params.preference);
         return {
-          content: [{ type: "text", text: "Recorded user preference in USER.md." }],
+          content: [
+            { type: "text", text: "Recorded user preference in USER.md." },
+          ],
           details: { preferences: document.preferences },
         };
       },

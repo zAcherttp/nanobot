@@ -31,7 +31,9 @@ export function createWorkspaceMemoryTools(
           entries.length === 0
             ? "No memory entries found."
             : entries
-                .map((entry) => `${entry.id} [${entry.category}] ${entry.summary}`)
+                .map(
+                  (entry) => `${entry.id} [${entry.category}] ${entry.summary}`,
+                )
                 .join("\n");
 
         return {
@@ -55,7 +57,9 @@ export function createWorkspaceMemoryTools(
 
         const text = [
           `${entry.summary} [${entry.category}]`,
-          entry.tags.length > 0 ? `Tags: ${entry.tags.join(", ")}` : "Tags: none",
+          entry.tags.length > 0
+            ? `Tags: ${entry.tags.join(", ")}`
+            : "Tags: none",
           entry.source ? `Source: ${entry.source}` : "Source: none",
         ].join("\n");
 
@@ -127,7 +131,9 @@ export function createWorkspaceMemoryTools(
       execute: async (_toolCallId, params) => {
         await memoryService.removeEntry(params.entry_id);
         return {
-          content: [{ type: "text", text: `Removed memory ${params.entry_id}.` }],
+          content: [
+            { type: "text", text: `Removed memory ${params.entry_id}.` },
+          ],
           details: { entryId: params.entry_id },
         };
       },

@@ -40,48 +40,50 @@ describe("cli agent integration", () => {
     process.exitCode = undefined;
   });
 
-  it.each(["SIGINT", "SIGTERM"] as const)(
-    "starts the CLI agent loop and shuts it down cleanly on %s",
-    async (signal) => {
-      const { CliAgentService } = await import("../src/services/cli_agent");
-      const config = AppConfigSchema.parse({
-        workspace: { path: "workspace" },
-        channels: {
-          cli: { enabled: true },
-          telegram: { enabled: false, botToken: "", allowedUsers: [] },
-        },
-        dream: { enabled: false },
-        memory: { enabled: false },
-      });
+  it.each([
+    "SIGINT",
+    "SIGTERM",
+  ] as const)("starts the CLI agent loop and shuts it down cleanly on %s", async (signal) => {
+    const { CliAgentService } = await import("../src/services/cli_agent");
+    const config = AppConfigSchema.parse({
+      workspace: { path: "workspace" },
+      channels: {
+        cli: { enabled: true },
+        telegram: { enabled: false, botToken: "", allowedUsers: [] },
+      },
+      dream: { enabled: false },
+      memory: { enabled: false },
+    });
 
-      const configService = {
-        load: vi.fn().mockResolvedValue(config),
-      };
+    const configService = {
+      load: vi.fn().mockResolvedValue(config),
+    };
 
-      cliHarness.FakeLoop.instances = [];
-      cliHarness.FakeCliChannel.instances = [];
+    cliHarness.FakeLoop.instances = [];
+    cliHarness.FakeCliChannel.instances = [];
 
-      const executePromise = new CliAgentService(configService as never).execute();
+    const executePromise = new CliAgentService(
+      configService as never,
+    ).execute();
 
-      await waitFor(
-        () =>
-          cliHarness.FakeLoop.instances.length === 1 &&
-          cliHarness.FakeCliChannel.instances.length === 1,
-      );
+    await waitFor(
+      () =>
+        cliHarness.FakeLoop.instances.length === 1 &&
+        cliHarness.FakeCliChannel.instances.length === 1,
+    );
 
-      process.emit(signal);
-      await executePromise;
+    process.emit(signal);
+    await executePromise;
 
-      expect(configService.load).toHaveBeenCalled();
-      expect(cliHarness.FakeLoop.instances).toHaveLength(1);
-      expect(cliHarness.FakeCliChannel.instances).toHaveLength(1);
-      expect(cliHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
-      expect(cliHarness.FakeLoop.instances[0].stop).toHaveBeenCalled();
-      expect(cliHarness.FakeCliChannel.instances[0].start).toHaveBeenCalled();
-      expect(cliHarness.FakeCliChannel.instances[0].stop).toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-    },
-  );
+    expect(configService.load).toHaveBeenCalled();
+    expect(cliHarness.FakeLoop.instances).toHaveLength(1);
+    expect(cliHarness.FakeCliChannel.instances).toHaveLength(1);
+    expect(cliHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
+    expect(cliHarness.FakeLoop.instances[0].stop).toHaveBeenCalled();
+    expect(cliHarness.FakeCliChannel.instances[0].start).toHaveBeenCalled();
+    expect(cliHarness.FakeCliChannel.instances[0].stop).toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
+  });
 });
 
 async function waitFor(

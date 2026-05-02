@@ -5,10 +5,7 @@ import { createServer } from "../server/index";
 import { logger } from "../utils/logger";
 import chalk from "chalk";
 
-export async function startGateway(
-  config: AppConfig,
-  bus: MessageBus,
-) {
+export async function startGateway(config: AppConfig, bus: MessageBus) {
   const app = createServer(bus);
   const port = config.gateway.port;
 

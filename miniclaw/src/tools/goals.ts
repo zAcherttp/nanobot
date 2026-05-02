@@ -22,7 +22,9 @@ export function createGoalTools(
         const text =
           goals.length === 0
             ? "No goals found."
-            : goals.map((goal) => `${goal.id} [${goal.status}] ${goal.title}`).join("\n");
+            : goals
+                .map((goal) => `${goal.id} [${goal.status}] ${goal.title}`)
+                .join("\n");
 
         return {
           content: [{ type: "text", text }],
@@ -81,7 +83,9 @@ export function createGoalTools(
         });
 
         return {
-          content: [{ type: "text", text: `Added goal ${goal.id}: ${goal.title}` }],
+          content: [
+            { type: "text", text: `Added goal ${goal.id}: ${goal.title}` },
+          ],
           details: { goal },
         };
       },
@@ -105,7 +109,9 @@ export function createGoalTools(
         });
 
         return {
-          content: [{ type: "text", text: `Recorded progress for ${goal.title}.` }],
+          content: [
+            { type: "text", text: `Recorded progress for ${goal.title}.` },
+          ],
           details: { goal },
         };
       },
@@ -132,7 +138,12 @@ export function createGoalTools(
         );
 
         return {
-          content: [{ type: "text", text: `Updated goal ${goal.id} to ${goal.status}.` }],
+          content: [
+            {
+              type: "text",
+              text: `Updated goal ${goal.id} to ${goal.status}.`,
+            },
+          ],
           details: { goal },
         };
       },

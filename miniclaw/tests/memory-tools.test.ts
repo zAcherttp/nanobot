@@ -11,7 +11,9 @@ describe("workspace memory tools", () => {
   let tools: ReturnType<typeof createWorkspaceMemoryTools>;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "miniclaw-memory-tools-"));
+    tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "miniclaw-memory-tools-"),
+    );
     service = new WorkspaceMemoryService(tempDir);
     await service.ensureMemoryFile();
     tools = createWorkspaceMemoryTools(service);
@@ -22,7 +24,9 @@ describe("workspace memory tools", () => {
   });
 
   it("records and lists entries through the tool interface", async () => {
-    const recordTool = tools.find((tool) => tool.name === "record_memory_entry");
+    const recordTool = tools.find(
+      (tool) => tool.name === "record_memory_entry",
+    );
     const listTool = tools.find((tool) => tool.name === "list_memory_entries");
     expect(recordTool).toBeTruthy();
     expect(listTool).toBeTruthy();
@@ -43,8 +47,12 @@ describe("workspace memory tools", () => {
       summary: "Never write without explicit confirmation.",
       tags: ["calendar"],
     });
-    const updateTool = tools.find((tool) => tool.name === "update_memory_entry");
-    const removeTool = tools.find((tool) => tool.name === "remove_memory_entry");
+    const updateTool = tools.find(
+      (tool) => tool.name === "update_memory_entry",
+    );
+    const removeTool = tools.find(
+      (tool) => tool.name === "remove_memory_entry",
+    );
 
     await updateTool!.execute("tool-3", {
       entry_id: entry.id,

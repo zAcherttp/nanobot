@@ -31,8 +31,12 @@ describe("UserProfileService", () => {
       calendarProvider: "gws",
       defaultCalendar: "primary",
     });
-    await profileService.addStableFact("Works on a thesis about LLM scheduling assistants.");
-    await profileService.addPreference("Prefers concise technical explanations.");
+    await profileService.addStableFact(
+      "Works on a thesis about LLM scheduling assistants.",
+    );
+    await profileService.addPreference(
+      "Prefers concise technical explanations.",
+    );
 
     const document = await profileService.getDocument();
     const prompt = await profileService.getPromptContext();

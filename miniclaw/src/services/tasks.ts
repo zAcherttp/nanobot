@@ -132,7 +132,10 @@ export class TaskService {
     return job;
   }
 
-  public async updateJob(jobId: string, updates: UpdateJobInput): Promise<TaskJob> {
+  public async updateJob(
+    jobId: string,
+    updates: UpdateJobInput,
+  ): Promise<TaskJob> {
     const data = await this.readTasks();
     const job = this.requireActiveJob(data, jobId);
 
@@ -278,8 +281,8 @@ export class TaskService {
   public renderJobStatus(job: TaskJob): string {
     const header = `${job.title} [${job.status}]`;
     const goal = `Goal: ${job.goal}`;
-    const lines = job.tasks.map((task) =>
-      `${task.done ? "[x]" : "[ ]"} ${task.title}`,
+    const lines = job.tasks.map(
+      (task) => `${task.done ? "[x]" : "[ ]"} ${task.title}`,
     );
 
     if (job.status !== "active") {
@@ -403,9 +406,11 @@ function parseSection(
 }
 
 function findJob(data: TasksFileData, jobId: string): TaskJob | null {
-  return data.active.find((job) => job.id === jobId)
-    || data.archived.find((job) => job.id === jobId)
-    || null;
+  return (
+    data.active.find((job) => job.id === jobId) ||
+    data.archived.find((job) => job.id === jobId) ||
+    null
+  );
 }
 
 function escapeRegExp(value: string): string {

@@ -25,7 +25,7 @@ describe("WorkspaceMemoryService", () => {
       tags: ["calendar", "gws"],
     });
 
-    expect((await service.listEntries("decision"))).toEqual([
+    expect(await service.listEntries("decision")).toEqual([
       expect.objectContaining({
         id: entry.id,
         category: "decision",
@@ -99,6 +99,8 @@ describe("WorkspaceMemoryService", () => {
     expect(prompt).toContain("## MEMORY.md");
     expect(prompt).toContain("### Conventions");
     expect(relevant).toContain("## Relevant Memory");
-    expect(relevant).toContain("Ask for explicit confirmation before calendar writes.");
+    expect(relevant).toContain(
+      "Ask for explicit confirmation before calendar writes.",
+    );
   });
 });

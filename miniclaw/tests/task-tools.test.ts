@@ -38,11 +38,10 @@ describe("task tools", () => {
   });
 
   it("creates jobs through the tool interface and posts a status message", async () => {
-    const tools = createTaskTools(
-      taskService,
-      new TaskProgressNotifier(bus),
-      { channel: "cli", userId: "user-1" },
-    );
+    const tools = createTaskTools(taskService, new TaskProgressNotifier(bus), {
+      channel: "cli",
+      userId: "user-1",
+    });
 
     const createJob = tools.find((tool) => tool.name === "create_job");
     const result = await createJob!.execute("tool-1", {
@@ -58,11 +57,10 @@ describe("task tools", () => {
   });
 
   it("updates progress and archives jobs through the tool interface", async () => {
-    const tools = createTaskTools(
-      taskService,
-      new TaskProgressNotifier(bus),
-      { channel: "cli", userId: "user-1" },
-    );
+    const tools = createTaskTools(taskService, new TaskProgressNotifier(bus), {
+      channel: "cli",
+      userId: "user-1",
+    });
 
     const createJob = tools.find((tool) => tool.name === "create_job")!;
     await createJob.execute("tool-1", {
@@ -86,7 +84,11 @@ describe("task tools", () => {
     });
 
     expect(await taskService.listJobs("active")).toHaveLength(0);
-    expect((await taskService.listJobs("archived"))[0].status).toBe("completed");
-    expect(outbound[outbound.length - 1]).toContain("Finished job: Close support loop");
+    expect((await taskService.listJobs("archived"))[0].status).toBe(
+      "completed",
+    );
+    expect(outbound[outbound.length - 1]).toContain(
+      "Finished job: Close support loop",
+    );
   });
 });

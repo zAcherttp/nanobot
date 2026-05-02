@@ -61,7 +61,9 @@ export class DreamService {
         result.addedFacts.push(fact);
       }
 
-      for (const memoryEntry of extractWorkspaceMemoryEntries(message.content)) {
+      for (const memoryEntry of extractWorkspaceMemoryEntries(
+        message.content,
+      )) {
         await this.workspaceMemoryService.recordEntry(memoryEntry);
         result.memoryEntriesRecorded.push(memoryEntry.summary);
       }
@@ -143,13 +145,17 @@ function extractWorkspaceMemoryEntries(content: string): Array<{
       summary: trimmed,
       source: "dream",
     });
-  } else if (/\b(?:constraint|cannot|can't|must use|must not|only)\b/i.test(trimmed)) {
+  } else if (
+    /\b(?:constraint|cannot|can't|must use|must not|only)\b/i.test(trimmed)
+  ) {
     entries.push({
       category: "constraint",
       summary: trimmed,
       source: "dream",
     });
-  } else if (/\b(?:worked|didn't work|failed|succeeded|success)\b/i.test(trimmed)) {
+  } else if (
+    /\b(?:worked|didn't work|failed|succeeded|success)\b/i.test(trimmed)
+  ) {
     entries.push({
       category: "attempt_outcome",
       summary: trimmed,

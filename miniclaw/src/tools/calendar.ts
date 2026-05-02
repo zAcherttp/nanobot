@@ -96,8 +96,7 @@ export function createCalendarTools(
 
         const job = await options.taskService.createJob({
           title: `Confirm plan: schedule "${params.title}"`,
-          goal:
-            "Wait for explicit user confirmation before executing the pending plan.",
+          goal: "Wait for explicit user confirmation before executing the pending plan.",
           tasks: [
             "Present the proposal to the user",
             "Wait for explicit confirmation",
@@ -146,7 +145,9 @@ export function createCalendarTools(
 
         const metadata = job.metadata as PlanMetadata | undefined;
         if (!metadata || metadata.planType !== "gws_calendar_insert") {
-          throw new Error(`Plan payload missing or unsupported for ${params.job_id}`);
+          throw new Error(
+            `Plan payload missing or unsupported for ${params.job_id}`,
+          );
         }
 
         const eventId = await options.gwsCalendar.createEvent({

@@ -74,48 +74,50 @@ describe("gateway integration", () => {
     expect(invalid.status).toBe(400);
     expect(valid.status).toBe(200);
     expect(removedSseRoute.status).toBe(404);
-    expect(inbound).toEqual([{ content: "hello from http", channel: undefined }]);
+    expect(inbound).toEqual([
+      { content: "hello from http", channel: undefined },
+    ]);
   });
 
-  it.each(["SIGINT", "SIGTERM"] as const)(
-    "boots the gateway service, starts the agent loop, and shuts down cleanly on %s",
-    async (signal) => {
-      const { GatewayService } = await import("../src/services/gateway");
-      const config = AppConfigSchema.parse({
-        workspace: { path: "workspace" },
-        channels: {
-          cli: { enabled: false },
-          telegram: { enabled: false, botToken: "", allowedUsers: [] },
-        },
-        dream: { enabled: false },
-        memory: { enabled: false },
-      });
+  it.each([
+    "SIGINT",
+    "SIGTERM",
+  ] as const)("boots the gateway service, starts the agent loop, and shuts down cleanly on %s", async (signal) => {
+    const { GatewayService } = await import("../src/services/gateway");
+    const config = AppConfigSchema.parse({
+      workspace: { path: "workspace" },
+      channels: {
+        cli: { enabled: false },
+        telegram: { enabled: false, botToken: "", allowedUsers: [] },
+      },
+      dream: { enabled: false },
+      memory: { enabled: false },
+    });
 
-      const configService = {
-        load: vi.fn().mockResolvedValue(config),
-      };
+    const configService = {
+      load: vi.fn().mockResolvedValue(config),
+    };
 
-      gatewayHarness.FakeLoop.instances = [];
-      gatewayHarness.serve.mockClear();
-      gatewayHarness.server.close.mockClear();
+    gatewayHarness.FakeLoop.instances = [];
+    gatewayHarness.serve.mockClear();
+    gatewayHarness.server.close.mockClear();
 
-      const executePromise = new GatewayService(configService as never).execute();
+    const executePromise = new GatewayService(configService as never).execute();
 
-      await waitFor(() => gatewayHarness.serve.mock.calls.length === 1);
-      process.emit(signal);
-      await executePromise;
+    await waitFor(() => gatewayHarness.serve.mock.calls.length === 1);
+    process.emit(signal);
+    await executePromise;
 
-      expect(configService.load).toHaveBeenCalled();
-      expect(gatewayHarness.serve).toHaveBeenCalledWith(
-        expect.objectContaining({ port: config.gateway.port }),
-      );
-      expect(gatewayHarness.FakeLoop.instances).toHaveLength(1);
-      expect(gatewayHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
-      expect(gatewayHarness.FakeLoop.instances[0].stop).toHaveBeenCalled();
-      expect(gatewayHarness.server.close).toHaveBeenCalled();
-      expect(process.exitCode).toBe(0);
-    },
-  );
+    expect(configService.load).toHaveBeenCalled();
+    expect(gatewayHarness.serve).toHaveBeenCalledWith(
+      expect.objectContaining({ port: config.gateway.port }),
+    );
+    expect(gatewayHarness.FakeLoop.instances).toHaveLength(1);
+    expect(gatewayHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
+    expect(gatewayHarness.FakeLoop.instances[0].stop).toHaveBeenCalled();
+    expect(gatewayHarness.server.close).toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
+  });
 });
 
 async function waitFor(

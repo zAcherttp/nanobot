@@ -77,7 +77,11 @@ describe("DreamService", () => {
 
   it("records workspace memory entries instead of behavioral observations", async () => {
     const result = await dreamService.consolidate([
-      message("user", "We decided to use gws for Google Calendar execution.", 1),
+      message(
+        "user",
+        "We decided to use gws for Google Calendar execution.",
+        1,
+      ),
       message("assistant", "Noted", 2),
       message("user", "This workflow worked well for weekly planning.", 3),
       message("assistant", "Good", 4),

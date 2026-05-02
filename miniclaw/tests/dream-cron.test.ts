@@ -92,7 +92,9 @@ describe("DreamCronJob", () => {
 
     await job.run();
 
-    expect(mockMemoryStore.readUnprocessedHistory).toHaveBeenCalledWith(messages);
+    expect(mockMemoryStore.readUnprocessedHistory).toHaveBeenCalledWith(
+      messages,
+    );
     expect(mockMemoryStore.updateCursor).toHaveBeenCalledWith({
       lastProcessedAt: new Date(5).toISOString(),
       lastMessageId: "5",

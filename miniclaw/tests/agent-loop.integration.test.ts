@@ -13,7 +13,8 @@ const pathState = vi.hoisted(() => ({ root: "" }));
 
 vi.mock("../src/utils/paths", () => ({
   getRootDir: () => pathState.root,
-  getConfigPath: (appName = "miniclaw") => `${pathState.root}/${appName}/config.json`,
+  getConfigPath: (appName = "miniclaw") =>
+    `${pathState.root}/${appName}/config.json`,
   resolvePath: (...parts: string[]) => `${pathState.root}/${parts.join("/")}`,
 }));
 
@@ -362,29 +363,36 @@ Use gws calendar +agenda.`,
     expect(outbound).toEqual(["Hello world"]);
     expect(persistedMessages).toHaveLength(2);
     expect(extractText(persistedMessages[1].content)).toBe("Hello world");
-    expect(agentInstance.options.initialState.systemPrompt).toContain("## USER.md");
-    expect(agentInstance.options.initialState.systemPrompt).toContain("## GOALS.md");
+    expect(agentInstance.options.initialState.systemPrompt).toContain(
+      "## USER.md",
+    );
+    expect(agentInstance.options.initialState.systemPrompt).toContain(
+      "## GOALS.md",
+    );
     expect(agentInstance.options.initialState.systemPrompt).toContain(
       "## TASKS.md",
     );
-    expect(agentInstance.options.initialState.systemPrompt).toContain("## MEMORY.md");
-    expect(agentInstance.options.initialState.tools.map((tool: any) => tool.name))
-      .toEqual(
-        expect.arrayContaining([
-          "list_skills",
-          "load_skill",
-          "list_jobs",
-          "create_job",
-          "get_user_profile",
-          "update_user_profile",
-          "record_user_preference",
-          "record_memory_entry",
-          "list_goals",
-          "gws_calendar_agenda",
-          "propose_plan",
-          "execute_plan",
-        ]),
-      );
+    expect(agentInstance.options.initialState.systemPrompt).toContain(
+      "## MEMORY.md",
+    );
+    expect(
+      agentInstance.options.initialState.tools.map((tool: any) => tool.name),
+    ).toEqual(
+      expect.arrayContaining([
+        "list_skills",
+        "load_skill",
+        "list_jobs",
+        "create_job",
+        "get_user_profile",
+        "update_user_profile",
+        "record_user_preference",
+        "record_memory_entry",
+        "list_goals",
+        "gws_calendar_agenda",
+        "propose_plan",
+        "execute_plan",
+      ]),
+    );
   });
 
   it("reuses an explicitly recorded user preference on a later similar request", async () => {
@@ -427,7 +435,9 @@ Use gws calendar +agenda.`,
         ...agent.state.messages,
         {
           role: "assistant",
-          content: [{ type: "text", text: "Should I reuse your morning preference?" }],
+          content: [
+            { type: "text", text: "Should I reuse your morning preference?" },
+          ],
           timestamp: Date.now(),
         },
       ];
@@ -438,7 +448,11 @@ Use gws calendar +agenda.`,
     startedLoops.push(loop);
 
     bus.publishInbound({
-      message: { role: "user", content: "I usually want morning meetings.", timestamp: Date.now() },
+      message: {
+        role: "user",
+        content: "I usually want morning meetings.",
+        timestamp: Date.now(),
+      },
       channel: "cli",
       userId: "user-1",
     });
@@ -447,13 +461,18 @@ Use gws calendar +agenda.`,
     );
 
     bus.publishInbound({
-      message: { role: "user", content: "Can you help me schedule another meeting?", timestamp: Date.now() },
+      message: {
+        role: "user",
+        content: "Can you help me schedule another meeting?",
+        timestamp: Date.now(),
+      },
       channel: "cli",
       userId: "user-1",
     });
-    await waitFor(async () =>
-      secondTurnValidated &&
-      outbound.includes("Should I reuse your morning preference?"),
+    await waitFor(
+      async () =>
+        secondTurnValidated &&
+        outbound.includes("Should I reuse your morning preference?"),
     );
   });
 
@@ -480,7 +499,9 @@ Use gws calendar +agenda.`,
           ...agent.state.messages,
           {
             role: "assistant",
-            content: [{ type: "text", text: "Saved the weekly review convention." }],
+            content: [
+              { type: "text", text: "Saved the weekly review convention." },
+            ],
             timestamp: Date.now(),
           },
         ];
@@ -488,7 +509,9 @@ Use gws calendar +agenda.`,
       }
 
       secondTurnValidated = true;
-      expect(agent.options.initialState.systemPrompt).toContain("## Relevant Memory");
+      expect(agent.options.initialState.systemPrompt).toContain(
+        "## Relevant Memory",
+      );
       expect(agent.options.initialState.systemPrompt).toContain(
         "Use 25-minute planning blocks for weekly review.",
       );
@@ -497,7 +520,12 @@ Use gws calendar +agenda.`,
         ...agent.state.messages,
         {
           role: "assistant",
-          content: [{ type: "text", text: "I'll use the saved weekly review convention." }],
+          content: [
+            {
+              type: "text",
+              text: "I'll use the saved weekly review convention.",
+            },
+          ],
           timestamp: Date.now(),
         },
       ];
@@ -508,7 +536,11 @@ Use gws calendar +agenda.`,
     startedLoops.push(loop);
 
     bus.publishInbound({
-      message: { role: "user", content: "Let's use 25-minute planning blocks for weekly review.", timestamp: Date.now() },
+      message: {
+        role: "user",
+        content: "Let's use 25-minute planning blocks for weekly review.",
+        timestamp: Date.now(),
+      },
       channel: "cli",
       userId: "user-1",
     });
@@ -517,13 +549,18 @@ Use gws calendar +agenda.`,
     );
 
     bus.publishInbound({
-      message: { role: "user", content: "Help me plan the weekly review again.", timestamp: Date.now() },
+      message: {
+        role: "user",
+        content: "Help me plan the weekly review again.",
+        timestamp: Date.now(),
+      },
       channel: "cli",
       userId: "user-1",
     });
-    await waitFor(async () =>
-      secondTurnValidated &&
-      outbound.includes("I'll use the saved weekly review convention."),
+    await waitFor(
+      async () =>
+        secondTurnValidated &&
+        outbound.includes("I'll use the saved weekly review convention."),
     );
   });
 
@@ -570,17 +607,21 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
     await waitFor(async () => {
-      const thread = await persistence.getConversationThread();
-      const meta = await persistence.getThread(thread.id);
-      const summary = await persistence.getSummary(thread.id);
-      const messages = await persistence.getMessages(thread.id);
+      try {
+        const thread = await persistence.getConversationThread();
+        const meta = await persistence.getThread(thread.id);
+        const summary = await persistence.getSummary(thread.id);
+        const messages = await persistence.getMessages(thread.id);
 
-      return (
-        meta.status === "compacted" &&
-        typeof summary === "string" &&
-        summary.length > 0 &&
-        messages[messages.length - 1]?.role === "assistant"
-      );
+        return (
+          meta.status === "compacted" &&
+          typeof summary === "string" &&
+          summary.length > 0 &&
+          messages[messages.length - 1]?.role === "assistant"
+        );
+      } catch {
+        return false;
+      }
     });
 
     const thread = await persistence.getConversationThread();
@@ -634,7 +675,8 @@ Use gws calendar +agenda.`,
 
     await waitFor(async () => agentHarness.FakeAgent.instances.length === 1);
 
-    const model = agentHarness.FakeAgent.instances[0].options.initialState.model;
+    const model =
+      agentHarness.FakeAgent.instances[0].options.initialState.model;
 
     expect(model.provider).toBe("nvidia");
     expect(model.api).toBe("openai-responses");
@@ -763,9 +805,11 @@ Use gws calendar +agenda.`,
       const proposal = await taskService.findActiveJobByKind("pending-plan");
       const thread = await persistence.getConversationThread();
       const messages = await persistence.getMessages(thread.id);
-      return Boolean(proposal)
-        && messages.length === 2
-        && extractText(messages[1].content).includes("I propose a deep work block");
+      return (
+        Boolean(proposal) &&
+        messages.length === 2 &&
+        extractText(messages[1].content).includes("I propose a deep work block")
+      );
     });
 
     let proposalJob = await taskService.findActiveJobByKind("pending-plan");
@@ -782,11 +826,14 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
 
-    await waitFor(async () =>
-      gwsHarness.createEvent.mock.calls.length === 1
-      && outbound.some((message) =>
-        message.includes('Created Google Calendar event evt-123 for "Deep work block".'),
-      ),
+    await waitFor(
+      async () =>
+        gwsHarness.createEvent.mock.calls.length === 1 &&
+        outbound.some((message) =>
+          message.includes(
+            'Created Google Calendar event evt-123 for "Deep work block".',
+          ),
+        ),
     );
 
     proposalJob = await taskService.findActiveJobByKind("pending-plan");
@@ -794,17 +841,26 @@ Use gws calendar +agenda.`,
     const updatedGoal = await goalService.getGoal(goal.id);
 
     expect(proposalJob).toBeNull();
-    expect(archivedJobs.some((job) =>
-      job.id === proposalJobId
-      && job.outcomeSummary?.includes("Executed plan by creating Google Calendar event evt-123."),
-    )).toBe(true);
+    expect(
+      archivedJobs.some(
+        (job) =>
+          job.id === proposalJobId &&
+          job.outcomeSummary?.includes(
+            "Executed plan by creating Google Calendar event evt-123.",
+          ),
+      ),
+    ).toBe(true);
     expect(updatedGoal?.linkedTaskIds).toContain(proposalJobId);
     expect(updatedGoal?.progress.at(-1)?.summary).toContain(
       'Scheduled "Deep work block" on the calendar.',
     );
-    expect(outbound.some((message) =>
-      message.includes('Created Google Calendar event evt-123 for "Deep work block".'),
-    )).toBe(true);
+    expect(
+      outbound.some((message) =>
+        message.includes(
+          'Created Google Calendar event evt-123 for "Deep work block".',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("does not execute a proposed calendar write on ambiguous confirmation", async () => {
@@ -838,7 +894,12 @@ Use gws calendar +agenda.`,
           ...agent.state.messages,
           {
             role: "assistant",
-            content: [{ type: "text", text: "I drafted a proposal. Confirm if you want me to place it on the calendar." }],
+            content: [
+              {
+                type: "text",
+                text: "I drafted a proposal. Confirm if you want me to place it on the calendar.",
+              },
+            ],
             timestamp: Date.now(),
           },
         ];
@@ -877,9 +938,11 @@ Use gws calendar +agenda.`,
       const proposal = await taskService.findActiveJobByKind("pending-plan");
       const thread = await persistence.getConversationThread();
       const messages = await persistence.getMessages(thread.id);
-      return Boolean(proposal)
-        && messages.length === 2
-        && extractText(messages[1].content).includes("I drafted a proposal.");
+      return (
+        Boolean(proposal) &&
+        messages.length === 2 &&
+        extractText(messages[1].content).includes("I drafted a proposal.")
+      );
     });
 
     bus.publishInbound({
@@ -898,7 +961,8 @@ Use gws calendar +agenda.`,
       ),
     );
 
-    const activeProposal = await taskService.findActiveJobByKind("pending-plan");
+    const activeProposal =
+      await taskService.findActiveJobByKind("pending-plan");
     expect(activeProposal?.id).toBe(proposalJobId);
     expect(gwsHarness.createEvent).not.toHaveBeenCalled();
   });
@@ -1134,7 +1198,9 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
 
-    await waitFor(async () => (await taskService.listJobs("active")).length === 1);
+    await waitFor(
+      async () => (await taskService.listJobs("active")).length === 1,
+    );
     const activeJob = (await taskService.listJobs("active"))[0];
     expect(activeJob.kind).toBe("onboarding");
     expect(outbound[0]).toContain("Complete user profile");
@@ -1149,9 +1215,13 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
 
-    await waitFor(async () => (await taskService.listJobs("archived")).length === 1);
+    await waitFor(
+      async () => (await taskService.listJobs("archived")).length === 1,
+    );
     expect(await taskService.listJobs("active")).toHaveLength(0);
-    expect((await taskService.listJobs("archived"))[0].status).toBe("completed");
+    expect((await taskService.listJobs("archived"))[0].status).toBe(
+      "completed",
+    );
 
     const profile = await profileService.getProfile();
     expect(profile.setupComplete).toBe(true);

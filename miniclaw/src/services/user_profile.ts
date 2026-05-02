@@ -69,7 +69,11 @@ export class UserProfileService {
       await fs.access(this.profilePath);
     } catch {
       await fs.mkdir(this.workspacePath, { recursive: true });
-      await fs.writeFile(this.profilePath, this.renderDocument(DEFAULT_DOCUMENT), "utf8");
+      await fs.writeFile(
+        this.profilePath,
+        this.renderDocument(DEFAULT_DOCUMENT),
+        "utf8",
+      );
     }
   }
 
@@ -96,9 +100,7 @@ export class UserProfileService {
     return merged;
   }
 
-  public getMissingFields(
-    profile: ManagedUserProfile,
-  ): RequiredProfileField[] {
+  public getMissingFields(profile: ManagedUserProfile): RequiredProfileField[] {
     return REQUIRED_PROFILE_FIELDS.filter((field) => !profile[field].trim());
   }
 
@@ -150,7 +152,9 @@ export class UserProfileService {
     if (document.preferences.length > 0) {
       lines.push("");
       lines.push("### Preferences");
-      lines.push(...document.preferences.map((preference) => `- ${preference}`));
+      lines.push(
+        ...document.preferences.map((preference) => `- ${preference}`),
+      );
     }
 
     return lines.join("\n");
@@ -280,7 +284,9 @@ ${endMarker}`;
 function pushUniqueString(values: string[], next: string): boolean {
   const normalized = next.trim();
   if (!normalized) return false;
-  if (values.some((entry) => entry.toLowerCase() === normalized.toLowerCase())) {
+  if (
+    values.some((entry) => entry.toLowerCase() === normalized.toLowerCase())
+  ) {
     return false;
   }
   values.push(normalized);

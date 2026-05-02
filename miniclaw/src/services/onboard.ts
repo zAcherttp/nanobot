@@ -119,7 +119,9 @@ export class OnboardService {
 
   private async createSkillDirectories(skillsDir: string): Promise<void> {
     const templateSkillsDir = path.resolve(__dirname, "../../skills");
-    const entries = await fs.readdir(templateSkillsDir, { withFileTypes: true });
+    const entries = await fs.readdir(templateSkillsDir, {
+      withFileTypes: true,
+    });
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;

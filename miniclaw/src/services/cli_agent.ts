@@ -61,7 +61,9 @@ export class CliAgentService {
       }
 
       shuttingDown = true;
-      logger.info(chalk.yellow(`\nShutting down miniclaw agent (${signal})...`));
+      logger.info(
+        chalk.yellow(`\nShutting down miniclaw agent (${signal})...`),
+      );
 
       let exitCode = 0;
       try {

@@ -13,10 +13,9 @@ export function createTaskTools(
   notifier: TaskProgressNotifier,
   defaults: { channel?: string; userId?: string },
 ): AgentTool<any, any>[] {
-  const taskListSchema = Type.Array(
-    Type.String({ minLength: 1 }),
-    { minItems: 1 },
-  );
+  const taskListSchema = Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+  });
 
   return [
     {
@@ -29,7 +28,9 @@ export function createTaskTools(
         ),
       }),
       execute: async (_toolCallId, params) => {
-        const jobs = await taskService.listJobs(params.status as JobSection | undefined);
+        const jobs = await taskService.listJobs(
+          params.status as JobSection | undefined,
+        );
         const text =
           jobs.length === 0
             ? "No jobs found."
@@ -86,7 +87,9 @@ export function createTaskTools(
         await notifier.announceJob(job);
 
         return {
-          content: [{ type: "text", text: `Created job ${job.id}: ${job.title}` }],
+          content: [
+            { type: "text", text: `Created job ${job.id}: ${job.title}` },
+          ],
           details: { job },
         };
       },
@@ -125,11 +128,16 @@ export function createTaskTools(
         task_id: Type.String(),
       }),
       execute: async (_toolCallId, params) => {
-        const job = await taskService.completeTask(params.job_id, params.task_id);
+        const job = await taskService.completeTask(
+          params.job_id,
+          params.task_id,
+        );
         await notifier.refreshJob(job);
 
         return {
-          content: [{ type: "text", text: `Completed task ${params.task_id}.` }],
+          content: [
+            { type: "text", text: `Completed task ${params.task_id}.` },
+          ],
           details: { job },
         };
       },

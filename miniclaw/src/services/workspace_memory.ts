@@ -59,7 +59,11 @@ export class WorkspaceMemoryService {
       await fs.access(this.memoryPath);
     } catch {
       await fs.mkdir(this.workspacePath, { recursive: true });
-      await fs.writeFile(this.memoryPath, renderMemoryMarkdown(emptyDocument()), "utf8");
+      await fs.writeFile(
+        this.memoryPath,
+        renderMemoryMarkdown(emptyDocument()),
+        "utf8",
+      );
     }
   }
 
@@ -136,7 +140,9 @@ export class WorkspaceMemoryService {
 
     for (const category of memoryCategories()) {
       const originalLength = document[category].length;
-      document[category] = document[category].filter((entry) => entry.id !== entryId);
+      document[category] = document[category].filter(
+        (entry) => entry.id !== entryId,
+      );
       if (document[category].length !== originalLength) {
         removed = true;
       }
@@ -165,8 +171,10 @@ export class WorkspaceMemoryService {
         score: scoreEntry(entry, normalizedQuery),
       }))
       .filter((result) => result.score > 0)
-      .sort((left, right) =>
-        right.score - left.score || right.entry.updatedAt.localeCompare(left.entry.updatedAt),
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          right.entry.updatedAt.localeCompare(left.entry.updatedAt),
       )
       .slice(0, limit)
       .map((result) => result.entry);
@@ -188,7 +196,8 @@ export class WorkspaceMemoryService {
       lines.push(`### ${categoryHeading(category)}`);
       lines.push(
         ...entries.map((entry) => {
-          const tags = entry.tags.length > 0 ? ` [tags: ${entry.tags.join(", ")}]` : "";
+          const tags =
+            entry.tags.length > 0 ? ` [tags: ${entry.tags.join(", ")}]` : "";
           return `- ${entry.summary}${tags}`;
         }),
       );
@@ -247,9 +256,10 @@ function categoryHeading(category: MemoryCategory): string {
   }
 }
 
-function sectionMarkers(
-  category: MemoryCategory,
-): { start: string; end: string } {
+function sectionMarkers(category: MemoryCategory): {
+  start: string;
+  end: string;
+} {
   switch (category) {
     case "decision":
       return { start: DECISIONS_START, end: DECISIONS_END };
@@ -378,12 +388,14 @@ function uniqueTags(values: string[]): string[] {
 }
 
 function normalizeQuery(query: string): string[] {
-  return [...new Set(
-    query
-      .toLowerCase()
-      .split(/[^a-z0-9]+/i)
-      .filter((token) => token.length >= 3),
-  )];
+  return [
+    ...new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((token) => token.length >= 3),
+    ),
+  ];
 }
 
 function scoreEntry(entry: MemoryEntry, queryTokens: string[]): number {
