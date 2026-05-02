@@ -24,11 +24,11 @@ export async function buildSystemPrompt(
 ): Promise<string> {
   const parts: string[] = [];
 
-  let summary = options.summary;
+  let summary = options.summary || null;
   if (options.threadPath && !summary) {
     summary = await readSummaryFile(options.threadPath);
   }
-  if (summary && summary.trim()) {
+  if (summary?.trim()) {
     parts.push(`## Conversation Summary\n\n${summary}`);
   }
 

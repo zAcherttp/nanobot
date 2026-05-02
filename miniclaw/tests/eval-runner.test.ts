@@ -61,6 +61,24 @@ vi.mock("@mariozechner/pi-ai", () => ({
     contextWindow: 4096,
     maxTokens: 512,
   })),
+  getProviders: vi.fn(() => ["openai", "ollama", "nvidia"]),
+  getModels: vi.fn((provider: string) => [
+    {
+      id: provider === "ollama" ? "gemma4:31b-cloud" : "fake-model",
+      name: provider === "ollama" ? "gemma4:31b-cloud" : "fake-model",
+      api: provider === "ollama" ? "openai-completions" : "openai-responses",
+      provider,
+      baseUrl:
+        provider === "ollama"
+          ? "http://127.0.0.1:11434/v1"
+          : "https://api.example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 512,
+    },
+  ]),
   registerBuiltInApiProviders: vi.fn(),
 }));
 

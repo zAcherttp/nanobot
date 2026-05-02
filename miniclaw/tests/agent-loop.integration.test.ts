@@ -86,6 +86,7 @@ const providerHarness = vi.hoisted(() => ({
     contextWindow: 4096,
     maxTokens: 512,
   })),
+  getProvidersImpl: vi.fn(() => ["openai", "nvidia", "ollama"]),
   registerBuiltInApiProviders: vi.fn(),
 }));
 
@@ -97,6 +98,14 @@ vi.mock("@mariozechner/pi-ai", () => ({
   getModel: vi.fn((provider: string, modelId: string) =>
     providerHarness.getModelImpl(provider, modelId),
   ),
+  getProviders: vi.fn(() => providerHarness.getProvidersImpl()),
+  getModels: vi.fn((provider: string) => {
+    try {
+      return [providerHarness.getModelImpl(provider, "fake-model")];
+    } catch {
+      return [];
+    }
+  }),
   registerBuiltInApiProviders: providerHarness.registerBuiltInApiProviders,
 }));
 
@@ -249,6 +258,12 @@ Use gws calendar +agenda.`,
     agentHarness.FakeAgent.instances = [];
     agentHarness.FakeAgent.continueImpl = null;
     agentHarness.FakeAgent.waitForIdleImpl = null;
+    providerHarness.getProvidersImpl.mockReset();
+    providerHarness.getProvidersImpl.mockImplementation(() => [
+      "openai",
+      "nvidia",
+      "ollama",
+    ]);
     providerHarness.getModelImpl.mockReset();
     providerHarness.getModelImpl.mockImplementation(() => ({
       id: "fake-model",
@@ -594,7 +609,7 @@ Use gws calendar +agenda.`,
     expect(persistedMessages.length).toBeLessThanOrEqual(3);
   });
 
-  it("falls back to a synthetic provider model when getModel throws", async () => {
+  it("falls back to a synthetic provider model when the configured model is unknown", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
 
     providerHarness.getModelImpl.mockImplementation(() => {

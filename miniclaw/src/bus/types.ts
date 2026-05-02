@@ -1,14 +1,6 @@
-import type { AgentMessage as CoreAgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-export type AgentMessage =
-  | CoreAgentMessage
-  | {
-      role: "system";
-      content: string;
-      timestamp: number;
-    };
-
-export type { CoreAgentMessage };
+export type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export interface InboundBusEvent {
   message: AgentMessage;

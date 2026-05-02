@@ -122,6 +122,7 @@ export class AskUserService {
       details: {
         answer,
       },
+      isError: false,
       timestamp: Date.now(),
     };
   }

@@ -1,6 +1,7 @@
-import cron from "node-cron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { ScheduledTask } from "node-cron";
+import cron from "node-cron";
 import { logger } from "@/utils/logger";
 
 export interface CronSchedule {
@@ -57,7 +58,7 @@ export class CronService {
   private readonly storePath: string;
   private readonly onJob: CronCallback | null;
   private store: CronStore | null = null;
-  private tasks: Map<string, cron.ScheduledTask> = new Map();
+  private tasks: Map<string, ScheduledTask> = new Map();
   private running = false;
 
   constructor(storePath: string, onJob: CronCallback | null = null) {
@@ -82,7 +83,9 @@ export class CronService {
    */
   stop(): void {
     this.running = false;
-    this.tasks.forEach((task) => task.stop());
+    this.tasks.forEach((task) => {
+      task.stop();
+    });
     this.tasks.clear();
     logger.info("Cron service stopped");
   }

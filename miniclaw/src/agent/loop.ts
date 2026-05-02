@@ -1,38 +1,45 @@
-import { Agent } from "@mariozechner/pi-agent-core";
-import { getModel, registerBuiltInApiProviders } from "@mariozechner/pi-ai";
-import { ulid } from "ulid";
 import path from "node:path";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Agent } from "@mariozechner/pi-agent-core";
+import {
+  getModels,
+  getProviders,
+  registerBuiltInApiProviders,
+  type Api,
+  type KnownProvider,
+  type Model,
+} from "@mariozechner/pi-ai";
+import { ulid } from "ulid";
 import type { MessageBus } from "@/bus/index";
 import type { AgentMessage } from "@/bus/types";
 import type { AppConfig } from "@/config/schema";
-import type { PersistenceService } from "@/services/persistence";
-import { logger } from "@/utils/logger";
-import { CompactionService } from "./compaction";
-import { buildSystemPrompt } from "./context";
-import { SkillsLoader } from "./skills";
+import { AskUserService } from "@/services/ask_user";
 import { CronService } from "@/services/cron";
-import { MemoryStore } from "@/services/memory";
-import { DreamCronJob } from "./dream-cron";
 import { GoalService } from "@/services/goals";
+import { MemoryStore } from "@/services/memory";
+import type { PersistenceService } from "@/services/persistence";
+import { ShellExecutionService } from "@/services/shell";
+import { TaskProgressNotifier } from "@/services/task_progress";
+import { type TaskJob, TaskService } from "@/services/tasks";
 import {
   REQUIRED_PROFILE_FIELDS,
   type RequiredProfileField,
   UserProfileService,
 } from "@/services/user_profile";
-import { TaskService, type TaskJob } from "@/services/tasks";
-import { TaskProgressNotifier } from "@/services/task_progress";
+import { WorkspaceMemoryService } from "@/services/workspace_memory";
+import { createAskUserTools } from "@/tools/ask_user";
+import { createExecTools } from "@/tools/exec";
+import { createGoalTools } from "@/tools/goals";
+import { createWorkspaceMemoryTools } from "@/tools/memory";
+import { createSearchTools } from "@/tools/search";
 import { createSkillTools } from "@/tools/skills";
 import { createTaskTools } from "@/tools/tasks";
 import { createUserProfileTools } from "@/tools/user_profile";
-import { createGoalTools } from "@/tools/goals";
-import { createWorkspaceMemoryTools } from "@/tools/memory";
-import { createAskUserTools } from "@/tools/ask_user";
-import { createExecTools } from "@/tools/exec";
-import { createSearchTools } from "@/tools/search";
-import { WorkspaceMemoryService } from "@/services/workspace_memory";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { AskUserService } from "@/services/ask_user";
-import { ShellExecutionService } from "@/services/shell";
+import { logger } from "@/utils/logger";
+import { CompactionService } from "./compaction";
+import { buildSystemPrompt } from "./context";
+import { DreamCronJob } from "./dream-cron";
+import { SkillsLoader } from "./skills";
 
 registerBuiltInApiProviders();
 
@@ -204,7 +211,7 @@ export class AgentLoop {
             const content = this.extractTextContent(msg.content);
             if (!content.trim()) continue;
             allMessages.push({
-              id: msg.id || ulid(),
+              id: "id" in msg && typeof msg.id === "string" ? msg.id : ulid(),
               role: msg.role as "user" | "assistant" | "system",
               content,
               timestamp: msg.timestamp || Date.now(),
@@ -248,22 +255,18 @@ export class AgentLoop {
       }
 
       const busReceivedAt = Date.now();
-      const turnPromise = (async () => {
-        try {
-          await this.handleTurn(
-            event.message.content as string,
-            event.channel,
-            event.userId,
-            busReceivedAt,
-          );
-        } catch (err) {
-          logger.error({ err }, "Agent loop turn failed");
-        } finally {
-          this.activeTurns.delete(turnPromise);
-        }
-      })();
-
+      const turnPromise = this.handleTurn(
+        this.extractTextContent(event.message.content),
+        event.channel,
+        event.userId,
+        busReceivedAt,
+      ).catch((err) => {
+        logger.error({ err }, "Agent loop turn failed");
+      });
       this.activeTurns.add(turnPromise);
+      void turnPromise.finally(() => {
+        this.activeTurns.delete(turnPromise);
+      });
     });
   }
 
@@ -559,17 +562,21 @@ export class AgentLoop {
     }
   }
 
-  private resolveModel() {
-    const providerStr = this.config.thread.provider as any;
+  private resolveModel(): Model<Api> {
+    const providerStr = this.config.thread.provider;
     const modelIdStr = this.config.thread.modelId;
-    let model;
-    try {
-      model = getModel(providerStr, modelIdStr as any);
-    } catch {
-      // ignored
+    if (isKnownProvider(providerStr)) {
+      const knownModel = getModels(providerStr).find(
+        (candidate) => candidate.id === modelIdStr,
+      );
+      if (knownModel) {
+        return knownModel;
+      }
     }
 
-    const providerConfig = {
+    const providerConfig: Partial<
+      Record<string, { api: Api; baseUrl: string }>
+    > = {
       ollama: {
         api: "openai-completions",
         baseUrl: "http://127.0.0.1:11434/v1",
@@ -580,23 +587,19 @@ export class AgentLoop {
       },
     };
 
-    if (!model) {
-      const config = providerConfig[providerStr as keyof typeof providerConfig];
-      model = {
-        id: modelIdStr,
-        name: modelIdStr,
-        api: config?.api || "openai-responses",
-        provider: providerStr,
-        baseUrl: config?.baseUrl || "",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: this.config.thread.contextWindowTokens,
-        maxTokens: this.config.thread.maxTokens,
-      } as any;
-    }
-
-    return model;
+    const config = providerConfig[providerStr];
+    return {
+      id: modelIdStr,
+      name: modelIdStr,
+      api: config?.api || "openai-responses",
+      provider: providerStr,
+      baseUrl: config?.baseUrl || "",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: this.config.thread.contextWindowTokens,
+      maxTokens: this.config.thread.maxTokens,
+    };
   }
 
   private getApiKey = (provider: string) => {
@@ -666,7 +669,11 @@ export class AgentLoop {
     }
 
     const completedTaskIds = job.tasks
-      .filter((task) => task.fieldKey && profile[task.fieldKey].trim())
+      .filter(
+        (task): task is typeof task & { fieldKey: RequiredProfileField } =>
+          isRequiredProfileField(task.fieldKey) &&
+          profile[task.fieldKey].trim().length > 0,
+      )
       .map((task) => task.id);
 
     const syncResult = await this.taskService.syncManagedJob(
@@ -1024,7 +1031,7 @@ function isToolCallOnlyAssistantMessage(message: AgentMessage): boolean {
   return (
     message.content.length > 0 &&
     message.content.every(
-      (part) =>
+      (part: unknown) =>
         typeof part === "object" &&
         part !== null &&
         "type" in part &&
@@ -1053,4 +1060,17 @@ function scoreText(value: string, tokens: string[]): number {
     }
   }
   return score;
+}
+
+function isRequiredProfileField(
+  value: string | undefined,
+): value is RequiredProfileField {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(PROFILE_FIELD_LABELS, value)
+  );
+}
+
+function isKnownProvider(value: string): value is KnownProvider {
+  return getProviders().some((provider) => provider === value);
 }
