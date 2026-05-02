@@ -29,7 +29,7 @@ Trong trạng thái hiện tại, `miniclaw` đã hiện thực một lát cắt
 - **Quản lý hồ sơ người dùng:** `USER.md` đã có phần managed profile phục vụ onboarding và lưu các preference cơ bản như timezone, ngôn ngữ, phong cách giao tiếp, mức độ kỹ thuật, và thiết lập lịch mặc định.
 - **Onboarding dưới dạng tác vụ:** việc hỏi thông tin ban đầu không còn là một chế độ riêng, mà được mô hình hóa như một job tự động được chèn vào hệ thống tác vụ khi hồ sơ người dùng còn thiếu.
 - **Skill runtime thực:** agent hiện có các công cụ `list_skills`, `load_skill`, và `get_skill_info`, cho phép nạp skill theo nhu cầu ở từng lượt thay vì giả định skill luôn hiện diện trong prompt.
-- **Tích hợp Google Calendar theo hướng provider-specific:** thay vì một generalized calendar tool, `miniclaw` hiện dùng `gws-*` skills như lớp hướng dẫn, còn thực thi đi qua `gws_calendar_agenda` cùng cặp công cụ tổng quát `propose_plan` và `execute_plan` cho luồng ghi lịch có xác nhận.
+- **Tích hợp Google Calendar theo hướng provider-specific:** thay vì một generalized calendar tool, `miniclaw` hiện dùng `gws-*` skills như lớp hướng dẫn, còn thực thi đi qua `exec`; các thao tác ghi lịch phải đi qua bước xác nhận rõ ràng bằng `ask_user`.
 - **Persistence và compaction:** hội thoại được lưu bền vững, có cơ chế compaction, và đã được kiểm thử ở mức runtime thay vì chỉ ở mức helper thuần.
 - **Độ tin cậy của runtime chính:** các phần cốt lõi như agent loop, persistence, gateway, Telegram flow, task services, và task tools đã có test coverage trực tiếp, giúp giảm rủi ro sai khác giữa mô tả kiến trúc và hành vi thực thi.
 

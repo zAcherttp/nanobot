@@ -48,8 +48,9 @@ export class PersistenceService {
   constructor(
     private readonly configService: ConfigService,
     private readonly appName: string = "miniclaw",
+    options: { threadsDir?: string } = {},
   ) {
-    this.threadsDir = resolvePath(appName, "threads");
+    this.threadsDir = options.threadsDir || resolvePath(appName, "threads");
   }
 
   // ── Conversation Thread (singleton) ────────────────

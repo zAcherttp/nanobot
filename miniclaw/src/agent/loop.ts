@@ -25,16 +25,37 @@ import { createSkillTools } from "@/tools/skills";
 import { createTaskTools } from "@/tools/tasks";
 import { createUserProfileTools } from "@/tools/user_profile";
 import { createGoalTools } from "@/tools/goals";
-import { createCalendarTools } from "@/tools/calendar";
 import { createWorkspaceMemoryTools } from "@/tools/memory";
-import { GwsCalendarService } from "@/services/calendar/gws";
+import { createAskUserTools } from "@/tools/ask_user";
+import { createExecTools } from "@/tools/exec";
+import { createSearchTools } from "@/tools/search";
 import { WorkspaceMemoryService } from "@/services/workspace_memory";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { AskUserService } from "@/services/ask_user";
+import { ShellExecutionService } from "@/services/shell";
 
 registerBuiltInApiProviders();
 
 const INBOUND_LOG_PREVIEW_CHARS = 120;
 const OUTBOUND_LOG_PREVIEW_CHARS = 120;
+const MESSAGE_PART_LOG_PREVIEW_CHARS = 120;
 const ONBOARDING_JOB_KIND = "onboarding";
+
+export interface ToolExecutionEvent {
+  name: string;
+  toolCallId: string;
+  params: unknown;
+  startedAt: string;
+  finishedAt?: string;
+  success: boolean;
+  resultText?: string;
+  error?: string;
+}
+
+export interface AgentLoopOptions {
+  onToolExecution?: (event: ToolExecutionEvent) => void;
+  shellService?: ShellExecutionService;
+}
 
 const PROFILE_FIELD_LABELS: Record<RequiredProfileField, string> = {
   name: "Capture the user's name",
@@ -73,9 +94,10 @@ const TRANSIENT_TOOL_NAMES = new Set([
   "record_memory_entry",
   "update_memory_entry",
   "remove_memory_entry",
-  "gws_calendar_agenda",
-  "propose_plan",
-  "execute_plan",
+  "ask_user",
+  "exec",
+  "glob",
+  "grep",
 ]);
 
 export class AgentLoop {
@@ -87,8 +109,10 @@ export class AgentLoop {
   private readonly goalService: GoalService;
   private readonly taskService: TaskService;
   private readonly workspaceMemoryService: WorkspaceMemoryService;
+  private readonly askUserService: AskUserService;
   private readonly taskNotifier: TaskProgressNotifier;
-  private readonly gwsCalendar: GwsCalendarService;
+  private readonly shellService: ShellExecutionService;
+  private readonly options: AgentLoopOptions;
   private unsubscribeInbound: (() => void) | null = null;
   private readonly activeTurns = new Set<Promise<void>>();
   private running = false;
@@ -98,7 +122,9 @@ export class AgentLoop {
     private readonly bus: MessageBus,
     private readonly persistence: PersistenceService,
     private readonly config: AppConfig,
+    options: AgentLoopOptions = {},
   ) {
+    this.options = options;
     const skillsPath = path.join(this.config.workspace.path, "skills");
     this.skillsLoader = new SkillsLoader(skillsPath);
 
@@ -130,8 +156,15 @@ export class AgentLoop {
     this.workspaceMemoryService = new WorkspaceMemoryService(
       this.config.workspace.path,
     );
+    this.askUserService = new AskUserService(this.persistence);
     this.taskNotifier = new TaskProgressNotifier(this.bus);
-    this.gwsCalendar = new GwsCalendarService();
+    this.shellService =
+      options.shellService ||
+      new ShellExecutionService({
+        workspacePath: this.config.workspace.path,
+        toolConfig: this.config.tools.exec,
+        restrictToWorkspace: this.config.tools.restrictToWorkspace,
+      });
     this.dreamCronJob = this.initDreamCronJob();
   }
 
@@ -261,6 +294,10 @@ export class AgentLoop {
     this.stopPromise = null;
   }
 
+  public async waitForIdle(): Promise<void> {
+    await Promise.allSettled([...this.activeTurns]);
+  }
+
   private async handleTurn(
     userText: string,
     channel?: string,
@@ -277,16 +314,43 @@ export class AgentLoop {
     );
 
     const thread = await this.persistence.getConversationThread();
+    const pendingAsk = await this.askUserService.getPendingAsk(thread.id);
+    let approvalGranted = false;
+    let workingMessages: AgentMessage[];
 
-    await this.persistence.appendMessage(thread.id, {
-      role: "user",
-      content: userText,
-      timestamp: Date.now(),
-    });
+    if (pendingAsk) {
+      const replyOutcome = this.askUserService.classifyReply(
+        userText,
+        pendingAsk.options,
+      );
+      await this.askUserService.clearPendingAsk(thread.id);
+      if (replyOutcome === "proceed") {
+        await this.askUserService.setApprovedAsk(thread.id, {
+          toolCallId: pendingAsk.toolCallId,
+          grantedAt: new Date().toISOString(),
+        });
+        approvalGranted = true;
+      } else {
+        await this.askUserService.clearApprovedAsk(thread.id);
+      }
+
+      workingMessages = [
+        ...(await this.persistence.getMessages(thread.id)),
+        this.askUserService.buildToolResultMessage(
+          pendingAsk.toolCallId,
+          userText,
+        ),
+      ];
+    } else {
+      await this.persistence.appendMessage(thread.id, {
+        role: "user",
+        content: userText,
+        timestamp: Date.now(),
+      });
+      workingMessages = await this.persistence.getMessages(thread.id);
+    }
 
     await this.ensureOnboardingJob(channel, userId);
-
-    const messages = await this.persistence.getMessages(thread.id);
 
     const compaction = new CompactionService(
       this.bus,
@@ -299,7 +363,7 @@ export class AgentLoop {
       messages: compactedMessages,
       summary,
     } = await compaction.compactIfNeeded(
-      messages,
+      workingMessages,
       this.config.thread.contextWindowTokens,
       thread.id,
       channel,
@@ -321,7 +385,7 @@ export class AgentLoop {
     const relevantMemoryEntries =
       await this.workspaceMemoryService.searchEntries(userText);
     const relevantHistory = this.buildRelevantConversationContext(
-      messages.slice(0, -1),
+      workingMessages.slice(0, -1),
       userText,
     );
 
@@ -341,7 +405,7 @@ export class AgentLoop {
     });
 
     const model = this.resolveModel();
-    const tools = [
+    const tools = this.instrumentTools([
       ...createSkillTools(this.skillsLoader),
       ...createTaskTools(this.taskService, this.taskNotifier, {
         channel,
@@ -350,16 +414,24 @@ export class AgentLoop {
       ...createUserProfileTools(this.userProfileService),
       ...createGoalTools(this.goalService),
       ...createWorkspaceMemoryTools(this.workspaceMemoryService),
-      ...createCalendarTools({
-        gwsCalendar: this.gwsCalendar,
-        taskService: this.taskService,
-        notifier: this.taskNotifier,
-        goalService: this.goalService,
-        currentUserText: userText,
+      ...createAskUserTools({
+        askUserService: this.askUserService,
+        threadId: thread.id,
         channel,
         userId,
       }),
-    ];
+      ...createSearchTools({
+        workspacePath: this.config.workspace.path,
+        restrictToWorkspace: this.config.tools.restrictToWorkspace,
+      }),
+      ...createExecTools({
+        shellService: this.shellService,
+        workspacePath: this.config.workspace.path,
+        timeoutSeconds: this.config.tools.exec.timeout,
+        canRunMutatingGws: async () =>
+          Boolean(await this.askUserService.getApprovedAsk(thread.id)),
+      }),
+    ]);
 
     const agent = new Agent({
       initialState: {
@@ -394,6 +466,19 @@ export class AgentLoop {
             channel,
             userId,
           });
+        } else {
+          logger.info(
+            {
+              channel: channel || "unknown",
+              userId: userId || "anonymous",
+              eventType: agentEvent.assistantMessageEvent.type,
+              preview: this.truncateForLog(
+                this.safeSerializeForLog(agentEvent.assistantMessageEvent),
+                MESSAGE_PART_LOG_PREVIEW_CHARS,
+              ),
+            },
+            "Agent stream event",
+          );
         }
       }
     });
@@ -401,6 +486,12 @@ export class AgentLoop {
     logger.debug(`Starting agent turn (channel: ${channel || "unknown"})`);
     await agent.continue();
     await agent.waitForIdle();
+    this.logConversationMessages(
+      agent.state.messages,
+      compactedMessages.length,
+      channel,
+      userId,
+    );
 
     if (!firstTokenLogged && typeof busReceivedAt === "number") {
       const latencyMs = Date.now() - busReceivedAt;
@@ -410,9 +501,40 @@ export class AgentLoop {
     }
 
     await this.ensureOnboardingJob(channel, userId);
+    if (approvalGranted) {
+      await this.askUserService.clearApprovedAsk(thread.id);
+    }
 
     const updatedMessages = stripTransientMessages(agent.state.messages);
     await this.persistence.saveMessages(thread.id, updatedMessages);
+
+    const activePendingAsk = await this.askUserService.getPendingAsk(thread.id);
+    if (activePendingAsk) {
+      logger.info(
+        {
+          channel: channel || "unknown",
+          userId: userId || "anonymous",
+          content: this.truncateForLog(
+            activePendingAsk.question,
+            OUTBOUND_LOG_PREVIEW_CHARS,
+          ),
+          options: activePendingAsk.options,
+        },
+        "Agent response",
+      );
+
+      this.bus.publishOutbound({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: activePendingAsk.question }],
+          timestamp: Date.now(),
+        },
+        channel,
+        userId,
+        options: activePendingAsk.options,
+      });
+      return;
+    }
 
     const lastMsg = updatedMessages[updatedMessages.length - 1];
     if (lastMsg && lastMsg.role === "assistant") {
@@ -590,6 +712,159 @@ export class AgentLoop {
       .trim();
   }
 
+  private logConversationMessages(
+    messages: AgentMessage[],
+    startIndex: number,
+    channel?: string,
+    userId?: string,
+  ) {
+    const newMessages = messages.slice(startIndex);
+    for (const [offset, message] of newMessages.entries()) {
+      logger.info(
+        {
+          channel: channel || "unknown",
+          userId: userId || "anonymous",
+          messageIndex: startIndex + offset,
+          role: message.role,
+          toolName:
+            typeof message === "object" &&
+            message !== null &&
+            "toolName" in message &&
+            typeof message.toolName === "string"
+              ? message.toolName
+              : undefined,
+          parts: this.summarizeMessageContent(message.content),
+        },
+        "Agent conversation message",
+      );
+    }
+  }
+
+  private summarizeMessageContent(
+    content: unknown,
+  ): Array<{ type: string; preview: string }> {
+    if (typeof content === "string") {
+      return [
+        {
+          type: "text",
+          preview: this.truncateForLog(content, MESSAGE_PART_LOG_PREVIEW_CHARS),
+        },
+      ];
+    }
+
+    if (Array.isArray(content)) {
+      return content.map((part) => this.summarizeMessagePart(part));
+    }
+
+    if (content && typeof content === "object") {
+      return [this.summarizeMessagePart(content)];
+    }
+
+    return [
+      {
+        type: typeof content,
+        preview: this.truncateForLog(
+          String(content ?? ""),
+          MESSAGE_PART_LOG_PREVIEW_CHARS,
+        ),
+      },
+    ];
+  }
+
+  private summarizeMessagePart(part: unknown): {
+    type: string;
+    preview: string;
+  } {
+    if (typeof part === "string") {
+      return {
+        type: "text",
+        preview: this.truncateForLog(part, MESSAGE_PART_LOG_PREVIEW_CHARS),
+      };
+    }
+
+    if (!part || typeof part !== "object") {
+      return {
+        type: typeof part,
+        preview: this.truncateForLog(
+          String(part ?? ""),
+          MESSAGE_PART_LOG_PREVIEW_CHARS,
+        ),
+      };
+    }
+
+    const record = part as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : "unknown";
+
+    const preview = this.buildMessagePartPreview(type, record);
+    return {
+      type,
+      preview: this.truncateForLog(preview, MESSAGE_PART_LOG_PREVIEW_CHARS),
+    };
+  }
+
+  private buildMessagePartPreview(
+    type: string,
+    record: Record<string, unknown>,
+  ): string {
+    const textFields = [
+      "text",
+      "delta",
+      "content",
+      "result",
+      "error",
+      "summary",
+      "reasoning",
+      "thinking",
+    ];
+    for (const field of textFields) {
+      if (typeof record[field] === "string") {
+        return record[field] as string;
+      }
+    }
+
+    if (type === "toolCall") {
+      const name =
+        typeof record.toolName === "string"
+          ? record.toolName
+          : typeof record.name === "string"
+            ? record.name
+            : "unknown-tool";
+      const params =
+        record.params ??
+        record.arguments ??
+        record.args ??
+        record.input ??
+        record.payload;
+      return `${name} ${this.safeSerializeForLog(params)}`.trim();
+    }
+
+    if (type === "toolResult") {
+      const name =
+        typeof record.toolName === "string"
+          ? record.toolName
+          : typeof record.name === "string"
+            ? record.name
+            : "unknown-tool";
+      const result =
+        record.result ?? record.output ?? record.content ?? record.value;
+      return `${name} ${this.safeSerializeForLog(result)}`.trim();
+    }
+
+    return this.safeSerializeForLog(record);
+  }
+
+  private safeSerializeForLog(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
   private truncateForLog(value: string, maxLength: number): string {
     return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
   }
@@ -630,6 +905,80 @@ export class AgentLoop {
       lines.push(`- ${match.role}: ${match.content}`);
     }
     return lines.join("\n");
+  }
+
+  private instrumentTools(tools: AgentTool<any, any>[]): AgentTool<any, any>[] {
+    if (!this.options.onToolExecution) {
+      return tools;
+    }
+
+    return tools.map((tool) => {
+      const execute = tool.execute.bind(tool);
+      return {
+        ...tool,
+        execute: async (toolCallId, params) => {
+          const startedAt = new Date().toISOString();
+          logger.info(
+            {
+              toolName: tool.name,
+              toolCallId,
+              params: this.truncateForLog(
+                this.safeSerializeForLog(params),
+                MESSAGE_PART_LOG_PREVIEW_CHARS,
+              ),
+            },
+            "Agent tool call",
+          );
+          try {
+            const result = await execute(toolCallId, params);
+            const resultText = this.extractTextContent(result?.content);
+            logger.info(
+              {
+                toolName: tool.name,
+                toolCallId,
+                result: this.truncateForLog(
+                  resultText || this.safeSerializeForLog(result),
+                  MESSAGE_PART_LOG_PREVIEW_CHARS,
+                ),
+              },
+              "Agent tool result",
+            );
+            this.options.onToolExecution?.({
+              name: tool.name,
+              toolCallId,
+              params,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              success: true,
+              resultText,
+            });
+            return result;
+          } catch (error) {
+            logger.warn(
+              {
+                toolName: tool.name,
+                toolCallId,
+                error: this.truncateForLog(
+                  error instanceof Error ? error.message : String(error),
+                  MESSAGE_PART_LOG_PREVIEW_CHARS,
+                ),
+              },
+              "Agent tool failure",
+            );
+            this.options.onToolExecution?.({
+              name: tool.name,
+              toolCallId,
+              params,
+              startedAt,
+              finishedAt: new Date().toISOString(),
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
+        },
+      };
+    });
   }
 }
 

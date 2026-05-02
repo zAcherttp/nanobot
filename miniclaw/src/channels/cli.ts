@@ -94,8 +94,16 @@ export class CliChannel implements Channel {
           : event.message.content
               .map((c: any) => (c.type === "text" ? c.text : "[Image]"))
               .join("\n");
+      const options =
+        Array.isArray(event.options) && event.options.length > 0
+          ? `\n\n${event.options
+              .map((option, index) => `${index + 1}. ${option}`)
+              .join("\n")}`
+          : "";
 
-      process.stdout.write(chalk.green("miniclaw > ") + content + "\n");
+      process.stdout.write(
+        chalk.green("miniclaw > ") + `${content}${options}` + "\n",
+      );
     } else {
       // If we were streaming, the last token was printed, just print a newline
       process.stdout.write("\n");

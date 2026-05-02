@@ -52,6 +52,9 @@ export class ConfigService {
     const configDir = path.dirname(configPath);
     data.workspace.path = path.resolve(configDir, data.workspace.path);
     data.thread.store.path = path.resolve(configDir, data.thread.store.path);
+    if (data.eval) {
+      data.eval.outputDir = path.resolve(configDir, data.eval.outputDir);
+    }
 
     return data;
   }

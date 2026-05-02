@@ -1,0 +1,40 @@
+{
+  "id": "next_week_planning_scrum",
+  "title": "Handle next-week planning as a multi-step scheduling job",
+  "mode": "simulate",
+  "complexity": "complex",
+  "seed": {
+    "userProfile": "# User Profile\n\n## Managed Profile\n<!-- miniclaw:managed-profile:start -->\n```json\n{\n  \"setupComplete\": true,\n  \"name\": \"Thesis User\",\n  \"timezone\": \"Asia/Saigon\",\n  \"language\": \"English\",\n  \"communicationStyle\": \"technical\",\n  \"responseLength\": \"adaptive\",\n  \"technicalLevel\": \"advanced\",\n  \"calendarProvider\": \"gws\",\n  \"defaultCalendar\": \"primary\"\n}\n```\n<!-- miniclaw:managed-profile:end -->\n\n## Stable Facts\n<!-- miniclaw:stable-facts:start -->\n```json\n[]\n```\n<!-- miniclaw:stable-facts:end -->\n\n## Preferences\n<!-- miniclaw:preferences:start -->\n```json\n[\"Prefers morning planning sessions when possible.\"]\n```\n<!-- miniclaw:preferences:end -->\n",
+    "goals": "# GOALS.md\n\n## Active Goals\n<!-- miniclaw:active-goals:start -->\n```json\n[\n  {\n    \"id\": \"goal_weekly_focus\",\n    \"title\": \"Protect deep work and thesis progress\",\n    \"rationale\": \"Keep next week structured around thesis milestones and a weekly scrum review.\",\n    \"status\": \"active\",\n    \"timeHorizon\": \"next week\",\n    \"progress\": [],\n    \"evidence\": [],\n    \"linkedTaskIds\": [],\n    \"createdAt\": \"2026-05-02T00:00:00.000Z\",\n    \"updatedAt\": \"2026-05-02T00:00:00.000Z\"\n  }\n]\n```\n<!-- miniclaw:active-goals:end -->\n\n## Archived Goals\n<!-- miniclaw:archived-goals:start -->\n```json\n[]\n```\n<!-- miniclaw:archived-goals:end -->\n",
+    "calendarEvents": [
+      {
+        "id": "evt_seed_1",
+        "title": "[MINICLAW-EVAL] Existing sync",
+        "start": "2026-06-08T02:00:00.000Z",
+        "end": "2026-06-08T03:00:00.000Z",
+        "description": "Already-booked sync block"
+      }
+    ]
+  },
+  "turns": [
+    "Help me plan next week. I need a weekly scrum review, protected thesis blocks, and I don't want the schedule to become chaotic.",
+    "Yes, use the proposal you think is best."
+  ],
+  "assertions": {
+    "recallNeedles": ["morning"],
+    "requireProposalBeforeWrite": true,
+    "requireLongHorizonTaskTracking": true
+  },
+  "rubricWeights": {
+    "recallRelevance": 2,
+    "planningCoherence": 3,
+    "consentPolicyAdherence": 2,
+    "proposalUsefulness": 3,
+    "efficiency": 1
+  },
+  "providerBudgets": {
+    "maxToolCalls": 12,
+    "maxDurationMs": 150000,
+    "turnCooldownMs": 150
+  }
+}

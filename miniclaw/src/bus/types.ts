@@ -21,6 +21,7 @@ export interface OutboundBusEvent {
   channel?: string;
   userId?: string;
   trackingKey?: string;
+  options?: string[];
 }
 
 export interface StreamDelta {

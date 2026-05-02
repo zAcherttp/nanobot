@@ -20,6 +20,6 @@ try {
   if (pkgData.description) {
     pkgDescription = pkgData.description;
   }
-} catch (e) {
+} catch (_e) {
   // Fallback remains
 }

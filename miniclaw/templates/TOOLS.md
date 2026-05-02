@@ -30,20 +30,23 @@ This file documents non-obvious constraints and usage patterns.
 - Goals are user-owned. Add a goal only when the user explicitly states one.
 - It is valid to record progress, evidence, and status for an existing goal.
 
-## Calendar Tools
+## ask_user
 
-- Calendar skills are instruction surfaces. These three tools are the only runtime execution path.
-- Use `gws_calendar_agenda` for read-only Google Calendar inspection.
-- Use `propose_plan` to create a pending proposal instead of writing immediately.
-- Use `execute_plan` only after explicit user confirmation.
-- The currently supported write plan type is `gws_calendar_insert`.
+- Use `ask_user` when the user's answer is required before the task can continue.
+- This is the blocking clarification and approval primitive.
+- For plan approval, put the proposal in the question and use options like `Proceed` and `Cancel`.
+- Free-text replies remain valid. If the answer is ambiguous, ask again instead of acting.
 
 ## exec — Safety Limits
 
-- Commands have a configurable timeout (default 60s)
+- Commands have a configurable timeout (default 60s, max 600s)
 - Dangerous commands are blocked (rm -rf, format, dd, shutdown, etc.)
+- Internal and private URLs are blocked
 - Output is truncated at 10,000 characters
 - `restrictToWorkspace` config can limit file access to the workspace
+- Direct read-only `gws` usage is allowed
+- Mutating `gws` commands are blocked unless they occur in the immediate resumed path after an approved `ask_user`
+- In eval mode, mutating `gws` commands must stay inside the configured safe window and use the eval prefix
 
 ## glob — File Discovery
 
@@ -65,6 +68,12 @@ This file documents non-obvious constraints and usage patterns.
 - Use `head_limit` and `offset` to page across results
 - Prefer this over `exec` for code and history searches
 - Binary or oversized files may be skipped to keep results readable
+
+## GWS Skills
+
+- `gws-*` skills are the source of truth for Google Calendar syntax and usage.
+- Discover read commands and write commands from the skills, then execute them with `exec`.
+- Do not rely on a built-in GWS calendar wrapper.
 
 ## cron — Scheduled Reminders
 

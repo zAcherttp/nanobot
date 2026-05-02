@@ -173,7 +173,7 @@ graph TD
 - **Managed User Profile**: Agent-managed `USER.md` block storing onboarding preferences such as timezone, language, communication style, response length, technical level, and calendar preference.
 - **Onboarding as Work**: First-run preference gathering is no longer a separate mode; the agent auto-injects an onboarding job and completes it through the standard multi-turn task workflow.
 - **Skill Runtime**: Real agent tools for `list_skills`, `load_skill`, and `get_skill_info`, with loaded skill bodies scoped to the active turn instead of being persisted into history.
-- **Calendar Execution Model**: The generalized calendar config/service layer has been removed. Calendar skills now provide guidance only, and the only supported execution path is `gws_calendar_agenda` plus the generic confirmation-gated tools `propose_plan` and `execute_plan`. The currently supported write plan type is `gws_calendar_insert`. `lark` remains a stored preference until a real execution path exists.
+- **Calendar Execution Model**: The generalized calendar config/service layer has been removed. Calendar skills now provide syntax and workflow guidance, while runtime execution happens through `exec` after explicit `ask_user` approval for write commands. `lark` remains a stored preference until a real execution path exists.
 
 ## Recent Improvements
 
@@ -186,7 +186,7 @@ graph TD
 - **SSE Removal**: Removed the SSE channel and `/api/sse/*` routes to focus the runtime on CLI and Telegram plus thin HTTP ingress.
 - **Task-Oriented Agent State**: Added `TASKS.md`, structured task tooling, task progress notification/edit flows, and archived-job retention instead of deleting finished work.
 - **Profile-Driven Onboarding**: Added managed `USER.md` profile state and onboarding job injection so the agent can gather preferences through the same normal planning loop it uses for other long-horizon work.
-- **Skill-Directed Calendar Flow**: Calendar skills now handle discovery and operating guidance, while execution goes through the explicit GWS agenda tool plus generic proposal/confirm plan tools instead of a generalized provider runtime.
+- **Skill-Directed Calendar Flow**: Calendar skills now handle discovery and operating guidance, while execution goes through `exec` and approval goes through `ask_user` instead of a generalized provider runtime or calendar-specific wrapper tools.
 
 ## Upcoming Milestones
 

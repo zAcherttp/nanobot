@@ -89,14 +89,6 @@ const providerHarness = vi.hoisted(() => ({
   registerBuiltInApiProviders: vi.fn(),
 }));
 
-const gwsHarness = vi.hoisted(() => ({
-  createEvent: vi.fn(async () => "evt-123"),
-  updateEvent: vi.fn(async () => {}),
-  deleteEvent: vi.fn(async () => {}),
-  listEvents: vi.fn(async () => []),
-  getEvent: vi.fn(async () => null),
-}));
-
 vi.mock("@mariozechner/pi-agent-core", () => ({
   Agent: agentHarness.FakeAgent,
 }));
@@ -106,32 +98,6 @@ vi.mock("@mariozechner/pi-ai", () => ({
     providerHarness.getModelImpl(provider, modelId),
   ),
   registerBuiltInApiProviders: providerHarness.registerBuiltInApiProviders,
-}));
-
-vi.mock("../src/services/calendar/gws", () => ({
-  GwsCalendarService: class {
-    name = "GWS (Google Workspace)";
-
-    async createEvent(event: unknown) {
-      return gwsHarness.createEvent(event);
-    }
-
-    async updateEvent(eventId: string, event: unknown) {
-      return gwsHarness.updateEvent(eventId, event);
-    }
-
-    async deleteEvent(eventId: string) {
-      return gwsHarness.deleteEvent(eventId);
-    }
-
-    async listEvents(start: Date, end: Date) {
-      return gwsHarness.listEvents(start, end);
-    }
-
-    async getEvent(eventId: string) {
-      return gwsHarness.getEvent(eventId);
-    }
-  },
 }));
 
 describe.sequential("AgentLoop integration", () => {
@@ -296,13 +262,6 @@ Use gws calendar +agenda.`,
       contextWindow: 4096,
       maxTokens: 512,
     }));
-    gwsHarness.createEvent.mockClear();
-    gwsHarness.updateEvent.mockClear();
-    gwsHarness.deleteEvent.mockClear();
-    gwsHarness.listEvents.mockReset();
-    gwsHarness.listEvents.mockImplementation(async () => []);
-    gwsHarness.getEvent.mockReset();
-    gwsHarness.getEvent.mockImplementation(async () => null);
   });
 
   afterEach(async () => {
@@ -388,9 +347,10 @@ Use gws calendar +agenda.`,
         "record_user_preference",
         "record_memory_entry",
         "list_goals",
-        "gws_calendar_agenda",
-        "propose_plan",
-        "execute_plan",
+        "ask_user",
+        "exec",
+        "glob",
+        "grep",
       ]),
     );
   });
@@ -683,7 +643,7 @@ Use gws calendar +agenda.`,
     expect(model.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
   });
 
-  it("keeps calendar skills as guidance while GWS tools remain the only execution path", async () => {
+  it("keeps calendar skills as guidance while exec becomes the execution path", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
     const loop = new AgentLoop(bus, persistence, config);
     await loop.start();
@@ -724,15 +684,13 @@ Use gws calendar +agenda.`,
     );
   });
 
-  it("creates a calendar proposal first, then executes it only after explicit confirmation", async () => {
+  it("uses ask_user first and resumes the same workflow before a mutating gws exec", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
     const outbound: string[] = [];
-    const goal = await goalService.addGoal({
-      title: "Protect deep work time",
-      rationale: "Reserve focused hours for thesis writing.",
-      timeHorizon: "this month",
-    });
-    let proposalJobId = "";
+    const shellExecutions: Array<{
+      command: string;
+      allowMutatingGws?: boolean;
+    }> = [];
     let turn = 0;
 
     bus.subscribeOutbound((event) => {
@@ -741,53 +699,70 @@ Use gws calendar +agenda.`,
 
     agentHarness.FakeAgent.continueImpl = async (agent) => {
       turn += 1;
-      const proposeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "propose_plan",
+      const askUser = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "ask_user",
       );
-      const executeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "execute_plan",
+      const execTool = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "exec",
       );
 
       if (turn === 1) {
-        const result = await proposeInsert.execute("tool-1", {
-          plan_type: "gws_calendar_insert",
-          title: "Deep work block",
-          start: "2026-05-03T09:00:00.000Z",
-          end: "2026-05-03T10:30:00.000Z",
-          description: "Protected writing time",
-          related_goal_id: goal.id,
+        await askUser.execute("tool-1", {
+          question:
+            "I can place a thesis writing block on June 12 2026 from 09:00 to 10:30. Proceed or cancel?",
+          options: ["Proceed", "Cancel"],
         });
-        proposalJobId = result.details.job.id;
-        agent.state.messages = [
-          ...agent.state.messages,
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "I propose a deep work block tomorrow morning. Confirm if you want me to schedule it.",
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        ];
         return;
       }
 
-      const result = await executeInsert.execute("tool-2", {
-        job_id: proposalJobId,
+      expect(agent.options.initialState.messages.at(-1)?.role).toBe(
+        "toolResult",
+      );
+      expect(
+        extractText(agent.options.initialState.messages.at(-1)?.content),
+      ).toBe("Proceed");
+
+      const result = await execTool.execute("tool-2", {
+        command:
+          'gws calendar +insert --summary "[MINICLAW-EVAL] Deep work block" --start "2026-06-12T09:00:00.000Z" --end "2026-06-12T10:30:00.000Z"',
+      });
+      shellExecutions.push({
+        command:
+          'gws calendar +insert --summary "[MINICLAW-EVAL] Deep work block" --start "2026-06-12T09:00:00.000Z" --end "2026-06-12T10:30:00.000Z"',
       });
       agent.state.messages = [
         ...agent.state.messages,
         {
           role: "assistant",
-          content: [{ type: "text", text: result.content[0].text }],
+          content: [
+            {
+              type: "text",
+              text: extractText(result.content),
+            },
+          ],
           timestamp: Date.now(),
         },
       ];
     };
 
-    const loop = new AgentLoop(bus, persistence, config);
+    const shellService = {
+      execute: vi.fn(async ({ command, allowMutatingGws }: any) => {
+        shellExecutions.push({ command, allowMutatingGws });
+        return {
+          stdout: "Created event\nEvent ID: evt-123\n",
+          stderr: "",
+          exitCode: 0,
+          simulated: true,
+          classification: {
+            provider: "gws",
+            action: "write",
+            label: "gws-calendar-write",
+          },
+        };
+      }),
+    } as any;
+
+    const loop = new AgentLoop(bus, persistence, config, { shellService });
     await loop.start();
     startedLoops.push(loop);
 
@@ -801,73 +776,53 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
 
-    await waitFor(async () => {
-      const proposal = await taskService.findActiveJobByKind("pending-plan");
-      const thread = await persistence.getConversationThread();
-      const messages = await persistence.getMessages(thread.id);
-      return (
-        Boolean(proposal) &&
-        messages.length === 2 &&
-        extractText(messages[1].content).includes("I propose a deep work block")
-      );
-    });
-
-    let proposalJob = await taskService.findActiveJobByKind("pending-plan");
-    expect(proposalJob?.id).toBe(proposalJobId);
-    expect(gwsHarness.createEvent).not.toHaveBeenCalled();
+    await waitFor(async () =>
+      outbound.some((message) => message.includes("Proceed or cancel")),
+    );
 
     bus.publishInbound({
       message: {
         role: "user",
-        content: "Yes, schedule it.",
+        content: "Proceed",
         timestamp: Date.now(),
       },
       channel: "cli",
       userId: "user-1",
     });
 
-    await waitFor(
-      async () =>
-        gwsHarness.createEvent.mock.calls.length === 1 &&
-        outbound.some((message) =>
-          message.includes(
-            'Created Google Calendar event evt-123 for "Deep work block".',
-          ),
-        ),
+    await waitFor(async () =>
+      outbound.some((message) => message.includes("Event ID: evt-123")),
     );
 
-    proposalJob = await taskService.findActiveJobByKind("pending-plan");
-    const archivedJobs = await taskService.listJobs("archived");
-    const updatedGoal = await goalService.getGoal(goal.id);
-
-    expect(proposalJob).toBeNull();
+    expect(shellService.execute).toHaveBeenCalled();
     expect(
-      archivedJobs.some(
-        (job) =>
-          job.id === proposalJobId &&
-          job.outcomeSummary?.includes(
-            "Executed plan by creating Google Calendar event evt-123.",
-          ),
-      ),
-    ).toBe(true);
-    expect(updatedGoal?.linkedTaskIds).toContain(proposalJobId);
-    expect(updatedGoal?.progress.at(-1)?.summary).toContain(
-      'Scheduled "Deep work block" on the calendar.',
-    );
-    expect(
-      outbound.some((message) =>
-        message.includes(
-          'Created Google Calendar event evt-123 for "Deep work block".',
-        ),
-      ),
+      shellExecutions.some((entry) => entry.allowMutatingGws === true),
     ).toBe(true);
   });
 
-  it("does not execute a proposed calendar write on ambiguous confirmation", async () => {
+  it("does not allow a mutating gws exec after an ambiguous ask_user reply", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
-    let proposalJobId = "";
     let turn = 0;
     const outbound: string[] = [];
+    const shellService = {
+      execute: vi.fn(async ({ allowMutatingGws }: any) => ({
+        stdout: allowMutatingGws
+          ? "Created event\nEvent ID: evt-123\n"
+          : "Error: mutating gws commands require an active ask_user approval state",
+        stderr: "",
+        exitCode: allowMutatingGws ? 0 : 1,
+        simulated: true,
+        blocked: !allowMutatingGws,
+        reason: !allowMutatingGws
+          ? "mutating gws commands require an active ask_user approval state"
+          : undefined,
+        classification: {
+          provider: "gws",
+          action: "write",
+          label: "gws-calendar-write",
+        },
+      })),
+    } as any;
 
     bus.subscribeOutbound((event) => {
       outbound.push(extractText(event.message.content));
@@ -875,52 +830,37 @@ Use gws calendar +agenda.`,
 
     agentHarness.FakeAgent.continueImpl = async (agent) => {
       turn += 1;
-      const proposeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "propose_plan",
+      const askUser = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "ask_user",
       );
-      const executeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "execute_plan",
+      const execTool = agent.options.initialState.tools.find(
+        (tool: any) => tool.name === "exec",
       );
 
       if (turn === 1) {
-        const result = await proposeInsert.execute("tool-1", {
-          plan_type: "gws_calendar_insert",
-          title: "Team sync prep",
-          start: "2026-05-04T08:00:00.000Z",
-          end: "2026-05-04T08:30:00.000Z",
+        await askUser.execute("tool-1", {
+          question:
+            "I can place team sync prep on June 15 2026 from 08:00 to 08:30. Proceed or cancel?",
+          options: ["Proceed", "Cancel"],
         });
-        proposalJobId = result.details.job.id;
-        agent.state.messages = [
-          ...agent.state.messages,
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "I drafted a proposal. Confirm if you want me to place it on the calendar.",
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        ];
         return;
       }
 
-      try {
-        await executeInsert.execute("tool-2", { job_id: proposalJobId });
-      } catch (error) {
-        agent.state.messages = [
-          ...agent.state.messages,
-          {
-            role: "assistant",
-            content: [{ type: "text", text: (error as Error).message }],
-            timestamp: Date.now(),
-          },
-        ];
-      }
+      const result = await execTool.execute("tool-2", {
+        command:
+          'gws calendar +insert --summary "[MINICLAW-EVAL] Team sync prep" --start "2026-06-15T08:00:00.000Z" --end "2026-06-15T08:30:00.000Z"',
+      });
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: extractText(result.content) }],
+          timestamp: Date.now(),
+        },
+      ];
     };
 
-    const loop = new AgentLoop(bus, persistence, config);
+    const loop = new AgentLoop(bus, persistence, config, { shellService });
     await loop.start();
     startedLoops.push(loop);
 
@@ -934,16 +874,9 @@ Use gws calendar +agenda.`,
       userId: "user-1",
     });
 
-    await waitFor(async () => {
-      const proposal = await taskService.findActiveJobByKind("pending-plan");
-      const thread = await persistence.getConversationThread();
-      const messages = await persistence.getMessages(thread.id);
-      return (
-        Boolean(proposal) &&
-        messages.length === 2 &&
-        extractText(messages[1].content).includes("I drafted a proposal.")
-      );
-    });
+    await waitFor(async () =>
+      outbound.some((message) => message.includes("Proceed or cancel")),
+    );
 
     bus.publishInbound({
       message: {
@@ -957,14 +890,14 @@ Use gws calendar +agenda.`,
 
     await waitFor(async () =>
       outbound.some((message) =>
-        message.includes("Explicit user confirmation is required"),
+        message.includes("active ask_user approval state"),
       ),
     );
 
-    const activeProposal =
-      await taskService.findActiveJobByKind("pending-plan");
-    expect(activeProposal?.id).toBe(proposalJobId);
-    expect(gwsHarness.createEvent).not.toHaveBeenCalled();
+    expect(shellService.execute).toHaveBeenCalled();
+    expect(
+      outbound.some((message) => message.includes("Event ID: evt-123")),
+    ).toBe(false);
   });
 
   it("does not emit a final outbound event when the turn ends without an assistant reply", async () => {

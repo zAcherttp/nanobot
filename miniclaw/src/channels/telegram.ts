@@ -144,6 +144,7 @@ export class TelegramChannel implements Channel {
           bot,
           targetChatId,
           content,
+          event.options,
         );
         if (event.trackingKey) {
           this.trackingMessages.set(event.trackingKey, {
@@ -467,12 +468,21 @@ export class TelegramChannel implements Channel {
     bot: Bot,
     chatId: string,
     text: string,
+    options?: string[],
   ): Promise<number> {
     const sent = await bot.api.sendMessage(
       chatId,
       this.escapeMarkdownV2(text),
       {
         parse_mode: "MarkdownV2",
+        reply_markup:
+          options && options.length > 0
+            ? {
+                keyboard: [options],
+                resize_keyboard: true,
+                one_time_keyboard: true,
+              }
+            : undefined,
       },
     );
     return sent.message_id;
