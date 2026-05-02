@@ -1,12 +1,12 @@
 ---
 name: calendar
-description: Manage calendar events and scheduling
+description: Provider-specific calendar workflow entrypoint
 triggers: ["calendar", "schedule", "event", "meeting", "appointment"]
 ---
 
 # Calendar
 
-Use the calendar tool to manage events and scheduling.
+Use provider-specific calendar skills instead of a generalized calendar tool.
 
 ## When to use
 
@@ -18,28 +18,13 @@ Use this skill when the user asks to:
 
 ## Usage
 
-Create an event:
-```
-calendar(action="create", title="Team Meeting", start="2024-01-15T10:00:00", end="2024-01-15T11:00:00")
-```
-
-List events:
-```
-calendar(action="list", start="2024-01-01", end="2024-01-31")
-```
-
-Update an event:
-```
-calendar(action="update", event_id="abc123", title="Updated Title")
-```
-
-Delete an event:
-```
-calendar(action="delete", event_id="abc123")
-```
+For Google Calendar:
+1. Load `gws-shared` first for auth and safety rules.
+2. Load `gws-calendar` for the full command surface.
+3. Load narrower helpers such as `gws-calendar-agenda` or `gws-calendar-insert` when they match the request.
 
 ## Notes
 
-- All times should be in ISO 8601 format
-- The calendar provider (GWS or Lark) is configured in the system
-- Timezone handling is automatic based on user configuration
+- Keep times explicit and timezone-aware.
+- Confirm write commands before execution.
+- If the preferred provider is `lark`, explain that dedicated Lark execution skills are not available yet.

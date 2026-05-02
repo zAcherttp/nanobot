@@ -1,59 +1,91 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "typebox";
 import type { SkillsLoader } from "@/agent/skills";
 
-/**
- * List all available skills with descriptions
- */
-export async function listSkills(skillsLoader: SkillsLoader): Promise<string> {
-  const skills = await skillsLoader.listSkills();
-
-  if (skills.length === 0) {
-    return "No skills available.";
-  }
-
-  return skills
-    .map(
-      (skill) =>
-        `- **${skill.name}**: ${skill.description}${
-          skill.triggers ? ` (triggers: ${skill.triggers.join(", ")})` : ""
-        }`,
-    )
-    .join("\n");
-}
-
-/**
- * Load a specific skill's content
- */
-export async function loadSkill(
+export function createSkillTools(
   skillsLoader: SkillsLoader,
-  skillName: string,
-): Promise<string> {
-  const content = await skillsLoader.loadSkill(skillName);
+): AgentTool<any, any>[] {
+  return [
+    {
+      name: "list_skills",
+      label: "List Skills",
+      description: "List available skills with short descriptions.",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const skills = await skillsLoader.listSkills();
+        const summary =
+          skills.length === 0
+            ? "No skills available."
+            : skills
+                .map(
+                  (skill) =>
+                    `- ${skill.name}: ${skill.description}${
+                      skill.triggers?.length
+                        ? ` (triggers: ${skill.triggers.join(", ")})`
+                        : ""
+                    }`,
+                )
+                .join("\n");
 
-  if (!content) {
-    return `Skill "${skillName}" not found or failed to load.`;
-  }
+        return {
+          content: [{ type: "text", text: summary }],
+          details: { skills },
+        };
+      },
+    },
+    {
+      name: "load_skill",
+      label: "Load Skill",
+      description: "Load the full instructions for a specific skill.",
+      parameters: Type.Object({
+        skill_name: Type.String({
+          description: "Skill directory name, for example gws-calendar-agenda.",
+        }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const content = await skillsLoader.loadSkill(params.skill_name);
+        if (!content) {
+          throw new Error(`Skill not found: ${params.skill_name}`);
+        }
 
-  return content;
-}
+        return {
+          content: [{ type: "text", text: content }],
+          details: {
+            skillName: params.skill_name,
+          },
+        };
+      },
+    },
+    {
+      name: "get_skill_info",
+      label: "Get Skill Info",
+      description:
+        "Get metadata for a skill without loading the full instructions.",
+      parameters: Type.Object({
+        skill_name: Type.String({
+          description: "Skill directory name.",
+        }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const info = await skillsLoader.getSkillInfo(params.skill_name);
+        if (!info) {
+          throw new Error(`Skill not found: ${params.skill_name}`);
+        }
 
-/**
- * Get detailed info about a specific skill
- */
-export async function getSkillInfo(
-  skillsLoader: SkillsLoader,
-  skillName: string,
-): Promise<string> {
-  const info = await skillsLoader.getSkillInfo(skillName);
+        const text = [
+          `Name: ${info.name}`,
+          `Description: ${info.description}`,
+          info.triggers?.length
+            ? `Triggers: ${info.triggers.join(", ")}`
+            : "Triggers: none",
+          `Path: ${info.path}`,
+        ].join("\n");
 
-  if (!info) {
-    return `Skill "${skillName}" not found.`;
-  }
-
-  return `**${info.name}**
-
-${info.description}
-
-${info.triggers ? `Triggers: ${info.triggers.join(", ")}` : ""}
-
-Path: ${info.path}`;
+        return {
+          content: [{ type: "text", text }],
+          details: info,
+        };
+      },
+    },
+  ];
 }

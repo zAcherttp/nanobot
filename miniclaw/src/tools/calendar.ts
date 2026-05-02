@@ -1,164 +1,196 @@
-import type {
-  CalendarService,
-  CalendarEvent,
-  RecurrenceRule,
-} from "@/services/calendar";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "typebox";
+import type { GoalService } from "@/services/goals";
+import type { CalendarService } from "@/services/calendar";
+import type { TaskService } from "@/services/tasks";
+import { TaskProgressNotifier } from "@/services/task_progress";
 
-/**
- * Create a calendar event
- */
-export async function createCalendarEvent(
-  calendarService: CalendarService,
-  params: {
+interface CalendarToolOptions {
+  calendarService: CalendarService;
+  taskService: TaskService;
+  notifier: TaskProgressNotifier;
+  goalService: GoalService;
+  currentUserText: string;
+  channel?: string;
+  userId?: string;
+}
+
+interface ProposalMetadata {
+  action: "gws.insert";
+  event: {
     title: string;
-    start: string; // ISO datetime
-    end: string; // ISO datetime
+    start: string;
+    end: string;
     description?: string;
     location?: string;
-    attendees?: string[];
-    recurrence?: RecurrenceRule;
-  },
-): Promise<string> {
-  const event: CalendarEvent = {
-    id: "", // Will be assigned by provider
-    title: params.title,
-    start: new Date(params.start),
-    end: new Date(params.end),
-    description: params.description,
-    location: params.location,
-    attendees: params.attendees,
-    recurrence: params.recurrence,
   };
-
-  try {
-    const eventId = await calendarService.createEvent(event);
-    return `Created event '${params.title}' with ID: ${eventId}`;
-  } catch (err) {
-    return `Failed to create event: ${err}`;
-  }
+  relatedGoalId?: string;
 }
 
-/**
- * Update a calendar event
- */
-export async function updateCalendarEvent(
-  calendarService: CalendarService,
-  params: {
-    eventId: string;
-    title?: string;
-    start?: string; // ISO datetime
-    end?: string; // ISO datetime
-    description?: string;
-    location?: string;
-    attendees?: string[];
-    recurrence?: RecurrenceRule;
-  },
-): Promise<string> {
-  const existing = await calendarService.getEvent(params.eventId);
+export function createCalendarTools(
+  options: CalendarToolOptions,
+): AgentTool<any, any>[] {
+  return [
+    {
+      name: "gws_calendar_agenda",
+      label: "GWS Calendar Agenda",
+      description: "Read upcoming Google Calendar events.",
+      parameters: Type.Object({
+        days: Type.Optional(Type.Number({ minimum: 1, maximum: 30 })),
+      }),
+      execute: async (_toolCallId, params) => {
+        const days = params.days || 3;
+        const start = new Date();
+        const end = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
+        const events = await options.calendarService.listEvents(start, end);
+        const text =
+          events.length === 0
+            ? `No events found in the next ${days} day(s).`
+            : events
+                .map(
+                  (event) =>
+                    `- ${event.title}: ${event.start.toISOString()} -> ${event.end.toISOString()}`,
+                )
+                .join("\n");
 
-  if (!existing) {
-    return `Event ${params.eventId} not found`;
-  }
+        return {
+          content: [{ type: "text", text }],
+          details: {
+            range: {
+              start: start.toISOString(),
+              end: end.toISOString(),
+            },
+            events,
+          },
+        };
+      },
+    },
+    {
+      name: "propose_gws_calendar_insert",
+      label: "Propose GWS Calendar Insert",
+      description:
+        "Create a pending calendar proposal job without writing to Google Calendar.",
+      parameters: Type.Object({
+        title: Type.String({ minLength: 1 }),
+        start: Type.String({ minLength: 1 }),
+        end: Type.String({ minLength: 1 }),
+        description: Type.Optional(Type.String()),
+        location: Type.Optional(Type.String()),
+        related_goal_id: Type.Optional(Type.String()),
+      }),
+      execute: async (_toolCallId, params) => {
+        const metadata: ProposalMetadata = {
+          action: "gws.insert",
+          event: {
+            title: params.title,
+            start: new Date(params.start).toISOString(),
+            end: new Date(params.end).toISOString(),
+            description: params.description?.trim() || undefined,
+            location: params.location?.trim() || undefined,
+          },
+          relatedGoalId: params.related_goal_id?.trim() || undefined,
+        };
 
-  const event: CalendarEvent = {
-    ...existing,
-    title: params.title ?? existing.title,
-    start: params.start ? new Date(params.start) : existing.start,
-    end: params.end ? new Date(params.end) : existing.end,
-    description: params.description ?? existing.description,
-    location: params.location ?? existing.location,
-    attendees: params.attendees ?? existing.attendees,
-    recurrence: params.recurrence ?? existing.recurrence,
-  };
+        const job = await options.taskService.createJob({
+          title: `Confirm calendar event: ${params.title}`,
+          goal: "Wait for explicit user confirmation before writing to Google Calendar.",
+          tasks: [
+            "Present the proposal to the user",
+            "Wait for explicit confirmation",
+            "Create the calendar event after confirmation",
+          ],
+          channelContext: {
+            channel: options.channel,
+            userId: options.userId,
+          },
+          kind: "calendar-proposal",
+          metadata: metadata as Record<string, unknown>,
+        });
 
-  try {
-    await calendarService.updateEvent(params.eventId, event);
-    return `Updated event '${event.title}' (${params.eventId})`;
-  } catch (err) {
-    return `Failed to update event: ${err}`;
-  }
+        await options.notifier.announceJob(job);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Created pending proposal ${job.id} for "${params.title}". Present the proposal and wait for explicit confirmation before calling execute_gws_calendar_insert.`,
+            },
+          ],
+          details: { job, proposal: metadata },
+        };
+      },
+    },
+    {
+      name: "execute_gws_calendar_insert",
+      label: "Execute GWS Calendar Insert",
+      description:
+        "Execute a previously proposed Google Calendar event only after explicit user confirmation.",
+      parameters: Type.Object({
+        job_id: Type.String(),
+      }),
+      execute: async (_toolCallId, params) => {
+        if (!isExplicitConfirmation(options.currentUserText)) {
+          throw new Error(
+            "Explicit user confirmation is required before creating a calendar event.",
+          );
+        }
+
+        const job = await options.taskService.getJob(params.job_id);
+        if (!job || job.status !== "active" || job.kind !== "calendar-proposal") {
+          throw new Error(`Pending calendar proposal not found: ${params.job_id}`);
+        }
+
+        const metadata = job.metadata as ProposalMetadata | undefined;
+        if (!metadata || metadata.action !== "gws.insert") {
+          throw new Error(`Calendar proposal payload missing for ${params.job_id}`);
+        }
+
+        const eventId = await options.calendarService.createEvent({
+          id: "",
+          title: metadata.event.title,
+          start: new Date(metadata.event.start),
+          end: new Date(metadata.event.end),
+          description: metadata.event.description,
+          location: metadata.event.location,
+        });
+
+        const archived = await options.taskService.archiveJob(
+          job.id,
+          `Created Google Calendar event ${eventId}.`,
+        );
+        await options.notifier.closeJob(archived);
+
+        if (metadata.relatedGoalId) {
+          await options.goalService.recordProgress({
+            goalId: metadata.relatedGoalId,
+            summary: `Scheduled "${metadata.event.title}" on the calendar.`,
+            source: "calendar-execution",
+            linkedTaskId: job.id,
+          });
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Created Google Calendar event ${eventId} for "${metadata.event.title}".`,
+            },
+          ],
+          details: { eventId, jobId: job.id },
+        };
+      },
+    },
+  ];
 }
 
-/**
- * Delete a calendar event
- */
-export async function deleteCalendarEvent(
-  calendarService: CalendarService,
-  eventId: string,
-): Promise<string> {
-  try {
-    await calendarService.deleteEvent(eventId);
-    return `Deleted event ${eventId}`;
-  } catch (err) {
-    return `Failed to delete event: ${err}`;
-  }
-}
+function isExplicitConfirmation(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) return false;
 
-/**
- * List calendar events
- */
-export async function listCalendarEvents(
-  calendarService: CalendarService,
-  params: {
-    start: string; // ISO datetime
-    end: string; // ISO datetime
-  },
-): Promise<string> {
-  const start = new Date(params.start);
-  const end = new Date(params.end);
+  const patterns = [
+    /\b(yes|yep|yeah|confirm|confirmed|go ahead|please do|schedule it|book it|do it)\b/,
+    /\bproceed\b/,
+  ];
 
-  try {
-    const events = await calendarService.listEvents(start, end);
-
-    if (events.length === 0) {
-      return "No events found in the specified range.";
-    }
-
-    const lines = events.map((event) => {
-      const startStr = event.start.toISOString();
-      const endStr = event.end.toISOString();
-      const location = event.location ? ` @ ${event.location}` : "";
-      const attendees = event.attendees?.length
-        ? ` (${event.attendees.length} attendees)`
-        : "";
-
-      return `- **${event.title}** (${event.id})
-  ${startStr} - ${endStr}${location}${attendees}
-  ${event.description || ""}`;
-    });
-
-    return lines.join("\n\n");
-  } catch (err) {
-    return `Failed to list events: ${err}`;
-  }
-}
-
-/**
- * Get a specific calendar event
- */
-export async function getCalendarEvent(
-  calendarService: CalendarService,
-  eventId: string,
-): Promise<string> {
-  try {
-    const event = await calendarService.getEvent(eventId);
-
-    if (!event) {
-      return `Event ${eventId} not found`;
-    }
-
-    const startStr = event.start.toISOString();
-    const endStr = event.end.toISOString();
-    const location = event.location ? ` @ ${event.location}` : "";
-    const attendees = event.attendees?.length
-      ? ` (${event.attendees.length} attendees)`
-      : "";
-
-    return `**${event.title}** (${event.id})
-${startStr} - ${endStr}${location}${attendees}
-
-${event.description || "No description"}`;
-  } catch (err) {
-    return `Failed to get event: ${err}`;
-  }
+  return patterns.some((pattern) => pattern.test(normalized));
 }

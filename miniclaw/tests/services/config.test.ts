@@ -26,6 +26,7 @@ describe("ConfigService", () => {
     const config = await configService.load();
     expect(config.gateway.port).toBe(18790);
     expect(config.thread.provider).toBe("ollama");
+    expect(Object.keys(config.channels).sort()).toEqual(["cli", "telegram"]);
   });
 
   it("should throw ConfigLoadError when explicitly provided file is missing", async () => {
@@ -47,6 +48,18 @@ describe("ConfigService", () => {
   it("should throw ConfigValidationError on invalid schema types", async () => {
     vi.mocked(fs.readFile).mockResolvedValueOnce(
       JSON.stringify({ gateway: { port: "string-port" } }),
+    );
+
+    await expect(configService.load()).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("should reject legacy SSE channel config", async () => {
+    vi.mocked(fs.readFile).mockResolvedValueOnce(
+      JSON.stringify({
+        channels: {
+          sse: { enabled: true },
+        },
+      }),
     );
 
     await expect(configService.load()).rejects.toThrow(ConfigValidationError);

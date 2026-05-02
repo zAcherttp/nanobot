@@ -2,7 +2,6 @@ import chalk from "chalk";
 import { AgentLoop } from "../agent/loop";
 import { MessageBus } from "../bus/index";
 import { ChannelRegistry } from "../channels/base";
-import { SseChannel } from "../channels/sse";
 import { TelegramChannel } from "../channels/telegram";
 import { startGateway } from "../gateway/runtime";
 import { configureLogger, logger } from "../utils/logger";
@@ -29,13 +28,6 @@ export class GatewayService {
     logger.info(chalk.cyan("Initializing Channel Registry..."));
     const registry = new ChannelRegistry(bus, config);
 
-    let sseChannel: SseChannel | undefined;
-
-    if (config.channels.sse.enabled) {
-      sseChannel = new SseChannel(bus);
-      registry.register(sseChannel);
-    }
-
     if (config.channels.telegram.enabled) {
       if (config.channels.telegram.botToken) {
         registry.register(
@@ -58,7 +50,7 @@ export class GatewayService {
     const loop = new AgentLoop(bus, persistenceSvc, config);
     loop.start();
 
-    const server = await startGateway(config, bus, sseChannel);
+    const server = await startGateway(config, bus);
 
     const shutdownSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
     const signalHandlers = new Map<NodeJS.Signals, () => void>();

@@ -3,6 +3,39 @@
 Tool signatures are provided automatically via function calling.
 This file documents non-obvious constraints and usage patterns.
 
+## Task Tools
+
+- Use task tools to read or mutate the global job ledger.
+- Create jobs only for long-horizon or multi-hop work.
+- Keep progress checklists current as tasks finish.
+- Archive completed or cancelled jobs instead of removing them.
+
+## User Profile Tools
+
+- Use profile tools to read and update the managed profile in `USER.md`.
+- Keep timezone, language, communication style, response length, technical level, calendar provider, and default calendar current.
+- Use `record_user_fact` and `record_user_preference` for explicit confirmed user information that should be remembered later.
+- Completing the onboarding profile should also complete the onboarding job.
+
+## Workspace Memory Tools
+
+- Use memory tools to manage durable workspace/project knowledge in `MEMORY.md`.
+- `MEMORY.md` is for decisions, conventions, constraints, and attempts/outcomes.
+- Do not store user identity, preferences, goals, or active task state in `MEMORY.md`.
+- When a workflow or project decision is clarified, persist it here for future reuse.
+
+## Goal Tools
+
+- Use goal tools to read and update `GOALS.md`.
+- Goals are user-owned. Add a goal only when the user explicitly states one.
+- It is valid to record progress, evidence, and status for an existing goal.
+
+## Calendar Tools
+
+- Use `gws_calendar_agenda` for read-only Google Calendar inspection.
+- Use `propose_gws_calendar_insert` to create a pending proposal instead of writing immediately.
+- Use `execute_gws_calendar_insert` only after explicit user confirmation.
+
 ## exec — Safety Limits
 
 - Commands have a configurable timeout (default 60s)

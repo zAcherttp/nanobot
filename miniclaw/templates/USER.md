@@ -1,49 +1,41 @@
 # User Profile
 
-Information about the user to help personalize interactions.
+Information about the user that has been explicitly stated or confirmed.
 
-## Basic Information
+## Managed Profile
+<!-- miniclaw:managed-profile:start -->
+```json
+{
+  "setupComplete": false,
+  "name": "",
+  "timezone": "",
+  "language": "",
+  "communicationStyle": "",
+  "responseLength": "",
+  "technicalLevel": "",
+  "calendarProvider": "",
+  "defaultCalendar": ""
+}
+```
+<!-- miniclaw:managed-profile:end -->
 
-- **Name**: (your name)
-- **Timezone**: (your timezone, e.g., UTC+8)
-- **Language**: (preferred language)
+## Stable Facts
+<!-- miniclaw:stable-facts:start -->
+```json
+[]
+```
+<!-- miniclaw:stable-facts:end -->
 
 ## Preferences
+<!-- miniclaw:preferences:start -->
+```json
+[]
+```
+<!-- miniclaw:preferences:end -->
 
-### Communication Style
+## Notes
 
-- [ ] Casual
-- [ ] Professional
-- [ ] Technical
-
-### Response Length
-
-- [ ] Brief and concise
-- [ ] Detailed explanations
-- [ ] Adaptive based on question
-
-### Technical Level
-
-- [ ] Beginner
-- [ ] Intermediate
-- [ ] Expert
-
-## Work Context
-
-- **Primary Role**: (your role, e.g., developer, researcher)
-- **Main Projects**: (what you're working on)
-- **Tools You Use**: (IDEs, languages, frameworks)
-
-## Topics of Interest
-
--
--
--
-
-## Special Instructions
-
-(Any specific instructions for how the assistant should behave)
-
----
-
-*Edit this file to customize miniclaw's behavior for your needs.*
+- The managed profile is updated by tools and should remain valid JSON.
+- Keep only explicit confirmed user information here.
+- Store workspace and project knowledge in MEMORY.md, not USER.md.
+- Store explicit user goals in GOALS.md, not USER.md.

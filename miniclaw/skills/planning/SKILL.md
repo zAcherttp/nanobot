@@ -20,13 +20,14 @@ Use this skill when the user asks to:
 
 Create a plan:
 ```
-Use the calendar tool to schedule events and the cron tool to set reminders.
+Use task tools for long-horizon work, profile tools when setup data is missing, and `gws-*` calendar skills for Google Calendar actions.
 ```
 
 Organize tasks:
 ```
 Break down complex tasks into smaller steps.
 Use GOALS.md to track long-term objectives.
+Use TASKS.md through task tools to track active multi-step jobs.
 ```
 
 ## Best Practices
@@ -34,6 +35,7 @@ Use GOALS.md to track long-term objectives.
 - Start with clear objectives
 - Break down large tasks into manageable steps
 - Set realistic deadlines
-- Use calendar for time-bound events
+- Use task tools only when the work needs multi-step tracking
+- Use `gws-*` skills for time-bound Google Calendar events
 - Use cron for recurring reminders
 - Update GOALS.md with progress

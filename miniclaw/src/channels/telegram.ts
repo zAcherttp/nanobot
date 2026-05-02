@@ -29,6 +29,7 @@ export class TelegramChannel implements Channel {
   >();
   private routeQueues = new Map<string, Promise<void>>();
   private userChatIds = new Map<string, string>();
+  private trackingMessages = new Map<string, { chatId: string; messageId: number }>();
 
   private static readonly STREAM_SEND_INTERVAL_MS = 1000;
   private static readonly CLOSED_STREAM_TTL_MS = 5000;
@@ -114,6 +115,7 @@ export class TelegramChannel implements Channel {
     this.closedStreams.clear();
     this.routeQueues.clear();
     this.userChatIds.clear();
+    this.trackingMessages.clear();
   }
 
   public async handleOutbound(event: OutboundBusEvent): Promise<void> {
@@ -135,7 +137,17 @@ export class TelegramChannel implements Channel {
 
       const targetChatId = this.resolveTargetChatId(routeKey);
       try {
-        await this.sendMarkdownV2Message(bot, targetChatId, content);
+        const messageId = await this.sendMarkdownV2Message(
+          bot,
+          targetChatId,
+          content,
+        );
+        if (event.trackingKey) {
+          this.trackingMessages.set(event.trackingKey, {
+            chatId: targetChatId,
+            messageId,
+          });
+        }
       } catch (err) {
         logger.error(
           { err },
@@ -530,10 +542,47 @@ export class TelegramChannel implements Channel {
 
       const targetChatId = this.resolveTargetChatId(routeKey);
       try {
-        // For compaction messages, we need to find the last message sent
-        // Since we don't track messageId for compaction messages, we'll send a new message
-        await this.sendMarkdownV2Message(bot, targetChatId, event.newContent);
+        const tracked =
+          event.trackingKey && this.trackingMessages.has(event.trackingKey)
+            ? this.trackingMessages.get(event.trackingKey)
+            : undefined;
+        const messageId = event.messageId
+          ? Number(event.messageId)
+          : tracked?.messageId;
+        const chatId = tracked?.chatId || targetChatId;
+
+        if (!messageId) {
+          const sentId = await this.sendMarkdownV2Message(
+            bot,
+            chatId,
+            event.newContent,
+          );
+          if (event.trackingKey) {
+            this.trackingMessages.set(event.trackingKey, {
+              chatId,
+              messageId: sentId,
+            });
+          }
+          return;
+        }
+
+        await this.editMarkdownV2Message(bot, chatId, messageId, event.newContent);
       } catch (err) {
+        if (this.isMessageNotFoundError(err)) {
+          const sentId = await this.sendMarkdownV2Message(
+            bot,
+            targetChatId,
+            event.newContent,
+          );
+          if (event.trackingKey) {
+            this.trackingMessages.set(event.trackingKey, {
+              chatId: targetChatId,
+              messageId: sentId,
+            });
+          }
+          return;
+        }
+
         logger.error(
           { err },
           `Failed to edit telegram message to ${targetChatId}`,

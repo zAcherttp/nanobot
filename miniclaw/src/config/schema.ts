@@ -75,12 +75,8 @@ export const ChannelsConfigSchema = z
         enabled: z.boolean().default(true),
       })
       .default({}),
-    sse: z
-      .object({
-        enabled: z.boolean().default(true),
-      })
-      .default({}),
   })
+  .strict()
   .default({});
 
 export const CalendarConfigSchema = z

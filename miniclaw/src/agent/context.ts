@@ -1,15 +1,22 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { MemoryStore } from "../services/memory";
+import type { GoalService } from "../services/goals";
+import type { TaskService } from "../services/tasks";
+import type { UserProfileService } from "../services/user_profile";
+import type { WorkspaceMemoryService } from "../services/workspace_memory";
 
 export interface BuildSystemPromptOptions {
   workspacePath: string;
   threadPath?: string;
   channel?: string;
   summary?: string;
-  skillsPath?: string;
   skillsSummary?: string;
-  memoryStore?: MemoryStore;
+  goalService?: GoalService;
+  taskService?: TaskService;
+  userProfileService?: UserProfileService;
+  memoryService?: WorkspaceMemoryService;
+  relevantMemory?: string | null;
+  relevantHistory?: string | null;
 }
 
 export async function buildSystemPrompt(
@@ -17,7 +24,6 @@ export async function buildSystemPrompt(
 ): Promise<string> {
   const parts: string[] = [];
 
-  // 1. Conversation Summary (from file if provided, or from options)
   let summary = options.summary;
   if (options.threadPath && !summary) {
     summary = await readSummaryFile(options.threadPath);
@@ -26,23 +32,32 @@ export async function buildSystemPrompt(
     parts.push(`## Conversation Summary\n\n${summary}`);
   }
 
-  // 2. Long-term Memory (if available)
-  if (options.memoryStore) {
-    const memoryContext = await options.memoryStore.getMemoryContext();
-    if (memoryContext) {
-      parts.push(memoryContext);
-    }
-  }
-
-  // 3. Format Hint
   const formatHint = buildFormatHint(options.channel);
   if (formatHint) parts.push(formatHint);
 
-  // 4. Bootstrap files (AGENTS.md, GOALS.md, SOUL.md, USER.md, TOOLS.md)
   const bootstrap = await loadBootstrapFiles(options.workspacePath);
   if (bootstrap) parts.push(bootstrap);
 
-  // 5. Skills hint and summary
+  const userContext = await options.userProfileService?.getPromptContext();
+  if (userContext) parts.push(userContext);
+
+  const goalContext = await options.goalService?.getPromptContext();
+  if (goalContext) parts.push(goalContext);
+
+  const taskContext = await options.taskService?.getPromptContext();
+  if (taskContext) parts.push(taskContext);
+
+  const memoryContext = await options.memoryService?.getPromptContext();
+  if (memoryContext) parts.push(memoryContext);
+
+  if (options.relevantMemory?.trim()) {
+    parts.push(options.relevantMemory.trim());
+  }
+
+  if (options.relevantHistory?.trim()) {
+    parts.push(options.relevantHistory.trim());
+  }
+
   if (options.skillsSummary) {
     parts.push(buildSkillsSection(options.skillsSummary));
   }
@@ -70,13 +85,7 @@ function buildFormatHint(channel?: string): string {
 }
 
 async function loadBootstrapFiles(workspacePath: string): Promise<string> {
-  const BOOTSTRAP_FILES = [
-    "AGENTS.md",
-    "GOALS.md",
-    "SOUL.md",
-    "USER.md",
-    "TOOLS.md",
-  ];
+  const BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"];
   const parts: string[] = [];
 
   for (const filename of BOOTSTRAP_FILES) {
@@ -96,7 +105,10 @@ You have access to various skills that can help you accomplish tasks. Skills are
 
 ${skillsSummary}
 
-**Important**: When you need specific capabilities, use the \`load_skill\` tool to load the skill's instructions. Use \`list_skills\` to see all available skills.`;
+Important:
+- Use \`list_skills\` to inspect the catalog.
+- Use \`load_skill\` only when you need full instructions for the current turn.
+- Loaded skill content is turn-scoped and should be reloaded later if needed.`;
 }
 
 async function readIfExists(

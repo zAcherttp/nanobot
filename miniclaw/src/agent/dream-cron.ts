@@ -1,6 +1,9 @@
 import { DreamService, AgentMessage } from "./dream";
 import { MemoryStore, DreamCursor } from "../services/memory";
 import { CronService } from "../services/cron";
+import type { GoalService } from "../services/goals";
+import type { UserProfileService } from "../services/user_profile";
+import type { WorkspaceMemoryService } from "../services/workspace_memory";
 import { logger } from "../utils/logger";
 
 export interface DreamCronConfig {
@@ -21,6 +24,9 @@ export class DreamCronJob {
     memoryStore: MemoryStore,
     cronService: CronService,
     getMessages: () => Promise<AgentMessage[]>,
+    userProfileService: UserProfileService,
+    goalService: GoalService,
+    workspaceMemoryService: WorkspaceMemoryService,
     config?: Partial<DreamCronConfig>,
   ) {
     this.memoryStore = memoryStore;
@@ -33,10 +39,14 @@ export class DreamCronJob {
       minMessagesForDream: config?.minMessagesForDream ?? 5,
     };
 
-    this.dreamService = new DreamService(memoryStore, {
-      maxMemoriesPerDream: this.config.maxEntriesPerDream,
-      minMessagesForDream: this.config.minMessagesForDream,
-    });
+    this.dreamService = new DreamService(
+      userProfileService,
+      goalService,
+      workspaceMemoryService,
+      {
+        minMessagesForDream: this.config.minMessagesForDream,
+      },
+    );
   }
 
   /**
@@ -50,7 +60,7 @@ export class DreamCronJob {
 
     const job = await this.cronService.addJob(
       "dream-consolidation",
-      { cronExpr: this.config.schedule },
+      { kind: "cron", expr: this.config.schedule },
       "Running dream consolidation",
       false, // don't deliver message
     );
@@ -83,7 +93,7 @@ export class DreamCronJob {
       );
 
       // Run dream consolidation
-      const memories = await this.dreamService.consolidate(unprocessedMessages);
+      const result = await this.dreamService.consolidate(unprocessedMessages);
 
       // Update cursor
       if (unprocessedMessages.length > 0) {
@@ -96,7 +106,7 @@ export class DreamCronJob {
       }
 
       logger.info(
-        `Dream consolidation complete: ${memories.length} memories created`,
+        `Dream consolidation complete: ${result.goalUpdates.length} goal updates, ${result.memoryEntriesRecorded.length} memory entries`,
       );
     } catch (err) {
       logger.error({ err }, "Dream consolidation failed");

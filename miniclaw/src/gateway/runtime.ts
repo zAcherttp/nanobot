@@ -8,9 +8,8 @@ import chalk from "chalk";
 export async function startGateway(
   config: AppConfig,
   bus: MessageBus,
-  sseChannel?: any,
 ) {
-  const app = createServer(bus, sseChannel);
+  const app = createServer(bus);
   const port = config.gateway.port;
 
   logger.info(`Starting miniclaw unified gateway on port ${port}...`);

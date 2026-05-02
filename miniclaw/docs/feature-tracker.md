@@ -30,23 +30,30 @@ graph TD
         OnboardSvc["OnboardService"]
         AgentSvc["CliAgentService"]
         ConfigSvc["ConfigService<br/>(Zod + Validation)"]
-        FileSystemSvc["FileSystemService<br/>(Cross-Platform)"]
         ThreadSvc["PersistenceService<br/>(JSONL + Compaction)"]
+        TaskSvc["TaskService<br/>(TASKS.md Active + Archive)"]
+        ProfileSvc["UserProfileService<br/>(USER.md Managed Profile)"]
+        ProgressSvc["TaskProgressNotifier<br/>(Status Post + Edit Flow)"]
         ChannelReg["ChannelRegistry<br/>(Adapter Router)"]
-        
+        PathsUtil["Paths Utility<br/>(Cross-Platform)"]
+
         GatewayCmd -->|"Instantiates"| GatewaySvc
         OnboardCmd -->|"Instantiates"| OnboardSvc
         AgentCmd -->|"Instantiates"| AgentSvc
-        
+
         GatewaySvc -->|"Uses"| ConfigSvc
         GatewaySvc -->|"Uses"| ChannelReg
         AgentSvc -->|"Uses"| ConfigSvc
         AgentSvc -->|"Uses"| ChannelReg
+        AgentSvc -->|"Uses"| TaskSvc
+        AgentSvc -->|"Uses"| ProfileSvc
+        AgentSvc -->|"Uses"| ProgressSvc
         OnboardSvc -->|"Uses"| ConfigSvc
-        OnboardSvc -->|"Uses"| FileSystemSvc
-        ConfigSvc -->|"Uses"| FileSystemSvc
-        ThreadSvc -->|"Uses"| FileSystemSvc
+        ConfigSvc -->|"Uses"| PathsUtil
+        ThreadSvc -->|"Uses"| PathsUtil
         ThreadSvc -->|"Uses"| ConfigSvc
+        TaskSvc -->|"Uses"| PathsUtil
+        ProfileSvc -->|"Uses"| PathsUtil
     end
 
     %% =============================================
@@ -65,11 +72,10 @@ graph TD
     %% =============================================
     subgraph Channels ["📡 Channel Adapters"]
         CliCh["CliChannel<br/>(readline)"]
-        SseCh["SseChannel<br/>(REST + SSE)"]
         TgCh["TelegramChannel<br/>(Grammy)"]
         
-        ChannelReg -->|"Registers"| CliCh & SseCh & TgCh
-        CliCh & SseCh & TgCh <-->|"Pub/Sub"| Bus
+        ChannelReg -->|"Registers"| CliCh & TgCh
+        CliCh & TgCh <-->|"Pub/Sub"| Bus
     end
 
     %% =============================================
@@ -78,11 +84,31 @@ graph TD
     subgraph API ["🌐 API Runtime (Hono)"]
         HonoApp["Hono Server"]
         Health["Health Check<br/>(/api/health)"]
+        Ingress["Message Ingress<br/>(/api/messages)"]
         
         GatewaySvc -->|"Boots"| HonoApp
         HonoApp --> Health
-        
-        SseCh -->|"Mounts /stream, /chat"| HonoApp
+        HonoApp --> Ingress
+    end
+
+    %% =============================================
+    %% Agent Runtime
+    %% =============================================
+    subgraph AgentRuntime ["🤖 Agent Runtime"]
+        AgentLoop["AgentLoop"]
+        SkillTools["Skill Tools<br/>(list/load/info)"]
+        TaskTools["Task Tools<br/>(list/create/update/archive)"]
+        ProfileTools["Profile Tools<br/>(read/update)"]
+        SkillsLoader["SkillsLoader"]
+
+        GatewaySvc -->|"Starts"| AgentLoop
+        AgentSvc -->|"Starts"| AgentLoop
+        AgentLoop -->|"Uses"| SkillTools
+        AgentLoop -->|"Uses"| TaskTools
+        AgentLoop -->|"Uses"| ProfileTools
+        SkillTools -->|"Backed by"| SkillsLoader
+        TaskTools -->|"Backed by"| TaskSvc
+        ProfileTools -->|"Backed by"| ProfileSvc
     end
 
     %% =============================================
@@ -93,15 +119,23 @@ graph TD
         ConfigJSON["config.json"]
         ThreadsDir["threads/ (History)"]
         WorkspaceDir["workspace/ (Sandbox)"]
+        TasksMD["TASKS.md"]
+        UserMD["USER.md"]
         
         MiniclawDir --- ConfigJSON
         MiniclawDir --- ThreadsDir
         MiniclawDir --- WorkspaceDir
+        MiniclawDir --- TasksMD
+        MiniclawDir --- UserMD
         
         ConfigSvc <-->|"Read/Write"| ConfigJSON
         OnboardSvc -->|"Scaffolds"| ThreadsDir
         OnboardSvc -->|"Scaffolds"| WorkspaceDir
+        OnboardSvc -->|"Scaffolds"| TasksMD
+        OnboardSvc -->|"Scaffolds"| UserMD
         ThreadSvc <-->|"JSONL Read/Append"| ThreadsDir
+        TaskSvc <-->|"Managed Markdown"| TasksMD
+        ProfileSvc <-->|"Managed Markdown"| UserMD
     end
 
     %% =============== Styling ===================
@@ -114,40 +148,56 @@ graph TD
     classDef ch fill:#9d174d, color:#fff, stroke:#f43f5e, stroke-width:3px;
 
     class Index,GatewayCmd,OnboardCmd,AgentCmd,GlobalErr cli;
-    class GatewaySvc,OnboardSvc,AgentSvc,ConfigSvc,FileSystemSvc,ThreadSvc,ChannelReg svc;
+    class GatewaySvc,OnboardSvc,AgentSvc,ConfigSvc,ThreadSvc,TaskSvc,ProfileSvc,ProgressSvc,ChannelReg,PathsUtil svc;
     class Bus,Logger core;
-    class CliCh,SseCh,TgCh ch;
-    class HonoApp,Health api;
-    class MiniclawDir,ConfigJSON,ThreadsDir,WorkspaceDir fs;
+    class CliCh,TgCh ch;
+    class HonoApp,Health,Ingress api;
+    class MiniclawDir,ConfigJSON,ThreadsDir,WorkspaceDir,TasksMD,UserMD fs;
 ```
 
 ## Implemented Feature Checklist
 
 - **CLI Shell**: `commander` router with globally abstracted error handling.
 - **Build System**: `tsdown` (Rolldown/Vite) outputting an ultra-fast, extensionless native `.mjs` ESM bundle.
-- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, `ConfigService`, `PersistenceService`, and `CliAgentService`.
-- **Cross-Platform FS**: `FileSystemService` with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
+- **Service Isolation**: Clean separation of `OnboardService`, `GatewayService`, `ConfigService`, `PersistenceService`, `CliAgentService`, `TaskService`, and `UserProfileService`.
+- **Cross-Platform Paths**: Centralized `paths` utility with dynamic environment detection (`import.meta.url`) and native OS support (`os.homedir()`).
 - **Intelligent Config**: Automatic relative path resolution bound natively to the dynamic `.`+`appName` working directory, validated via `zod`.
-- **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. Type-based folder naming (`conversation/`, `system/`), JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with tool-call-pending deferral.
-- **Channel Registry**: Standardized `Channel` adapter interface with active implementations for CLI (`readline`), SSE (REST + Hono SSE stream), and Telegram (`grammy` with debounce streaming).
+- **Thread Persistence**: Single conversation thread (all channels merge) + ephemeral system threads. Type-based folder naming (`conversation/`, `system/`), JSONL append-only storage, atomic writes, `gpt-tokenizer` token estimation, auto-compaction trigger with transient task/skill tool chatter stripped before persistence.
+- **Channel Registry**: Standardized `Channel` adapter interface with active implementations for CLI (`readline`) and Telegram (`grammy` with streamed updates and edit-aware task progress).
 - **Logging**: Synchronous `pino-pretty` preventing TTY overlaps with interactive prompts (`inquirer`).
 - **Communication Bus**: High-performance, decoupled `MessageBus` (EventEmitter) with `ThreadMessage` types aligned to pi-agent-core.
-- **API Server**: Fast `hono/node-server` exposing a REST health check and dynamic channel endpoints.
+- **API Server**: Fast `hono/node-server` exposing a trimmed health check and generic message ingress surface.
 - **LLM Provider Support**: Multi-provider support with OpenAI, Anthropic, Ollama, and NVIDIA APIs. Dictionary-based provider configuration for easy extensibility.
 - **Channel Controls**: Per-channel enable/disable configuration with proper validation and error messaging.
+- **Global Task System**: Agent-managed `TASKS.md` with `Active Jobs` and `Archived Jobs`, stable job IDs, checklist items, and structured mutation through task tools instead of freeform markdown edits.
+- **Managed User Profile**: Agent-managed `USER.md` block storing onboarding preferences such as timezone, language, communication style, response length, technical level, and calendar preference.
+- **Onboarding as Work**: First-run preference gathering is no longer a separate mode; the agent auto-injects an onboarding job and completes it through the standard multi-turn task workflow.
+- **Skill Runtime**: Real agent tools for `list_skills`, `load_skill`, and `get_skill_info`, with loaded skill bodies scoped to the active turn instead of being persisted into history.
+- **Calendar Execution Model**: The generalized calendar tool path has been removed. Google Calendar work now flows through provider-specific `gws-*` skills, while `lark` remains a stored preference until dedicated skills exist.
 
 ## Recent Improvements
 
+- **Service Layer Optimization**: Removed thin wrapper services (`FileSystemService`, `CalendarService`, duplicate `agent.ts`) to reduce unnecessary abstraction layers. Replaced with direct usage of standard Node.js modules and centralized `paths` utility (~170 lines removed).
+- **Reduced Coupling**: Eliminated unnecessary service dependencies by using direct path resolution functions (`getRootDir()`, `getConfigPath()`, `resolvePath()`) instead of service injection.
 - **Thread Naming**: Migrated from ULID-based thread IDs to type-based folder names (`conversation/`, `system/`) for clearer file system organization.
 - **Provider Configuration**: Refactored provider resolution to use dictionaries instead of if-else chains, making it easier to add new providers.
 - **CLI Channel Validation**: Added disabled check for CLI channel with clear error messaging when attempting to use disabled channels.
+- **Runtime Reliability Coverage**: Added direct tests for persistence, agent loop orchestration, gateway wiring, Telegram streaming/edit fallbacks, task services, and task tools, with coverage gates focused on real runtime surfaces.
+- **SSE Removal**: Removed the SSE channel and `/api/sse/*` routes to focus the runtime on CLI and Telegram plus thin HTTP ingress.
+- **Task-Oriented Agent State**: Added `TASKS.md`, structured task tooling, task progress notification/edit flows, and archived-job retention instead of deleting finished work.
+- **Profile-Driven Onboarding**: Added managed `USER.md` profile state and onboarding job injection so the agent can gather preferences through the same normal planning loop it uses for other long-horizon work.
+- **Skill-Driven Calendar Flow**: Replaced the generalized calendar wrapper with real skill discovery/loading, plus provider-specific `gws-*` skills for agenda exploration and event insertion guidance.
 
 ## Upcoming Milestones
 
 *(To be mapped into the architecture diagram as they are built)*
 
 - [x] **Persistence Layer**: JSON and JSONL based storing for easy access and human-readability on personal computers.
-- [x] **Channel Registry**: Formalized channel adapters (Telegram, SSE, CLI) with ingress/egress event routing.
+- [x] **Channel Registry**: Formalized channel adapters (Telegram and CLI) with ingress/egress event routing.
 - [x] **Agent Core**: LLM Loop Orchestration and Provider Interface (OpenAI, Anthropic, Ollama, NVIDIA).
-- [ ] **Compaction Service**: LLM-powered summarization for conversation thread compaction.
-- [ ] **Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.
+- [x] **Compaction Service**: LLM-powered summarization for conversation thread compaction with retry logic and token estimation.
+- [x] **Task System**: Structured active/archive job tracking in `TASKS.md` with agent-facing task tools.
+- [x] **User Profile**: Managed `USER.md` onboarding/profile state with auto-injected onboarding job support.
+- [x] **Skill Runtime**: Real `list_skills`, `load_skill`, and `get_skill_info` tools with turn-scoped skill bodies.
+- [ ] **Workspace Tools & Abilities**: FS Sandbox tools interacting with `.miniclaw/workspace/`.
+- [ ] **Lark Calendar Skills**: Provider-specific skills and execution flow for Lark to match the current GWS path.

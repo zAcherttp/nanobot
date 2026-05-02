@@ -20,6 +20,7 @@ export interface OutboundBusEvent {
   message: AgentMessage;
   channel?: string;
   userId?: string;
+  trackingKey?: string;
 }
 
 export interface StreamDelta {
@@ -31,7 +32,8 @@ export interface StreamDelta {
 }
 
 export interface EditBusEvent {
-  messageId: string;
+  messageId?: string;
+  trackingKey?: string;
   newContent: string;
   channel?: string;
   userId?: string;

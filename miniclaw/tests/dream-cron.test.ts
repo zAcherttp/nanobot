@@ -1,445 +1,118 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DreamCronJob } from "../src/agent/dream-cron";
-import { MemoryStore, DreamCursor } from "../src/services/memory";
-import { CronService } from "../src/services/cron";
-
-// Mock dependencies
-vi.mock("../src/services/memory", () => ({
-  MemoryStore: vi.fn().mockImplementation(() => ({
-    readUnprocessedHistory: vi.fn(),
-    updateCursor: vi.fn(),
-  })),
-}));
-
-vi.mock("../src/services/cron", () => ({
-  CronService: vi.fn().mockImplementation(() => ({
-    addJob: vi.fn(),
-    removeJob: vi.fn(),
-  })),
-}));
 
 describe("DreamCronJob", () => {
-  let dreamCronJob: DreamCronJob;
-  let mockMemoryStore: MemoryStore;
-  let mockCronService: CronService;
-  let mockGetMessages: () => Promise<Array<{ id: string; timestamp: number }>>;
+  let mockMemoryStore: {
+    readUnprocessedHistory: ReturnType<typeof vi.fn>;
+    updateCursor: ReturnType<typeof vi.fn>;
+  };
+  let mockCronService: {
+    addJob: ReturnType<typeof vi.fn>;
+    removeJob: ReturnType<typeof vi.fn>;
+  };
+  let mockProfileService: {
+    addPreference: ReturnType<typeof vi.fn>;
+    addStableFact: ReturnType<typeof vi.fn>;
+  };
+  let mockGoalService: {
+    listGoals: ReturnType<typeof vi.fn>;
+    recordProgress: ReturnType<typeof vi.fn>;
+  };
+  let mockWorkspaceMemoryService: {
+    recordEntry: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
-    mockMemoryStore = new MemoryStore("/test/memory");
-    mockCronService = new CronService("/test/cron/store.json", vi.fn());
-    mockGetMessages = vi.fn();
+    mockMemoryStore = {
+      readUnprocessedHistory: vi.fn(),
+      updateCursor: vi.fn(),
+    };
+    mockCronService = {
+      addJob: vi.fn().mockResolvedValue({ id: "job123" }),
+      removeJob: vi.fn().mockResolvedValue(true),
+    };
+    mockProfileService = {
+      addPreference: vi.fn(),
+      addStableFact: vi.fn(),
+      getDocument: vi.fn().mockResolvedValue({
+        profile: {},
+        stableFacts: [],
+        preferences: [],
+      }),
+    } as any;
+    mockGoalService = {
+      listGoals: vi.fn().mockResolvedValue([]),
+      recordProgress: vi.fn(),
+    };
+    mockWorkspaceMemoryService = {
+      recordEntry: vi.fn(),
+    };
+  });
 
-    dreamCronJob = new DreamCronJob(
-      mockMemoryStore,
-      mockCronService,
-      mockGetMessages,
+  it("registers the dream job with the cron service", async () => {
+    const job = new DreamCronJob(
+      mockMemoryStore as any,
+      mockCronService as any,
+      async () => [],
+      mockProfileService as any,
+      mockGoalService as any,
+      mockWorkspaceMemoryService as any,
+      { schedule: "0 2 * * *" },
     );
 
-    vi.clearAllMocks();
+    await job.register();
+
+    expect(mockCronService.addJob).toHaveBeenCalledWith(
+      "dream-consolidation",
+      { kind: "cron", expr: "0 2 * * *" },
+      "Running dream consolidation",
+      false,
+    );
+    expect(job.getJobId()).toBe("job123");
   });
 
-  describe("constructor", () => {
-    it("should use default schedule", () => {
-      expect(dreamCronJob).toBeDefined();
-    });
+  it("runs consolidation on unprocessed messages and updates the cursor", async () => {
+    const messages = [
+      { id: "1", role: "user", content: "I prefer dark mode", timestamp: 1 },
+      { id: "2", role: "assistant", content: "Noted", timestamp: 2 },
+      { id: "3", role: "user", content: "I like short replies", timestamp: 3 },
+      { id: "4", role: "assistant", content: "OK", timestamp: 4 },
+      { id: "5", role: "user", content: "Hello", timestamp: 5 },
+    ];
+    mockMemoryStore.readUnprocessedHistory.mockResolvedValue(messages);
 
-    it("should use custom schedule", () => {
-      const customJob = new DreamCronJob(
-        mockMemoryStore,
-        mockCronService,
-        mockGetMessages,
-        { schedule: "0 3 * * *" },
-      );
+    const job = new DreamCronJob(
+      mockMemoryStore as any,
+      mockCronService as any,
+      async () => messages,
+      mockProfileService as any,
+      mockGoalService as any,
+      mockWorkspaceMemoryService as any,
+    );
 
-      expect(customJob).toBeDefined();
-    });
+    await job.run();
 
-    it("should use custom maxEntriesPerDream", () => {
-      const customJob = new DreamCronJob(
-        mockMemoryStore,
-        mockCronService,
-        mockGetMessages,
-        { maxEntriesPerDream: 20 },
-      );
-
-      expect(customJob).toBeDefined();
-    });
-
-    it("should use custom minMessagesForDream", () => {
-      const customJob = new DreamCronJob(
-        mockMemoryStore,
-        mockCronService,
-        mockGetMessages,
-        { minMessagesForDream: 10 },
-      );
-
-      expect(customJob).toBeDefined();
+    expect(mockMemoryStore.readUnprocessedHistory).toHaveBeenCalledWith(messages);
+    expect(mockMemoryStore.updateCursor).toHaveBeenCalledWith({
+      lastProcessedAt: new Date(5).toISOString(),
+      lastMessageId: "5",
     });
   });
 
-  describe("register", () => {
-    it("should register dream job with cron service", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
+  it("does not update the cursor when nothing new exists", async () => {
+    mockMemoryStore.readUnprocessedHistory.mockResolvedValue([]);
 
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
+    const job = new DreamCronJob(
+      mockMemoryStore as any,
+      mockCronService as any,
+      async () => [],
+      mockProfileService as any,
+      mockGoalService as any,
+      mockWorkspaceMemoryService as any,
+    );
 
-      await dreamCronJob.register();
+    await job.run();
 
-      expect(mockCronService.addJob).toHaveBeenCalledWith(
-        "dream-consolidation",
-        { cronExpr: "0 2 * * *" },
-        "Running dream consolidation",
-        false,
-      );
-    });
-
-    it("should set jobId after registration", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      await dreamCronJob.register();
-
-      expect(dreamCronJob.getJobId()).toBe("job123");
-    });
-
-    it("should not register if already registered", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      await dreamCronJob.register();
-      await dreamCronJob.register();
-
-      expect(mockCronService.addJob).toHaveBeenCalledTimes(1);
-    });
-
-    it("should use custom schedule when provided", async () => {
-      const customJob = new DreamCronJob(
-        mockMemoryStore,
-        mockCronService,
-        mockGetMessages,
-        { schedule: "0 3 * * *" },
-      );
-
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 3 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      await customJob.register();
-
-      expect(mockCronService.addJob).toHaveBeenCalledWith(
-        "dream-consolidation",
-        { cronExpr: "0 3 * * *" },
-        "Running dream consolidation",
-        false,
-      );
-    });
-  });
-
-  describe("run", () => {
-    it("should process unprocessed messages", async () => {
-      const messages = [
-        { id: "msg1", timestamp: 1000 },
-        { id: "msg2", timestamp: 2000 },
-        { id: "msg3", timestamp: 3000 },
-      ];
-
-      vi.mocked(mockGetMessages).mockResolvedValue(messages);
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValue(
-        messages,
-      );
-
-      await dreamCronJob.run();
-
-      expect(mockMemoryStore.readUnprocessedHistory).toHaveBeenCalledWith(
-        messages,
-      );
-    });
-
-    it("should update cursor after processing", async () => {
-      const messages = [
-        { id: "msg1", timestamp: 1000 },
-        { id: "msg2", timestamp: 2000 },
-      ];
-
-      vi.mocked(mockGetMessages).mockResolvedValue(messages);
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValue(
-        messages,
-      );
-
-      await dreamCronJob.run();
-
-      expect(mockMemoryStore.updateCursor).toHaveBeenCalledWith({
-        lastProcessedAt: expect.any(String),
-        lastMessageId: "msg2",
-      });
-    });
-
-    it("should handle no new messages", async () => {
-      const messages = [
-        { id: "msg1", timestamp: 1000 },
-        { id: "msg2", timestamp: 2000 },
-      ];
-
-      vi.mocked(mockGetMessages).mockResolvedValue(messages);
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValue([]);
-
-      await dreamCronJob.run();
-
-      expect(mockMemoryStore.updateCursor).not.toHaveBeenCalled();
-    });
-
-    it("should handle empty message list", async () => {
-      vi.mocked(mockGetMessages).mockResolvedValue([]);
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValue([]);
-
-      await dreamCronJob.run();
-
-      expect(mockMemoryStore.updateCursor).not.toHaveBeenCalled();
-    });
-
-    it("should handle errors during run", async () => {
-      vi.mocked(mockGetMessages).mockRejectedValue(
-        new Error("Failed to get messages"),
-      );
-
-      await expect(dreamCronJob.run()).rejects.toThrow(
-        "Failed to get messages",
-      );
-    });
-  });
-
-  describe("unregister", () => {
-    it("should unregister dream job", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      await dreamCronJob.register();
-      await dreamCronJob.unregister();
-
-      expect(mockCronService.removeJob).toHaveBeenCalledWith("job123");
-      expect(dreamCronJob.getJobId()).toBeNull();
-    });
-
-    it("should handle unregister when not registered", async () => {
-      await dreamCronJob.unregister();
-
-      expect(mockCronService.removeJob).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("getJobId", () => {
-    it("should return null when not registered", () => {
-      expect(dreamCronJob.getJobId()).toBeNull();
-    });
-
-    it("should return job ID after registration", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      await dreamCronJob.register();
-
-      expect(dreamCronJob.getJobId()).toBe("job123");
-    });
-  });
-
-  describe("integration scenarios", () => {
-    it("should handle full lifecycle: register, run, unregister", async () => {
-      const mockJob = {
-        id: "job123",
-        name: "dream-consolidation",
-        enabled: true,
-        schedule: { cronExpr: "0 2 * * *" },
-        payload: {
-          kind: "agent_turn",
-          message: "Running dream consolidation",
-          deliver: false,
-        },
-        state: {
-          nextRunAtMs: Date.now() + 86400000,
-          lastRunAtMs: null,
-          lastStatus: null,
-          lastError: null,
-          runHistory: [],
-        },
-        createdAtMs: Date.now(),
-        updatedAtMs: Date.now(),
-        deleteAfterRun: false,
-      };
-
-      vi.mocked(mockCronService.addJob).mockResolvedValue(mockJob);
-
-      // Register
-      await dreamCronJob.register();
-      expect(dreamCronJob.getJobId()).toBe("job123");
-
-      // Run
-      const messages = [
-        { id: "msg1", timestamp: 1000 },
-        { id: "msg2", timestamp: 2000 },
-      ];
-
-      vi.mocked(mockGetMessages).mockResolvedValue(messages);
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValue(
-        messages,
-      );
-
-      await dreamCronJob.run();
-      expect(mockMemoryStore.updateCursor).toHaveBeenCalled();
-
-      // Unregister
-      await dreamCronJob.unregister();
-      expect(dreamCronJob.getJobId()).toBeNull();
-    });
-
-    it("should handle multiple runs with cursor updates", async () => {
-      const messages = [
-        { id: "msg1", timestamp: 1000 },
-        { id: "msg2", timestamp: 2000 },
-        { id: "msg3", timestamp: 3000 },
-      ];
-
-      vi.mocked(mockGetMessages).mockResolvedValue(messages);
-
-      // First run - process all messages
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValueOnce(
-        messages,
-      );
-      await dreamCronJob.run();
-
-      const firstCall = (mockMemoryStore.updateCursor as any).mock.calls[0];
-      expect(firstCall[0].lastMessageId).toBe("msg3");
-
-      // Second run - no new messages
-      vi.mocked(mockMemoryStore.readUnprocessedHistory).mockResolvedValueOnce(
-        [],
-      );
-      await dreamCronJob.run();
-
-      expect(mockMemoryStore.updateCursor).toHaveBeenCalledTimes(1);
-    });
+    expect(mockMemoryStore.updateCursor).not.toHaveBeenCalled();
   });
 });

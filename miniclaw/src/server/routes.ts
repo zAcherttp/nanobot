@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { MessageBus } from "../bus/index";
-import { BusMessage } from "../bus/types";
 import { randomUUID } from "node:crypto";
 
 export function createApiRouter(bus: MessageBus): Hono {
@@ -18,16 +17,16 @@ export function createApiRouter(bus: MessageBus): Hono {
         return c.json({ error: "Invalid content" }, 400);
       }
 
-      const message: BusMessage = {
-        id: randomUUID(),
-        role: "user",
-        content: body.content,
-        timestamp: Date.now(),
-      };
+      bus.publishInbound({
+        message: {
+          id: randomUUID(),
+          role: "user",
+          content: body.content,
+          timestamp: Date.now(),
+        },
+      });
 
-      bus.publishInbound(message);
-
-      return c.json({ status: "received", messageId: message.id });
+      return c.json({ status: "received" });
     } catch (e) {
       return c.json({ error: "Invalid payload" }, 400);
     }

@@ -96,9 +96,11 @@ export class OnboardService {
     const templateFiles = [
       "AGENTS.md",
       "GOALS.md",
+      "MEMORY.md",
       "SOUL.md",
       "USER.md",
       "TOOLS.md",
+      "TASKS.md",
     ];
 
     for (const filename of templateFiles) {
@@ -117,9 +119,12 @@ export class OnboardService {
 
   private async createSkillDirectories(skillsDir: string): Promise<void> {
     const templateSkillsDir = path.resolve(__dirname, "../../skills");
-    const skillNames = ["calendar", "planning", "reminders", "summary"];
+    const entries = await fs.readdir(templateSkillsDir, { withFileTypes: true });
 
-    for (const skillName of skillNames) {
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const skillName = entry.name;
       const skillDir = path.join(skillsDir, skillName);
       await fs.mkdir(skillDir, { recursive: true });
 
