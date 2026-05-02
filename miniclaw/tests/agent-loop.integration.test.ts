@@ -108,7 +108,7 @@ vi.mock("@mariozechner/pi-ai", () => ({
 }));
 
 vi.mock("../src/services/calendar/gws", () => ({
-  GwsCalendarProvider: class {
+  GwsCalendarService: class {
     name = "GWS (Google Workspace)";
 
     async createEvent(event: unknown) {
@@ -381,8 +381,8 @@ Use gws calendar +agenda.`,
           "record_memory_entry",
           "list_goals",
           "gws_calendar_agenda",
-          "propose_gws_calendar_insert",
-          "execute_gws_calendar_insert",
+          "propose_plan",
+          "execute_plan",
         ]),
       );
   });
@@ -641,7 +641,7 @@ Use gws calendar +agenda.`,
     expect(model.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
   });
 
-  it("exposes provider-specific skill loading instead of a generalized calendar runtime", async () => {
+  it("keeps calendar skills as guidance while GWS tools remain the only execution path", async () => {
     const { AgentLoop } = await import("../src/agent/loop");
     const loop = new AgentLoop(bus, persistence, config);
     await loop.start();
@@ -700,14 +700,15 @@ Use gws calendar +agenda.`,
     agentHarness.FakeAgent.continueImpl = async (agent) => {
       turn += 1;
       const proposeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "propose_gws_calendar_insert",
+        (tool: any) => tool.name === "propose_plan",
       );
       const executeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "execute_gws_calendar_insert",
+        (tool: any) => tool.name === "execute_plan",
       );
 
       if (turn === 1) {
         const result = await proposeInsert.execute("tool-1", {
+          plan_type: "gws_calendar_insert",
           title: "Deep work block",
           start: "2026-05-03T09:00:00.000Z",
           end: "2026-05-03T10:30:00.000Z",
@@ -759,7 +760,7 @@ Use gws calendar +agenda.`,
     });
 
     await waitFor(async () => {
-      const proposal = await taskService.findActiveJobByKind("calendar-proposal");
+      const proposal = await taskService.findActiveJobByKind("pending-plan");
       const thread = await persistence.getConversationThread();
       const messages = await persistence.getMessages(thread.id);
       return Boolean(proposal)
@@ -767,7 +768,7 @@ Use gws calendar +agenda.`,
         && extractText(messages[1].content).includes("I propose a deep work block");
     });
 
-    let proposalJob = await taskService.findActiveJobByKind("calendar-proposal");
+    let proposalJob = await taskService.findActiveJobByKind("pending-plan");
     expect(proposalJob?.id).toBe(proposalJobId);
     expect(gwsHarness.createEvent).not.toHaveBeenCalled();
 
@@ -788,14 +789,14 @@ Use gws calendar +agenda.`,
       ),
     );
 
-    proposalJob = await taskService.findActiveJobByKind("calendar-proposal");
+    proposalJob = await taskService.findActiveJobByKind("pending-plan");
     const archivedJobs = await taskService.listJobs("archived");
     const updatedGoal = await goalService.getGoal(goal.id);
 
     expect(proposalJob).toBeNull();
     expect(archivedJobs.some((job) =>
       job.id === proposalJobId
-      && job.outcomeSummary?.includes("Created Google Calendar event evt-123."),
+      && job.outcomeSummary?.includes("Executed plan by creating Google Calendar event evt-123."),
     )).toBe(true);
     expect(updatedGoal?.linkedTaskIds).toContain(proposalJobId);
     expect(updatedGoal?.progress.at(-1)?.summary).toContain(
@@ -819,14 +820,15 @@ Use gws calendar +agenda.`,
     agentHarness.FakeAgent.continueImpl = async (agent) => {
       turn += 1;
       const proposeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "propose_gws_calendar_insert",
+        (tool: any) => tool.name === "propose_plan",
       );
       const executeInsert = agent.options.initialState.tools.find(
-        (tool: any) => tool.name === "execute_gws_calendar_insert",
+        (tool: any) => tool.name === "execute_plan",
       );
 
       if (turn === 1) {
         const result = await proposeInsert.execute("tool-1", {
+          plan_type: "gws_calendar_insert",
           title: "Team sync prep",
           start: "2026-05-04T08:00:00.000Z",
           end: "2026-05-04T08:30:00.000Z",
@@ -872,7 +874,7 @@ Use gws calendar +agenda.`,
     });
 
     await waitFor(async () => {
-      const proposal = await taskService.findActiveJobByKind("calendar-proposal");
+      const proposal = await taskService.findActiveJobByKind("pending-plan");
       const thread = await persistence.getConversationThread();
       const messages = await persistence.getMessages(thread.id);
       return Boolean(proposal)
@@ -896,7 +898,7 @@ Use gws calendar +agenda.`,
       ),
     );
 
-    const activeProposal = await taskService.findActiveJobByKind("calendar-proposal");
+    const activeProposal = await taskService.findActiveJobByKind("pending-plan");
     expect(activeProposal?.id).toBe(proposalJobId);
     expect(gwsHarness.createEvent).not.toHaveBeenCalled();
   });
@@ -987,6 +989,75 @@ Use gws calendar +agenda.`,
     await waitFor(async () => outbound.length === 1);
 
     expect(outbound).toEqual(["recovered"]);
+  });
+
+  it("tears down dream and cron resources on stop and ignores inbound events afterward", async () => {
+    const { AgentLoop } = await import("../src/agent/loop");
+    const cronStorePath = path.join(workspaceDir, "cron", "store.json");
+
+    config = AppConfigSchema.parse({
+      ...config,
+      dream: {
+        enabled: true,
+        schedule: "0 2 * * *",
+        maxEntriesPerDream: 10,
+        minMessagesForDream: 5,
+      },
+    });
+
+    let continueCalls = 0;
+    agentHarness.FakeAgent.continueImpl = async (agent) => {
+      continueCalls += 1;
+      agent.state.messages = [
+        ...agent.state.messages,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "should not run" }],
+          timestamp: Date.now(),
+        },
+      ];
+    };
+
+    const loop = new AgentLoop(bus, persistence, config);
+    await loop.start();
+    startedLoops.push(loop);
+
+    const cronService = (loop as any).cronService;
+    await cronService.addJob(
+      "user-job",
+      { kind: "every", everyMs: 60_000 },
+      "tick",
+    );
+
+    await waitFor(async () => {
+      const store = JSON.parse(await fs.readFile(cronStorePath, "utf8"));
+      return store.jobs.length === 2;
+    });
+
+    await loop.stop();
+
+    expect(cronService.status()).toMatchObject({ enabled: false, jobs: 1 });
+    expect((cronService as any).tasks.size).toBe(0);
+
+    const store = JSON.parse(await fs.readFile(cronStorePath, "utf8"));
+    expect(store.jobs).toHaveLength(1);
+    expect(store.jobs[0].name).toBe("user-job");
+
+    bus.publishInbound({
+      message: {
+        role: "user",
+        content: "after stop",
+        timestamp: Date.now(),
+      },
+      channel: "cli",
+      userId: "user-1",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const thread = await persistence.getConversationThread();
+    expect(await persistence.getMessages(thread.id)).toHaveLength(0);
+    expect(continueCalls).toBe(0);
   });
 
   it("auto-injects and archives the onboarding job as the profile becomes complete", async () => {

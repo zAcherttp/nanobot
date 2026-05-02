@@ -41,13 +41,56 @@ export class CliAgentService {
 
     // Start Agent Core
     const loop = new AgentLoop(bus, persistenceSvc, config);
-    loop.start();
+    await loop.start();
 
-    // Graceful shutdown
-    process.on("SIGINT", async () => {
-      logger.info(chalk.yellow("\nShutting down miniclaw agent..."));
-      await registry.stopAll();
-      process.exit(0);
+    const shutdownSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
+    const signalHandlers = new Map<NodeJS.Signals, () => void>();
+    let shuttingDown = false;
+    let resolveShutdown!: () => void;
+
+    const waitForShutdown = new Promise<void>((resolve) => {
+      resolveShutdown = resolve;
     });
+
+    const gracefulShutdown = async (signal: NodeJS.Signals) => {
+      if (shuttingDown) {
+        logger.warn(
+          `Received ${signal} while agent shutdown is already in progress.`,
+        );
+        return;
+      }
+
+      shuttingDown = true;
+      logger.info(chalk.yellow(`\nShutting down miniclaw agent (${signal})...`));
+
+      let exitCode = 0;
+      try {
+        await loop.stop();
+        await registry.stopAll();
+      } catch (err) {
+        exitCode = 1;
+        logger.error({ err }, "Failed during miniclaw agent shutdown");
+      } finally {
+        for (const shutdownSignal of shutdownSignals) {
+          const handler = signalHandlers.get(shutdownSignal);
+          if (handler) {
+            process.off(shutdownSignal, handler);
+          }
+        }
+
+        process.exitCode = exitCode;
+        resolveShutdown();
+      }
+    };
+
+    for (const signal of shutdownSignals) {
+      const handler = () => {
+        void gracefulShutdown(signal);
+      };
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+
+    await waitForShutdown;
   }
 }

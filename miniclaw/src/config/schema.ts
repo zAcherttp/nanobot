@@ -79,14 +79,6 @@ export const ChannelsConfigSchema = z
   .strict()
   .default({});
 
-export const CalendarConfigSchema = z
-  .object({
-    provider: z.enum(["gws", "lark"]).default("gws"),
-    larkAppId: z.string().default(""),
-    larkAppSecret: z.string().default(""),
-  })
-  .default({});
-
 export const MemoryConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -109,7 +101,6 @@ export const AppConfigSchema = z.object({
   thread: ThreadConfigSchema.default({}),
   logging: LoggingConfigSchema.default({}),
   channels: ChannelsConfigSchema.default({}),
-  calendar: CalendarConfigSchema.optional(),
   memory: MemoryConfigSchema.optional(),
   dream: DreamConfigSchema.optional(),
 });

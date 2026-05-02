@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CalendarEvent } from "../../src/services/calendar";
+import type { GwsCalendarEvent } from "../../src/services/calendar/gws";
 
 const execMock = vi.hoisted(() => vi.fn());
 
@@ -7,13 +7,13 @@ vi.mock("node:child_process", () => ({
   exec: execMock,
 }));
 
-import { GwsCalendarProvider } from "../../src/services/calendar/gws";
+import { GwsCalendarService } from "../../src/services/calendar/gws";
 
-describe("GwsCalendarProvider", () => {
-  let provider: GwsCalendarProvider;
+describe("GwsCalendarService", () => {
+  let provider: GwsCalendarService;
 
   beforeEach(() => {
-    provider = new GwsCalendarProvider();
+    provider = new GwsCalendarService();
     execMock.mockReset();
   });
 
@@ -157,7 +157,7 @@ describe("GwsCalendarProvider", () => {
   });
 });
 
-function buildEvent(): CalendarEvent {
+function buildEvent(): GwsCalendarEvent {
   return {
     id: "evt_12345",
     title: "Project sync",

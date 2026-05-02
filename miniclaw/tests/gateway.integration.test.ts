@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageBus } from "../src/bus/index";
 import { createServer } from "../src/server/index";
 import { AppConfigSchema } from "../src/config/schema";
@@ -35,6 +35,10 @@ vi.mock("../src/agent/loop", () => ({
 }));
 
 describe("gateway integration", () => {
+  afterEach(() => {
+    process.exitCode = undefined;
+  });
+
   it("exposes the trimmed health and message ingestion routes through the Hono server", async () => {
     const bus = new MessageBus();
     const inbound: Array<{ content: string; channel?: string }> = [];
@@ -73,40 +77,45 @@ describe("gateway integration", () => {
     expect(inbound).toEqual([{ content: "hello from http", channel: undefined }]);
   });
 
-  it("boots the gateway service, starts the agent loop, and shuts down cleanly on SIGINT", async () => {
-    const { GatewayService } = await import("../src/services/gateway");
-    const config = AppConfigSchema.parse({
-      workspace: { path: "workspace" },
-      channels: {
-        cli: { enabled: false },
-        telegram: { enabled: false, botToken: "", allowedUsers: [] },
-      },
-      dream: { enabled: false },
-      memory: { enabled: false },
-    });
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "boots the gateway service, starts the agent loop, and shuts down cleanly on %s",
+    async (signal) => {
+      const { GatewayService } = await import("../src/services/gateway");
+      const config = AppConfigSchema.parse({
+        workspace: { path: "workspace" },
+        channels: {
+          cli: { enabled: false },
+          telegram: { enabled: false, botToken: "", allowedUsers: [] },
+        },
+        dream: { enabled: false },
+        memory: { enabled: false },
+      });
 
-    const configService = {
-      load: vi.fn().mockResolvedValue(config),
-    };
+      const configService = {
+        load: vi.fn().mockResolvedValue(config),
+      };
 
-    gatewayHarness.FakeLoop.instances = [];
-    gatewayHarness.serve.mockClear();
-    gatewayHarness.server.close.mockClear();
+      gatewayHarness.FakeLoop.instances = [];
+      gatewayHarness.serve.mockClear();
+      gatewayHarness.server.close.mockClear();
 
-    const executePromise = new GatewayService(configService as never).execute();
+      const executePromise = new GatewayService(configService as never).execute();
 
-    await waitFor(() => gatewayHarness.serve.mock.calls.length === 1);
-    process.emit("SIGINT");
-    await executePromise;
+      await waitFor(() => gatewayHarness.serve.mock.calls.length === 1);
+      process.emit(signal);
+      await executePromise;
 
-    expect(configService.load).toHaveBeenCalled();
-    expect(gatewayHarness.serve).toHaveBeenCalledWith(
-      expect.objectContaining({ port: config.gateway.port }),
-    );
-    expect(gatewayHarness.FakeLoop.instances).toHaveLength(1);
-    expect(gatewayHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
-    expect(gatewayHarness.server.close).toHaveBeenCalled();
-  });
+      expect(configService.load).toHaveBeenCalled();
+      expect(gatewayHarness.serve).toHaveBeenCalledWith(
+        expect.objectContaining({ port: config.gateway.port }),
+      );
+      expect(gatewayHarness.FakeLoop.instances).toHaveLength(1);
+      expect(gatewayHarness.FakeLoop.instances[0].start).toHaveBeenCalled();
+      expect(gatewayHarness.FakeLoop.instances[0].stop).toHaveBeenCalled();
+      expect(gatewayHarness.server.close).toHaveBeenCalled();
+      expect(process.exitCode).toBe(0);
+    },
+  );
 });
 
 async function waitFor(

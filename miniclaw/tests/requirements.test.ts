@@ -470,22 +470,6 @@ describe("RequirementsChecker", () => {
       delete process.env.GWS_API_KEY;
     });
 
-    it("should check Lark calendar requirements", async () => {
-      process.env.LARK_APP_ID = "app-id";
-      process.env.LARK_APP_SECRET = "app-secret";
-
-      const requirements: Requirements = {
-        env: ["LARK_APP_ID", "LARK_APP_SECRET"],
-      };
-
-      const result = await RequirementsChecker.checkRequirements(requirements);
-
-      expect(result.satisfied).toBe(true);
-
-      delete process.env.LARK_APP_ID;
-      delete process.env.LARK_APP_SECRET;
-    });
-
     it("should check database requirements", async () => {
       vi.mocked(await import("node:child_process")).exec.mockImplementation(
         (command, callback) => {

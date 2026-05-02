@@ -47,7 +47,7 @@ describe("Context Integration", () => {
           getPromptContext: vi.fn().mockResolvedValue(`## TASKS.md
 
 ### Active Jobs
-- Confirm calendar event`),
+- Confirm plan: schedule "Deep work block"`),
         } as any,
         memoryService: {
           getPromptContext: vi.fn().mockResolvedValue(`## MEMORY.md

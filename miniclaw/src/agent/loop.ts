@@ -27,8 +27,7 @@ import { createUserProfileTools } from "@/tools/user_profile";
 import { createGoalTools } from "@/tools/goals";
 import { createCalendarTools } from "@/tools/calendar";
 import { createWorkspaceMemoryTools } from "@/tools/memory";
-import { CalendarService } from "@/services/calendar";
-import { GwsCalendarProvider } from "@/services/calendar/gws";
+import { GwsCalendarService } from "@/services/calendar/gws";
 import { WorkspaceMemoryService } from "@/services/workspace_memory";
 
 registerBuiltInApiProviders();
@@ -75,8 +74,8 @@ const TRANSIENT_TOOL_NAMES = new Set([
   "update_memory_entry",
   "remove_memory_entry",
   "gws_calendar_agenda",
-  "propose_gws_calendar_insert",
-  "execute_gws_calendar_insert",
+  "propose_plan",
+  "execute_plan",
 ]);
 
 export class AgentLoop {
@@ -89,7 +88,11 @@ export class AgentLoop {
   private readonly taskService: TaskService;
   private readonly workspaceMemoryService: WorkspaceMemoryService;
   private readonly taskNotifier: TaskProgressNotifier;
-  private readonly calendarService: CalendarService | null;
+  private readonly gwsCalendar: GwsCalendarService;
+  private unsubscribeInbound: (() => void) | null = null;
+  private readonly activeTurns = new Set<Promise<void>>();
+  private running = false;
+  private stopPromise: Promise<void> | null = null;
 
   constructor(
     private readonly bus: MessageBus,
@@ -126,7 +129,7 @@ export class AgentLoop {
       this.config.workspace.path,
     );
     this.taskNotifier = new TaskProgressNotifier(this.bus);
-    this.calendarService = this.initCalendarService();
+    this.gwsCalendar = new GwsCalendarService();
     this.dreamCronJob = this.initDreamCronJob();
   }
 
@@ -187,16 +190,11 @@ export class AgentLoop {
     );
   }
 
-  private initCalendarService(): CalendarService | null {
-    const provider = this.config.calendar?.provider || "gws";
-    if (provider !== "gws") {
-      return null;
+  public async start() {
+    if (this.running) {
+      return;
     }
 
-    return new CalendarService(new GwsCalendarProvider());
-  }
-
-  public async start() {
     await this.userProfileService.ensureProfileFile();
     await this.goalService.ensureGoalsFile();
     await this.taskService.ensureTasksFile();
@@ -207,23 +205,58 @@ export class AgentLoop {
       await this.dreamCronJob.register();
     }
 
-    this.bus.subscribeInbound(async (event) => {
-      const busReceivedAt = Date.now();
-      try {
-        await this.handleTurn(
-          event.message.content as string,
-          event.channel,
-          event.userId,
-          busReceivedAt,
-        );
-      } catch (err) {
-        logger.error({ err }, "Agent loop turn failed");
+    this.running = true;
+    this.stopPromise = null;
+    this.unsubscribeInbound = this.bus.subscribeInbound((event) => {
+      if (!this.running) {
+        return;
       }
+
+      const busReceivedAt = Date.now();
+      const turnPromise = (async () => {
+        try {
+          await this.handleTurn(
+            event.message.content as string,
+            event.channel,
+            event.userId,
+            busReceivedAt,
+          );
+        } catch (err) {
+          logger.error({ err }, "Agent loop turn failed");
+        } finally {
+          this.activeTurns.delete(turnPromise);
+        }
+      })();
+
+      this.activeTurns.add(turnPromise);
     });
   }
 
-  public stop() {
-    this.cronService.stop();
+  public async stop(): Promise<void> {
+    if (!this.running && !this.stopPromise) {
+      return;
+    }
+
+    if (this.stopPromise) {
+      await this.stopPromise;
+      return;
+    }
+
+    this.running = false;
+    this.unsubscribeInbound?.();
+    this.unsubscribeInbound = null;
+
+    this.stopPromise = (async () => {
+      if (this.dreamCronJob) {
+        await this.dreamCronJob.unregister();
+      }
+
+      this.cronService.stop();
+      await Promise.allSettled([...this.activeTurns]);
+    })();
+
+    await this.stopPromise;
+    this.stopPromise = null;
   }
 
   private async handleTurn(
@@ -314,17 +347,15 @@ export class AgentLoop {
       ...createUserProfileTools(this.userProfileService),
       ...createGoalTools(this.goalService),
       ...createWorkspaceMemoryTools(this.workspaceMemoryService),
-      ...(this.calendarService
-        ? createCalendarTools({
-            calendarService: this.calendarService,
-            taskService: this.taskService,
-            notifier: this.taskNotifier,
-            goalService: this.goalService,
-            currentUserText: userText,
-            channel,
-            userId,
-          })
-        : []),
+      ...createCalendarTools({
+        gwsCalendar: this.gwsCalendar,
+        taskService: this.taskService,
+        notifier: this.taskNotifier,
+        goalService: this.goalService,
+        currentUserText: userText,
+        channel,
+        userId,
+      }),
     ];
 
     const agent = new Agent({

@@ -48,7 +48,7 @@ export class GatewayService {
 
     // Start Agent Core
     const loop = new AgentLoop(bus, persistenceSvc, config);
-    loop.start();
+    await loop.start();
 
     const server = await startGateway(config, bus);
 
@@ -85,6 +85,7 @@ export class GatewayService {
 
       let exitCode = 0;
       try {
+        await loop.stop();
         await registry.stopAll();
         await closeServer();
         logger.info(chalk.green("Miniclaw shutdown complete."));

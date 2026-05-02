@@ -1,17 +1,32 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type {
-  CalendarEvent,
-  CalendarProvider,
-  RecurrenceRule,
-} from "../calendar";
 
 const execAsync = promisify(exec);
 
-export class GwsCalendarProvider implements CalendarProvider {
-  name = "GWS (Google Workspace)";
+export interface GwsRecurrenceRule {
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  interval?: number;
+  until?: Date;
+  count?: number;
+  byDay?: number[];
+  byMonth?: number[];
+}
 
-  async createEvent(event: CalendarEvent): Promise<string> {
+export interface GwsCalendarEvent {
+  id: string;
+  title: string;
+  start: Date;
+  end: Date;
+  description?: string;
+  location?: string;
+  attendees?: string[];
+  recurrence?: GwsRecurrenceRule;
+}
+
+export class GwsCalendarService {
+  readonly name = "GWS (Google Workspace)";
+
+  async createEvent(event: GwsCalendarEvent): Promise<string> {
     const args = this.buildCreateArgs(event);
     const command = `gws calendar create ${args}`;
 
@@ -25,7 +40,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     }
   }
 
-  async updateEvent(eventId: string, event: CalendarEvent): Promise<void> {
+  async updateEvent(eventId: string, event: GwsCalendarEvent): Promise<void> {
     const args = this.buildUpdateArgs(event);
     const command = `gws calendar update ${eventId} ${args}`;
 
@@ -46,7 +61,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     }
   }
 
-  async listEvents(start: Date, end: Date): Promise<CalendarEvent[]> {
+  async listEvents(start: Date, end: Date): Promise<GwsCalendarEvent[]> {
     const startStr = start.toISOString();
     const endStr = end.toISOString();
     const command = `gws calendar list --start ${startStr} --end ${endStr}`;
@@ -59,7 +74,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     }
   }
 
-  async getEvent(eventId: string): Promise<CalendarEvent | null> {
+  async getEvent(eventId: string): Promise<GwsCalendarEvent | null> {
     const command = `gws calendar get ${eventId}`;
 
     try {
@@ -70,7 +85,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     }
   }
 
-  private buildCreateArgs(event: CalendarEvent): string {
+  private buildCreateArgs(event: GwsCalendarEvent): string {
     const args: string[] = [];
 
     args.push(`--title "${event.title}"`);
@@ -96,7 +111,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     return args.join(" ");
   }
 
-  private buildUpdateArgs(event: CalendarEvent): string {
+  private buildUpdateArgs(event: GwsCalendarEvent): string {
     const args: string[] = [];
 
     args.push(`--title "${event.title}"`);
@@ -122,7 +137,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     return args.join(" ");
   }
 
-  private formatRecurrence(recurrence: RecurrenceRule): string {
+  private formatRecurrence(recurrence: GwsRecurrenceRule): string {
     const parts: string[] = [];
 
     parts.push(`FREQ=${recurrence.frequency.toUpperCase()}`);
@@ -153,8 +168,8 @@ export class GwsCalendarProvider implements CalendarProvider {
     return parts.join(";");
   }
 
-  private parseListOutput(output: string): CalendarEvent[] {
-    const events: CalendarEvent[] = [];
+  private parseListOutput(output: string): GwsCalendarEvent[] {
+    const events: GwsCalendarEvent[] = [];
     const lines = output.split("\n");
 
     for (const line of lines) {
@@ -173,7 +188,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     return events;
   }
 
-  private parseEventLine(line: string): CalendarEvent | null {
+  private parseEventLine(line: string): GwsCalendarEvent | null {
     // Expected format: ID | Title | Start | End | Location | Description
     const parts = line.split("|").map((p) => p.trim());
 
@@ -189,7 +204,7 @@ export class GwsCalendarProvider implements CalendarProvider {
     };
   }
 
-  private parseEventOutput(output: string): CalendarEvent | null {
+  private parseEventOutput(output: string): GwsCalendarEvent | null {
     const lines = output.split("\n");
     const data: Record<string, string> = {};
 

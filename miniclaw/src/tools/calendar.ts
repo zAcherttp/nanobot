@@ -1,12 +1,12 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "typebox";
 import type { GoalService } from "@/services/goals";
-import type { CalendarService } from "@/services/calendar";
 import type { TaskService } from "@/services/tasks";
 import { TaskProgressNotifier } from "@/services/task_progress";
+import type { GwsCalendarService } from "@/services/calendar/gws";
 
 interface CalendarToolOptions {
-  calendarService: CalendarService;
+  gwsCalendar: GwsCalendarService;
   taskService: TaskService;
   notifier: TaskProgressNotifier;
   goalService: GoalService;
@@ -15,8 +15,10 @@ interface CalendarToolOptions {
   userId?: string;
 }
 
-interface ProposalMetadata {
-  action: "gws.insert";
+type SupportedPlanType = "gws_calendar_insert";
+
+interface PlanMetadata {
+  planType: SupportedPlanType;
   event: {
     title: string;
     start: string;
@@ -42,7 +44,7 @@ export function createCalendarTools(
         const days = params.days || 3;
         const start = new Date();
         const end = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
-        const events = await options.calendarService.listEvents(start, end);
+        const events = await options.gwsCalendar.listEvents(start, end);
         const text =
           events.length === 0
             ? `No events found in the next ${days} day(s).`
@@ -66,11 +68,12 @@ export function createCalendarTools(
       },
     },
     {
-      name: "propose_gws_calendar_insert",
-      label: "Propose GWS Calendar Insert",
+      name: "propose_plan",
+      label: "Propose Plan",
       description:
-        "Create a pending calendar proposal job without writing to Google Calendar.",
+        "Create a pending execution plan that requires explicit confirmation before any external write. Currently supports gws_calendar_insert.",
       parameters: Type.Object({
+        plan_type: Type.Literal("gws_calendar_insert"),
         title: Type.String({ minLength: 1 }),
         start: Type.String({ minLength: 1 }),
         end: Type.String({ minLength: 1 }),
@@ -79,8 +82,8 @@ export function createCalendarTools(
         related_goal_id: Type.Optional(Type.String()),
       }),
       execute: async (_toolCallId, params) => {
-        const metadata: ProposalMetadata = {
-          action: "gws.insert",
+        const metadata: PlanMetadata = {
+          planType: params.plan_type,
           event: {
             title: params.title,
             start: new Date(params.start).toISOString(),
@@ -92,18 +95,19 @@ export function createCalendarTools(
         };
 
         const job = await options.taskService.createJob({
-          title: `Confirm calendar event: ${params.title}`,
-          goal: "Wait for explicit user confirmation before writing to Google Calendar.",
+          title: `Confirm plan: schedule "${params.title}"`,
+          goal:
+            "Wait for explicit user confirmation before executing the pending plan.",
           tasks: [
             "Present the proposal to the user",
             "Wait for explicit confirmation",
-            "Create the calendar event after confirmation",
+            "Execute the plan after confirmation",
           ],
           channelContext: {
             channel: options.channel,
             userId: options.userId,
           },
-          kind: "calendar-proposal",
+          kind: "pending-plan",
           metadata: metadata as Record<string, unknown>,
         });
 
@@ -113,18 +117,18 @@ export function createCalendarTools(
           content: [
             {
               type: "text",
-              text: `Created pending proposal ${job.id} for "${params.title}". Present the proposal and wait for explicit confirmation before calling execute_gws_calendar_insert.`,
+              text: `Created pending plan ${job.id} for "${params.title}". Present the proposal and wait for explicit confirmation before calling execute_plan.`,
             },
           ],
-          details: { job, proposal: metadata },
+          details: { job, plan: metadata },
         };
       },
     },
     {
-      name: "execute_gws_calendar_insert",
-      label: "Execute GWS Calendar Insert",
+      name: "execute_plan",
+      label: "Execute Plan",
       description:
-        "Execute a previously proposed Google Calendar event only after explicit user confirmation.",
+        "Execute a previously proposed plan only after explicit user confirmation. Currently supports gws_calendar_insert.",
       parameters: Type.Object({
         job_id: Type.String(),
       }),
@@ -136,16 +140,16 @@ export function createCalendarTools(
         }
 
         const job = await options.taskService.getJob(params.job_id);
-        if (!job || job.status !== "active" || job.kind !== "calendar-proposal") {
-          throw new Error(`Pending calendar proposal not found: ${params.job_id}`);
+        if (!job || job.status !== "active" || job.kind !== "pending-plan") {
+          throw new Error(`Pending plan not found: ${params.job_id}`);
         }
 
-        const metadata = job.metadata as ProposalMetadata | undefined;
-        if (!metadata || metadata.action !== "gws.insert") {
-          throw new Error(`Calendar proposal payload missing for ${params.job_id}`);
+        const metadata = job.metadata as PlanMetadata | undefined;
+        if (!metadata || metadata.planType !== "gws_calendar_insert") {
+          throw new Error(`Plan payload missing or unsupported for ${params.job_id}`);
         }
 
-        const eventId = await options.calendarService.createEvent({
+        const eventId = await options.gwsCalendar.createEvent({
           id: "",
           title: metadata.event.title,
           start: new Date(metadata.event.start),
@@ -156,7 +160,7 @@ export function createCalendarTools(
 
         const archived = await options.taskService.archiveJob(
           job.id,
-          `Created Google Calendar event ${eventId}.`,
+          `Executed plan by creating Google Calendar event ${eventId}.`,
         );
         await options.notifier.closeJob(archived);
 
